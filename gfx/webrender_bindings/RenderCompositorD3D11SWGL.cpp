@@ -21,7 +21,7 @@
 // swgl (gpu_d3d11.h): pixel shading on a Direct3D 11 device.
 extern "C" bool SwglGpuAttach(void* aDevice);
 extern "C" void SwglGpuStats(uint32_t* aOut8);
-extern "C" void SwglGpuMemoryStats(uint32_t* aOut3);
+extern "C" void SwglGpuMemoryStats(uint32_t* aOut5);
 extern "C" void SwglGpuDescribe(char* aOut, size_t aSize);
 #if defined(GECKO_W10M)
 extern "C" void GeckoW10mNote(const char* aText);
@@ -120,7 +120,7 @@ void RenderCompositorD3D11SWGL::StartCompositing(
     GetCompositorD3D11()->ForgetDeviceState();
 #if defined(GECKO_W10M)
     if (++mGpuStatsFrames % 300 == 1) {
-      uint32_t m[3];
+      uint32_t m[5];
       SwglGpuMemoryStats(m);  // before SwglGpuStats, which resets the counts
       uint32_t s[8];
       SwglGpuStats(s);
@@ -133,8 +133,21 @@ void RenderCompositorD3D11SWGL::StartCompositing(
       GeckoW10mNote(note);
       SprintfLiteral(note,
                      "gfx: GPU-only textures -- %u CPU copies freed, %u brought "
-                     "back, %u MB of CPU memory saved now",
-                     m[0], m[1], m[2]);
+                     "back, %u MB of CPU memory saved now; Direct3D holds %u MB "
+                     "of textures and %u MB of caches",
+                     m[0], m[1], m[2], m[3], m[4]);
+      GeckoW10mNote(note);
+      // The compositor's own tile textures, which SWGL draws into.
+      size_t tiles = 0;
+      uint64_t tileBytes = 0;
+      for (auto& it : mSurfaces) {
+        Surface* surface = it.second.get();
+        tiles += surface->mTiles.size();
+        tileBytes += uint64_t(surface->mTiles.size()) *
+                     surface->mTileSize.width * surface->mTileSize.height * 4;
+      }
+      SprintfLiteral(note, "gfx: compositor tiles -- %u of them, %u MB",
+                     unsigned(tiles), unsigned(tileBytes >> 20));
       GeckoW10mNote(note);
     }
 #endif

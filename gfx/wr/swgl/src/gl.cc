@@ -972,6 +972,9 @@ static bool gpu_clear(Texture& t, const IntRect& rect, uint32_t color,
 static bool gpu_copy(Texture& src, const IntRect& src_rect, Texture& dst,
                      const IntRect& dst_rect);
 static bool gpu_resolve_external(Texture& t);
+static void gpu_record_quad(const vec4& pos, int nump);
+static Texture* gpu_cpu_composite_begin(Texture& colortex);
+static void gpu_cpu_composite_end(Texture& colortex, Texture& depthtex);
 static bool gpu_resolve_external_pending(Texture& t);
 
 template <typename S>
@@ -2792,9 +2795,9 @@ void ClearTexSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset,
         assert(false);
         break;
     }
-    if (gpu_clear(t, scissor, 0, true, float(value) / float(0xFFFFFF))) {
-      return;
-    }
+    // Depth is cleared on the GPU and on the CPU alike: the GPU cannot give
+    // its depth back, and a draw that stays on the CPU still needs one.
+    bool on_gpu = gpu_clear(t, scissor, 0, true, float(value) / float(0xFFFFFF));
     if (t.cleared() && !scissor.contains(t.offset_bounds())) {
       // If we need to scissor the clear and the depth buffer was already
       // initialized, then just fill runs for that scissor area.
@@ -2805,7 +2808,11 @@ void ClearTexSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset,
       // the entire buffer with any value and thus ignore any scissoring.
       t.init_depth_runs(value);
     }
-    gpu_cpu_wrote(t);
+    if (on_gpu) {
+      gpu_invalidate(t);  // Both copies hold the clear: neither is newer.
+    } else {
+      gpu_cpu_wrote(t);
+    }
     return;
   }
 
@@ -3187,6 +3194,32 @@ void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
             : gpu_draw_elements<uint32_t>(count, instancecount, offset, v,
                                           colortex, depthtex);
     if (drawn) {
+      return;
+    }
+  }
+
+  // Shaded on the CPU, into a scratch texture, and placed on the GPU: when the
+  // target lives on the GPU, this keeps its content and depth there -- depth
+  // cannot come back to the CPU -- and blends and depth-tests as the GPU does.
+  if (type == GL_UNSIGNED_SHORT || type == GL_UNSIGNED_INT) {
+    if (Texture* scratch = gpu_cpu_composite_begin(colortex)) {
+      bool blend = ctx->blend;
+      bool depthtest = ctx->depthtest;
+      ctx->blend = false;
+      ctx->depthtest = false;
+      vertex_shader->init_batch();
+      gpu_count_cpu_draw();
+      Texture& nodepth = ctx->textures[0];
+      if (type == GL_UNSIGNED_SHORT) {
+        draw_elements<uint16_t>(count, instancecount, offset, v, *scratch,
+                                nodepth);
+      } else {
+        draw_elements<uint32_t>(count, instancecount, offset, v, *scratch,
+                                nodepth);
+      }
+      ctx->blend = blend;
+      ctx->depthtest = depthtest;
+      gpu_cpu_composite_end(colortex, depthtex);
       return;
     }
   }

@@ -1556,6 +1556,8 @@ static void draw_quad(int nump, Texture& colortex, Texture& depthtex) {
   swgl_ClipFlags = 0;
   vertex_shader->run_primitive((char*)interp_outs, sizeof(Interpolants));
   vec4 pos = vertex_shader->gl_Position;
+  // A CPU draw the GPU will place (gpu_d3d11.h) needs to know the quads.
+  gpu_record_quad(pos, nump);
   // Check if any vertex W is different from another. If so, use perspective.
   if (test_any(pos.w != pos.w.x)) {
     draw_perspective(nump, interp_outs, colortex, depthtex);

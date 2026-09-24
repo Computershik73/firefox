@@ -116,6 +116,10 @@ class WMFVideoMFTManager : public MFTManager {
 
   bool mDXVAEnabled;
   bool mUseHwAccel;
+  // DXVA decodes, but the frames are read back to memory and handled as
+  // software frames: the device cannot share its textures (feature level
+  // 9_3 on Windows 10 Mobile).
+  bool mDXVAReadback = false;
 
   bool mZeroCopyNV12Texture;
 

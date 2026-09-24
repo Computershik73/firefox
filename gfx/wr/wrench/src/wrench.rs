@@ -273,7 +273,7 @@ impl Wrench {
 
         let compositor_config = match layer_compositor {
             Some(compositor) => CompositorConfig::Layer { compositor },
-            None => CompositorConfig::default(),
+            None => native_tiles_config(window).unwrap_or_default(),
         };
 
         let opts = webrender::WebRenderOptions {
@@ -716,4 +716,23 @@ impl Wrench {
 
         self.renderer.deinit();
     }
+}
+
+// SWGL_GPU_NATIVE=1: compositor tiles are Direct3D textures that SWGL draws
+// into on the GPU, as on the phone (see native_tiles.rs).
+#[cfg(feature = "software")]
+fn native_tiles_config(window: &WindowWrapper) -> Option<CompositorConfig> {
+    std::env::var("SWGL_GPU_NATIVE").ok()?;
+    let gl = *window.software_gl()?;
+    let compositor = webrender::sw_compositor::SwCompositor::new(
+        gl,
+        Box::new(crate::native_tiles::NativeTiles::new(gl)),
+        true,
+    );
+    Some(CompositorConfig::Native { compositor: Box::new(compositor) })
+}
+
+#[cfg(not(feature = "software"))]
+fn native_tiles_config(_window: &WindowWrapper) -> Option<CompositorConfig> {
+    None
 }

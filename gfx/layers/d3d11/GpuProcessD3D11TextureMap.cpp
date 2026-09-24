@@ -21,19 +21,27 @@ StaticAutoPtr<GpuProcessD3D11TextureMap> GpuProcessD3D11TextureMap::sInstance;
 
 /* static */
 void GpuProcessD3D11TextureMap::Init() {
+  // Windows 10 Mobile: no GPU process, and textures that cannot be shared
+  // pass from the decoder to the compositor in the parent through this map.
+#if !defined(GECKO_W10M)
   MOZ_ASSERT(XRE_IsGPUProcess());
+#endif
   sInstance = new GpuProcessD3D11TextureMap();
 }
 
 /* static */
 void GpuProcessD3D11TextureMap::Shutdown() {
+#if !defined(GECKO_W10M)
   MOZ_ASSERT(XRE_IsGPUProcess());
+#endif
   sInstance = nullptr;
 }
 
 /* static */
 GpuProcessTextureId GpuProcessD3D11TextureMap::GetNextTextureId() {
+#if !defined(GECKO_W10M)
   MOZ_ASSERT(XRE_IsGPUProcess());
+#endif
   return GpuProcessTextureId::GetNext();
 }
 

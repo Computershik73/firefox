@@ -179,6 +179,13 @@ D3D11RecycleAllocator::D3D11RecycleAllocator(
                   gfx::DeviceManagerDx::Get()->CanUseP010()),
       mCanUseP016(StaticPrefs::media_wmf_use_nv12_format() &&
                   gfx::DeviceManagerDx::Get()->CanUseP016()) {
+#if defined(GECKO_W10M)
+  // Feature level 9_3 compositing samples no NV12: frames are made BGRA by
+  // the video processor on the way (D3D11DXVA2Manager::CopyTextureToImage).
+  if (!gfx::DeviceManagerDx::Get()->TextureSharingWorks()) {
+    mCanUseNV12 = mCanUseP010 = mCanUseP016 = false;
+  }
+#endif
   SetPreferredSurfaceFormat(aPreferredFormat);
 }
 

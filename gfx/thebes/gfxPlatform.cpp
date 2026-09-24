@@ -81,6 +81,7 @@ extern "C" void GeckoW10mNote(const char* text);
 #if defined(XP_WIN)
 #  include "gfxWindowsPlatform.h"
 #  include "mozilla/layers/CompositeProcessD3D11FencesHolderMap.h"
+#  include "mozilla/layers/GpuProcessD3D11TextureMap.h"
 #  include "mozilla/widget/WinWindowOcclusionTracker.h"
 #elif defined(XP_DARWIN)
 #  include "gfxPlatformMac.h"
@@ -1366,6 +1367,11 @@ void gfxPlatform::InitLayersIPC() {
     if (!gfxConfig::IsEnabled(Feature::GPU_PROCESS)) {
 #if defined(XP_WIN)
       CompositeProcessD3D11FencesHolderMap::Init();
+#  if defined(GECKO_W10M)
+      // Decoded video reaches the compositor through it (see
+      // D3D11TextureData::Create).
+      GpuProcessD3D11TextureMap::Init();
+#  endif
 #endif
       RemoteTextureMap::Init();
       wr::RenderThread::Start(GPUProcessManager::Get()->AllocateNamespace());
@@ -1423,6 +1429,11 @@ void gfxPlatform::ShutdownLayersIPC() {
     }
 #if defined(XP_WIN)
     CompositeProcessD3D11FencesHolderMap::Shutdown();
+#  if defined(GECKO_W10M)
+    if (GpuProcessD3D11TextureMap::Get()) {
+      GpuProcessD3D11TextureMap::Shutdown();
+    }
+#  endif
     widget::WinWindowOcclusionTracker::ShutDown();
 #endif
   } else {

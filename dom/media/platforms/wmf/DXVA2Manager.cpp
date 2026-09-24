@@ -682,6 +682,13 @@ D3D11DXVA2Manager::InitInternal(layers::KnowsCompositor* aKnowsCompositor,
     if (aKnowsCompositor && aKnowsCompositor->UsingHardwareWebRender()) {
       flags += DeviceManagerDx::DeviceFlag::isHardwareWebRenderInUse;
     }
+#if defined(GECKO_W10M)
+    // Feature level 9_3 shares no textures: decoding on the compositor's
+    // device is what lets a frame reach it without a trip through memory.
+    if (!DeviceManagerDx::Get()->TextureSharingWorks()) {
+      flags += DeviceManagerDx::DeviceFlag::isHardwareWebRenderInUse;
+    }
+#endif
     mDevice = gfx::DeviceManagerDx::Get()->CreateDecoderDevice(flags);
     if (!mDevice) {
       aFailureReason.AssignLiteral("Failed to create D3D11 device for decoder");

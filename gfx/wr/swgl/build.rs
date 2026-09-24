@@ -19,6 +19,7 @@ fn shader_file(shader_key: &str) -> String {
 fn write_load_shader(shader_keys: &[String]) {
     let mut load_shader = String::new();
     for s in shader_keys {
+        let _ = writeln!(load_shader, "#include \"{}_gpu.h\"", shader_file(s));
         let _ = writeln!(load_shader, "#include \"{}.h\"", shader_file(s));
     }
     load_shader.push_str("ProgramLoader load_shader(const char* name) {\n");
@@ -136,8 +137,159 @@ fn translate_shader(
     std::fs::write(&fs_name, fs).unwrap();
 
     let args = vec!["glsl_to_cxx".to_string(), vs_name, fs_name];
-    let result = glsl_to_cxx::translate(&mut args.into_iter());
+    let fxc = gpu_compiler();
+    let (result, gpu, gpu_errors) =
+        glsl_to_cxx::translate_with_gpu(&mut args.into_iter(), fxc.is_some());
     std::fs::write(format!("{out_dir}/{shader}.h"), result).unwrap();
+    write_gpu_header(&out_dir, &shader, fxc.as_deref(), gpu, &gpu_errors);
+}
+
+/// fxc, when building for Windows: the fragment shaders are also compiled for
+/// Direct3D feature level 9_3 so that SWGL can hand pixel shading to GPUs that
+/// cannot run WebRender. SWGL_FXC names it explicitly (empty turns the GPU
+/// path off); otherwise the newest Windows 10 SDK's is used. Without it the
+/// GPU path is simply absent.
+fn gpu_compiler() -> Option<String> {
+    if std::env::var("CARGO_CFG_TARGET_OS").ok().as_deref() != Some("windows") {
+        return None;
+    }
+    println!("cargo:rerun-if-env-changed=SWGL_FXC");
+    if let Ok(fxc) = std::env::var("SWGL_FXC") {
+        return if fxc.is_empty() { None } else { Some(fxc) };
+    }
+    let root = "C:/Program Files (x86)/Windows Kits/10/bin";
+    let mut versions: Vec<_> = std::fs::read_dir(root)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path().join("x64").join("fxc.exe"))
+        .filter(|p| p.exists())
+        .collect();
+    versions.sort();
+    versions.pop().map(|p| p.to_string_lossy().into_owned())
+}
+
+fn fxc_compile(fxc: &str, hlsl: &str, profile: &str, out: &str) -> Result<Vec<u8>, String> {
+    let src = format!("{out}.hlsl");
+    let obj = format!("{out}.cso");
+    std::fs::write(&src, hlsl).unwrap();
+    let _ = std::fs::remove_file(&obj);
+    let output = std::process::Command::new(fxc)
+        .args(["/nologo", "/O3", "/T", profile, "/E", "main", "/Fo", &obj, &src])
+        .output()
+        .map_err(|e| e.to_string())?;
+    match std::fs::read(&obj) {
+        Ok(bytes) => Ok(bytes),
+        Err(_) => Err(String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .filter(|l| l.contains("error"))
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" ")),
+    }
+}
+
+fn bytes_array(name: &str, bytes: &[u8]) -> String {
+    let mut s = format!("static const unsigned char {name}[{}] = {{", bytes.len());
+    for (i, b) in bytes.iter().enumerate() {
+        if i % 24 == 0 {
+            s.push_str("\n ");
+        }
+        let _ = write!(s, "{},", b);
+    }
+    s.push_str("\n};\n");
+    s
+}
+
+fn write_gpu_header(
+    out_dir: &str,
+    shader: &str,
+    fxc: Option<&str>,
+    gpu: Option<(String, glsl_to_cxx::hlsl::Layout)>,
+    errors: &[String],
+) {
+    let path = format!("{out_dir}/{shader}_gpu.h");
+    let stub = format!("static const GpuProgramInfo* {shader}_gpu_info() {{ return nullptr; }}\n");
+    let (fxc, (hlsl, layout)) = match (fxc, gpu) {
+        (Some(f), Some(g)) => (f, g),
+        (Some(_), None) => {
+            println!("cargo:warning=swgl: {shader} stays on the CPU: {}", errors.join(" | "));
+            std::fs::write(path, stub).unwrap();
+            return;
+        }
+        _ => {
+            std::fs::write(path, stub).unwrap();
+            return;
+        }
+    };
+    match fxc_compile(fxc, &hlsl, "ps_4_0_level_9_3", &format!("{out_dir}/{shader}_ps")) {
+        Ok(bytes) => {
+            let mut h = bytes_array(&format!("{shader}_ps"), &bytes);
+            let _ = writeln!(
+                h,
+                "static const GpuProgramInfo {shader}_gpu_info_data = {{ {shader}_ps, sizeof({shader}_ps), {}, {}, {}, {}, {}, \"{shader}\" }};",
+                layout.slots,
+                layout.texture_floats,
+                layout.flat_coord_offset.map_or(-1, |o| o as i64),
+                layout.fragcoord_offset.map_or(-1, |o| o as i64),
+                layout.samplers.len(),
+            );
+            let _ = writeln!(
+                h,
+                "static const GpuProgramInfo* {shader}_gpu_info() {{ return &{shader}_gpu_info_data; }}"
+            );
+            std::fs::write(path, h).unwrap();
+        }
+        Err(e) => {
+            println!("cargo:warning=swgl: {shader} stays on the CPU: fxc: {e}");
+            std::fs::write(path, stub).unwrap();
+        }
+    }
+}
+
+/// The vertex half on the GPU does nothing but place the quad SWGL already
+/// transformed: flip Y so that row 0 in memory is GL's row 0, as it is in
+/// SWGL's buffers, and move depth from GL's [-1, 1] to Direct3D's [0, 1].
+/// One per number of texture coordinates, plus a clear shader.
+fn write_gpu_common(out_dir: &str) {
+    let path = format!("{out_dir}/gpu_shaders.h");
+    let fxc = match gpu_compiler() {
+        Some(f) => f,
+        None => {
+            std::fs::write(path, "#define SWGL_GPU_SHADERS 0\n").unwrap();
+            return;
+        }
+    };
+    let mut h = String::from("#define SWGL_GPU_SHADERS 1\n");
+    for slots in 1..=8 {
+        let mut src = String::from("struct VIn { float4 pos : POSITION;");
+        for i in 0..slots {
+            let _ = write!(src, " float4 t{i} : TEXCOORD{i};");
+        }
+        src.push_str(" };\nstruct VOut { float4 pos : SV_Position;");
+        for i in 0..slots {
+            let _ = write!(src, " float4 t{i} : TEXCOORD{i};");
+        }
+        src.push_str(
+            " };\nVOut main(VIn i) { VOut o;\n o.pos = float4(i.pos.x, -i.pos.y, (i.pos.z + i.pos.w) * 0.5, i.pos.w);\n",
+        );
+        for i in 0..slots {
+            let _ = write!(src, " o.t{i} = i.t{i};");
+        }
+        src.push_str("\n return o; }\n");
+        let bytes = fxc_compile(&fxc, &src, "vs_4_0_level_9_3", &format!("{out_dir}/gpu_vs{slots}"))
+            .expect("the GPU vertex shader must compile");
+        h.push_str(&bytes_array(&format!("swgl_gpu_vs{slots}"), &bytes));
+    }
+    let clear_vs = "float4 main(float4 pos : POSITION) : SV_Position { return float4(pos.x, -pos.y, (pos.z + pos.w) * 0.5, pos.w); }\n";
+    let bytes = fxc_compile(&fxc, clear_vs, "vs_4_0_level_9_3", &format!("{out_dir}/gpu_clear_vs"))
+        .expect("the GPU clear vertex shader must compile");
+    h.push_str(&bytes_array("swgl_gpu_clear_vs", &bytes));
+    let clear_ps =
+        "cbuffer c : register(b0) { float4 color; };\nfloat4 main() : SV_Target { return color; }\n";
+    let bytes = fxc_compile(&fxc, clear_ps, "ps_4_0_level_9_3", &format!("{out_dir}/gpu_clear_ps"))
+        .expect("the GPU clear pixel shader must compile");
+    h.push_str(&bytes_array("swgl_gpu_clear_ps", &bytes));
+    std::fs::write(path, h).unwrap();
 }
 
 fn main() {
@@ -167,6 +319,7 @@ fn main() {
     drop(suppressed_env_vars); // Restore env. vars. for further compilation.
 
     write_load_shader(&shaders);
+    write_gpu_common(&std::env::var("OUT_DIR").unwrap());
 
     println!("cargo:rerun-if-changed=src/blend.h");
     println!("cargo:rerun-if-changed=src/composite.h");

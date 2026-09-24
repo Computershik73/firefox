@@ -47,6 +47,18 @@ fn build_uniform_indices(indices: &mut UniformIndices, state: &hir::State) {
 }
 
 pub fn translate(args: &mut dyn Iterator<Item = String>) -> String {
+    translate_with_gpu(args, false).0
+}
+
+/// As translate(), and when `gpu` is set, also the feature level 9_3 pixel
+/// shader for the fragment half (see hlsl.rs) with its layout, and the
+/// program class then carries the C++ that packs varyings for it. Shaders
+/// whose vertex half writes gl_ClipDistance stay on the CPU: SWGL clips
+/// those quads itself.
+pub fn translate_with_gpu(
+    args: &mut dyn Iterator<Item = String>,
+    gpu: bool,
+) -> (String, Option<(String, hlsl::Layout)>, Vec<String>) {
     let _cmd_name = args.next();
     let vertex_file = args.next().unwrap();
 
@@ -67,6 +79,23 @@ pub fn translate(args: &mut dyn Iterator<Item = String>) -> String {
     let (vs_state, vs_hir, vs_is_frag) = parse_shader(vertex_file);
     let (fs_state, fs_hir, fs_is_frag) = parse_shader(frag_file);
 
+    let mut gpu_errors = Vec::new();
+    let gpu_result = if !gpu {
+        None
+    } else if vs_state.used_clip_dist != 0 {
+        gpu_errors.push("the vertex shader writes gl_ClipDistance".to_string());
+        None
+    } else {
+        match hlsl::translate_fragment(&fs_state, &fs_hir) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                gpu_errors = e.into_iter().filter(|e| !e.starts_with("-- partial")).collect();
+                None
+            }
+        }
+    };
+    let glue = gpu_result.as_ref().map(|(_, layout)| hlsl::cxx_glue(layout));
+
     // we use a BTree so that iteration is stable
     let mut uniform_indices = BTreeMap::new();
     build_uniform_indices(&mut uniform_indices, &vs_state);
@@ -80,6 +109,7 @@ pub fn translate(args: &mut dyn Iterator<Item = String>) -> String {
         vs_hir,
         vs_is_frag,
         &uniform_indices,
+        None,
     );
     result += "\n";
     result += &translate_shader(
@@ -88,8 +118,9 @@ pub fn translate(args: &mut dyn Iterator<Item = String>) -> String {
         fs_hir,
         fs_is_frag,
         &uniform_indices,
+        glue.as_deref(),
     );
-    result
+    (result, gpu_result, gpu_errors)
 }
 
 pub(crate) fn parse_shader(file: String) -> (hir::State, hir::TranslationUnit, bool) {
@@ -122,6 +153,7 @@ fn translate_shader(
     hir: hir::TranslationUnit,
     is_frag: bool,
     uniform_indices: &UniformIndices,
+    gpu_glue: Option<&str>,
 ) -> String {
     //println!("{:#?}", state);
 
@@ -247,6 +279,10 @@ fn translate_shader(
             write!(state, " return this;\n}}\n");
             write!(state, "const char* get_name() const override {{ return \"{}\"; }}\n", name);
             write!(state, "static ProgramImpl* loader() {{ return new {}_program; }}\n", name);
+            write!(state, "const GpuProgramInfo* gpu_info() const override {{ return {}_gpu_info(); }}\n", name);
+            if let Some(glue) = gpu_glue {
+                state.write(glue);
+            }
             write!(state, "}};\n\n");
         }
 

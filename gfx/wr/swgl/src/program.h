@@ -21,6 +21,26 @@ static ALWAYS_INLINE Float get_clip_distances(const Interpolants& interp) {
 struct VertexShaderImpl;
 struct FragmentShaderImpl;
 
+// A program's fragment half compiled for the GPU (Direct3D feature level 9_3,
+// ps_4_0_level_9_3), for GPUs that cannot run WebRender but can shade
+// pixels: SWGL runs the vertex half on the CPU as always, packs the varyings
+// with gpu_pack, and the GPU rasterises and shades. Generated at build time
+// by glsl-to-cxx's hlsl.rs and fxc; absent where the shader did not fit.
+struct GpuProgramInfo {
+  const unsigned char* ps;
+  size_t ps_size;
+  // float4 texture coordinates per vertex.
+  int slots;
+  // Flat floats per primitive kept in the flat texture instead.
+  int texture_floats;
+  // Float offsets of the flat texture coordinate and of gl_FragCoord.xy in
+  // the packed vertex data, or -1.
+  int flat_coord_offset;
+  int fragcoord_offset;
+  int num_samplers;
+  const char* name;
+};
+
 struct ProgramImpl {
   virtual ~ProgramImpl() {}
   virtual int get_uniform(const char* name) const = 0;
@@ -30,6 +50,14 @@ struct ProgramImpl {
   virtual VertexShaderImpl* get_vertex_shader() = 0;
   virtual FragmentShaderImpl* get_fragment_shader() = 0;
   virtual const char* get_name() const = 0;
+  virtual const GpuProgramInfo* gpu_info() const { return nullptr; }
+  // Packs the varyings of the quad the vertex shader just ran: `interps`
+  // holds its four InterpOutputs, `stride` bytes apart; `v` receives 32
+  // floats per vertex, `f` the flat values that go to the flat texture.
+  virtual void gpu_pack(const char* interps, size_t stride, float* v,
+                        float* f) {}
+  // The texture unit behind the pixel shader's i-th sampler.
+  virtual int gpu_sampler_unit(int i) const { return -1; }
 };
 
 typedef ProgramImpl* (*ProgramLoader)();

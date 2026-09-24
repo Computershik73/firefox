@@ -16,7 +16,15 @@ namespace jit {
 
 // Limit on the number of bytes of executable memory to prevent JIT spraying
 // attacks.
-#if JS_BITS_PER_WORD == 32
+#if defined(GECKO_W10M)
+// This is reserved as one contiguous block at startup, and a phone running a
+// 32-bit process has to fit it alongside a 132 MB engine and everything the
+// app host has already mapped. 140 MB is a reasonable share of a desktop's
+// address space and an unreasonable one here; when the reservation fails the
+// JIT has no memory to allocate from at all, and the first compile reports
+// out of memory on a device using 23 MB of its 2048 MB allowance.
+static const size_t MaxCodeBytesPerProcess = 32 * 1024 * 1024;
+#elif JS_BITS_PER_WORD == 32
 static const size_t MaxCodeBytesPerProcess = 140 * 1024 * 1024;
 #else
 // This is the largest number which satisfies various alignment static

@@ -8827,10 +8827,18 @@ static bool GetTimeZone(JSContext* cx, unsigned argc, Value* vp) {
   auto getTimeZone = [](std::time_t* now) -> const char* {
     std::tm local{};
 #  if defined(_WIN32)
+#    if defined(GECKO_W10M)
+    // _tzname is a desktop-partition CRT global not available in the app
+    // container; fall back to UTC for this testing helper.
+    if (localtime_s(&local, now) == 0) {
+      return "UTC";
+    }
+#    else
     _tzset();
     if (localtime_s(&local, now) == 0) {
       return _tzname[local.tm_isdst > 0];
     }
+#    endif
 #  else
     tzset();
 #    if defined(HAVE_LOCALTIME_R)

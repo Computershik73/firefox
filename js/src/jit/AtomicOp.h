@@ -7,6 +7,13 @@
 
 #include <stdint.h>
 
+// On Windows/ARM, <winnt.h> defines MemoryBarrier as a macro (__dmb(...)),
+// which collides with js::jit::MemoryBarrier below. (On x86/x64 it is an inline
+// function, so this only bites on ARM.)
+#ifdef MemoryBarrier
+#  undef MemoryBarrier
+#endif
+
 namespace js {
 namespace jit {
 

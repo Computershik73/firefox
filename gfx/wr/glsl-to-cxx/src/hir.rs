@@ -3101,6 +3101,17 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
         Type::new(BVec4),
         vec![Type::new(Bool), Type::new(Bool), Type::new(Bool), Type::new(Bool)],
     );
+    // bool(x): WebRender's GPU paths (as opposed to SWGL's) use it on
+    // integer bit tests.
+    for from in [Int, UInt, Float, Bool] {
+        declare_function(
+            state,
+            "bool",
+            Some("make_bool"),
+            Type::new(Bool),
+            vec![Type::new(from)],
+        );
+    }
     declare_function(
         state,
         "int",

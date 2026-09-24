@@ -76,6 +76,16 @@ struct GpuTex {
   // Stored as BGRA although SWGL's buffer is one byte a pixel, because the
   // device cannot sample or render the narrower format.
   bool expanded = false;
+  // A texture that belongs to someone else -- a compositor tile -- of which
+  // this SWGL texture is the rectangle at (ox, oy). It is never recreated,
+  // and SWGL keeps no CPU buffer for it unless a CPU draw needs one.
+  bool external = false;
+  int ox = 0;
+  int oy = 0;
+  // The Direct3D texture's own size: larger than SWGL's for an external
+  // texture, and for a depth buffer shared with one.
+  int tex_w = 0;
+  int tex_h = 0;
 
   void release() {
     swgl_gpu::safe_release(srv);
@@ -83,7 +93,10 @@ struct GpuTex {
     swgl_gpu::safe_release(dsv);
     swgl_gpu::safe_release(tex);
     width = height = 0;
+    tex_w = tex_h = 0;
     format = DXGI_FORMAT_UNKNOWN;
+    external = false;
+    ox = oy = 0;
   }
   ~GpuTex() { release(); }
 };
@@ -398,13 +411,20 @@ static inline bool renderable(GLenum internal_format) {
 
 // Makes sure t has a GPU copy of the right size and format. Returns false if
 // its format has no place on this device.
-static bool ensure_resource(GpuBackend* g, Texture& t) {
+static bool ensure_resource(GpuBackend* g, Texture& t, int min_w = 0,
+                            int min_h = 0) {
   if (!t.gpu) {
     t.gpu = new GpuTex;
   }
   GpuTex& gt = *t.gpu;
+  if (gt.external) {
+    return gt.tex != nullptr;
+  }
+  int want_w = std::max(t.width, min_w);
+  int want_h = std::max(t.height, min_h);
   if (gt.tex && gt.width == t.width && gt.height == t.height &&
-      gt.internal_format == t.internal_format) {
+      gt.internal_format == t.internal_format && gt.tex_w >= want_w &&
+      gt.tex_h >= want_h) {
     return true;
   }
   gt.release();
@@ -415,8 +435,8 @@ static bool ensure_resource(GpuBackend* g, Texture& t) {
     return false;
   }
   D3D11_TEXTURE2D_DESC td = {};
-  td.Width = t.width;
-  td.Height = t.height;
+  td.Width = want_w;
+  td.Height = want_h;
   td.MipLevels = 1;
   td.ArraySize = 1;
   td.Format = format;
@@ -451,6 +471,8 @@ static bool ensure_resource(GpuBackend* g, Texture& t) {
   gt.internal_format = t.internal_format;
   gt.width = t.width;
   gt.height = t.height;
+  gt.tex_w = want_w;
+  gt.tex_h = want_h;
   gt.expanded = expanded;
   // A new GPU copy holds nothing yet: whatever the CPU has is newer.
   gt.gpu_newer = false;
@@ -463,7 +485,8 @@ static void upload_rows(GpuBackend* g, Texture& t, int x0, int y0, int x1,
                         int y1) {
   GpuTex& gt = *t.gpu;
   if (!t.buf || x1 <= x0 || y1 <= y0) return;
-  D3D11_BOX box = {UINT(x0), UINT(y0), 0, UINT(x1), UINT(y1), 1};
+  D3D11_BOX box = {UINT(x0 + gt.ox), UINT(y0 + gt.oy), 0, UINT(x1 + gt.ox),
+                   UINT(y1 + gt.oy), 1};
   const char* src = t.sample_ptr(x0, y0);
   int w = x1 - x0;
   int h = y1 - y0;
@@ -512,13 +535,13 @@ static void upload_rows(GpuBackend* g, Texture& t, int x0, int y0, int x1,
 }
 
 static ID3D11Texture2D* get_staging(GpuBackend* g, GpuTex& gt) {
-  uint64_t key = (uint64_t(gt.format) << 48) | (uint64_t(gt.width) << 24) |
-                 uint64_t(gt.height);
+  uint64_t key = (uint64_t(gt.format) << 48) | (uint64_t(gt.tex_w) << 24) |
+                 uint64_t(gt.tex_h);
   auto it = g->staging.find(key);
   if (it != g->staging.end()) return it->second;
   D3D11_TEXTURE2D_DESC td = {};
-  td.Width = gt.width;
-  td.Height = gt.height;
+  td.Width = gt.tex_w;
+  td.Height = gt.tex_h;
   td.MipLevels = 1;
   td.ArraySize = 1;
   td.Format = gt.format;
@@ -560,7 +583,9 @@ static void readback(GpuBackend* g, Texture& t) {
     return;
   }
   for (int y = 0; y < t.height; y++) {
-    const uint8_t* src = (const uint8_t*)m.pData + size_t(y) * m.RowPitch;
+    const uint8_t* src = (const uint8_t*)m.pData +
+                         size_t(y + gt.oy) * m.RowPitch +
+                         size_t(gt.ox) * (gt.format == DXGI_FORMAT_R8_UNORM ? 1 : 4);
     uint8_t* dst = (uint8_t*)t.sample_ptr(0, y);
     if (t.internal_format == GL_DEPTH_COMPONENT24) {
       const uint32_t* s32 = (const uint32_t*)src;
@@ -803,15 +828,16 @@ static void set_target(GpuBackend* g, Texture& colortex, Texture* depthtex) {
   g->dc->OMSetRenderTargets(1, &rtv, dsv);
   // SWGL subtracts the texture's offset after the viewport transform.
   D3D11_VIEWPORT vp;
-  vp.TopLeftX = float(ctx->viewport.x0 - colortex.offset.x);
-  vp.TopLeftY = float(ctx->viewport.y0 - colortex.offset.y);
+  vp.TopLeftX = float(ctx->viewport.x0 - colortex.offset.x + colortex.gpu->ox);
+  vp.TopLeftY = float(ctx->viewport.y0 - colortex.offset.y + colortex.gpu->oy);
   vp.Width = float(ctx->viewport.width());
   vp.Height = float(ctx->viewport.height());
   vp.MinDepth = 0.0f;
   vp.MaxDepth = 1.0f;
   g->dc->RSSetViewports(1, &vp);
   IntRect sc = ctx->apply_scissor(colortex);
-  D3D11_RECT r = {sc.x0, sc.y0, sc.x1, sc.y1};
+  D3D11_RECT r = {sc.x0 + colortex.gpu->ox, sc.y0 + colortex.gpu->oy,
+                  sc.x1 + colortex.gpu->ox, sc.y1 + colortex.gpu->oy};
   g->dc->RSSetScissorRects(1, &r);
   g->dc->RSSetState(g->raster);
 }
@@ -823,6 +849,10 @@ static void set_target(GpuBackend* g, Texture& colortex, Texture* depthtex) {
 static void gpu_sync_to_cpu(Texture& t) {
   if (!t.gpu || !t.gpu->gpu_newer || !ctx || !ctx->gpu || ctx->gpu_defer_sync)
     return;
+  if (!t.buf && t.gpu->external) {
+    // The CPU wants a texture that so far lived only on the GPU.
+    if (!t.allocate()) return;
+  }
   swgl_gpu::readback(ctx->gpu, t);
   t.gpu->gpu_newer = false;
 }
@@ -869,6 +899,23 @@ static void gpu_invalidate(Texture& t) {
   }
 }
 
+static int gpu_max_texture_size() {
+  GpuBackend* g = ctx ? ctx->gpu : nullptr;
+  if (!g) return 0;
+  switch (g->level) {
+    case D3D_FEATURE_LEVEL_9_1:
+    case D3D_FEATURE_LEVEL_9_2:
+      return 2048;
+    case D3D_FEATURE_LEVEL_9_3:
+      return 4096;
+    case D3D_FEATURE_LEVEL_10_0:
+    case D3D_FEATURE_LEVEL_10_1:
+      return 8192;
+    default:
+      return 16384;
+  }
+}
+
 static void gpu_count_cpu_draw() {
   if (ctx->gpu) {
     ctx->gpu->stats.cpu_draws++;
@@ -886,28 +933,44 @@ Context::~Context() { delete gpu; }
 // false to let the CPU do it.
 static bool gpu_clear(Texture& t, const IntRect& rect, uint32_t color,
                       bool is_depth, float depth) {
+  using namespace swgl_gpu;
   GpuBackend* g = ctx ? ctx->gpu : nullptr;
-  if (!g || g->broken || !t.gpu || !t.gpu->tex) return false;
-  GpuTex& gt = *t.gpu;
-  if (gt.width != t.width || gt.height != t.height) return false;
-  // Only if the GPU is where this texture lives now; otherwise the CPU clear
-  // is free (it is usually delayed) and the upload happens anyway.
-  if (!gt.gpu_newer && gt.cpu_newer) return false;
-  IntRect r = IntRect(rect).intersection(t.offset_bounds()) - t.offset;
-  bool full = r.x0 <= 0 && r.y0 <= 0 && r.x1 >= t.width && r.y1 >= t.height;
+  if (!g || g->broken) return false;
   if (is_depth) {
-    if (!gt.dsv) return false;
-    if (full) {
-      g->dc->ClearDepthStencilView(gt.dsv, D3D11_CLEAR_DEPTH, depth, 0);
-    } else {
+    // Depth lives on the GPU whenever there is one: Direct3D can neither
+    // upload a depth buffer nor read one back, so a clear on the CPU would
+    // strand the draws that follow there.
+    // Sized for the render target it is cleared for: a compositor tile's
+    // texture is larger than the SWGL texture that is its valid rectangle.
+    int min_w = 0, min_h = 0;
+    Framebuffer* fb = get_framebuffer(GL_DRAW_FRAMEBUFFER);
+    if (fb && fb->depth_attachment &&
+        &ctx->textures[fb->depth_attachment] == &t && fb->color_attachment) {
+      Texture& ct = ctx->textures[fb->color_attachment];
+      if (ct.gpu && ct.gpu->tex) {
+        min_w = ct.gpu->tex_w;
+        min_h = ct.gpu->tex_h;
+      }
+    }
+    if (!ensure_resource(g, t, min_w, min_h) || !t.gpu->dsv) return false;
+  } else {
+    // Colour only when the GPU is where this texture lives now; otherwise
+    // the CPU clear is free (usually delayed) and the upload happens anyway.
+    if (!t.gpu || !t.gpu->tex) return false;
+    if (!t.gpu->gpu_newer && t.gpu->cpu_newer) return false;
+    if (!t.gpu->external &&
+        (t.gpu->width != t.width || t.gpu->height != t.height)) {
       return false;
     }
-  } else {
-    if (!gt.rtv) return false;
-    float c[4];
+    if (!t.gpu->rtv) return false;
+  }
+  GpuTex& gt = *t.gpu;
+  IntRect r = IntRect(rect).intersection(t.offset_bounds()) - t.offset;
+  bool full = r.x0 <= 0 && r.y0 <= 0 && r.x1 >= t.width && r.y1 >= t.height;
+  float c[4] = {0, 0, 0, 0};
+  if (!is_depth) {
     if (t.internal_format == GL_R8) {
       c[0] = (color & 0xFF) / 255.0f;
-      c[1] = c[2] = 0.0f;
       c[3] = 1.0f;
     } else {
       c[0] = ((color >> 16) & 0xFF) / 255.0f;
@@ -915,44 +978,56 @@ static bool gpu_clear(Texture& t, const IntRect& rect, uint32_t color,
       c[2] = (color & 0xFF) / 255.0f;
       c[3] = ((color >> 24) & 0xFF) / 255.0f;
     }
-    if (full) {
+  }
+  if (full) {
+    if (is_depth) {
+      g->dc->ClearDepthStencilView(gt.dsv, D3D11_CLEAR_DEPTH, depth, 0);
+    } else {
       g->dc->ClearRenderTargetView(gt.rtv, c);
-    } else if (r.x1 > r.x0 && r.y1 > r.y0) {
-      // A quad through the clear shader, scissored to the rectangle.
-      ID3D11ShaderResourceView* none[16] = {};
-      g->dc->PSSetShaderResources(0, 16, none);
-      g->dc->OMSetRenderTargets(1, &gt.rtv, nullptr);
-      D3D11_VIEWPORT vp = {0, 0, float(t.width), float(t.height), 0, 1};
-      g->dc->RSSetViewports(1, &vp);
-      D3D11_RECT sr = {r.x0, r.y0, r.x1, r.y1};
-      g->dc->RSSetScissorRects(1, &sr);
-      g->dc->RSSetState(g->raster);
-      float quad[16] = {-1, -1, 0, 1, 1, -1, 0, 1, -1, 1, 0, 1, 1, 1, 0, 1};
-      g->dc->UpdateSubresource(g->clear_vb, 0, nullptr, quad, 0, 0);
-      g->dc->UpdateSubresource(g->clear_cb, 0, nullptr, c, 0, 0);
-      UINT stride = 16, offset = 0;
-      g->dc->IASetInputLayout(g->clear_il);
-      g->dc->IASetVertexBuffers(0, 1, &g->clear_vb, &stride, &offset);
-      g->dc->IASetIndexBuffer(g->ib, DXGI_FORMAT_R16_UINT, 0);
-      g->dc->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-      g->dc->VSSetShader(g->clear_vs, nullptr, 0);
-      g->dc->PSSetShader(g->clear_ps, nullptr, 0);
-      g->dc->PSSetConstantBuffers(0, 1, &g->clear_cb);
-      bool ok = true;
-      (void)ok;
-      D3D11_BLEND_DESC bd = {};
-      bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-      auto it = g->blends.find(0);
-      ID3D11BlendState* bs = nullptr;
-      if (it != g->blends.end()) {
-        bs = it->second;
-      } else if (SUCCEEDED(g->dev->CreateBlendState(&bd, &bs))) {
-        g->blends[0] = bs;
-      }
-      g->dc->OMSetBlendState(bs, nullptr, 0xFFFFFFFF);
-      g->dc->OMSetDepthStencilState(g->depth_off, 0);
-      g->dc->DrawIndexed(6, 0, 0);
     }
+  } else if (r.x1 > r.x0 && r.y1 > r.y0) {
+    // A quad through the clear shader, scissored to the rectangle: colour
+    // writes it, depth is written at the quad's own depth.
+    ID3D11ShaderResourceView* none[16] = {};
+    g->dc->PSSetShaderResources(0, 16, none);
+    if (is_depth) {
+      g->dc->OMSetRenderTargets(0, nullptr, gt.dsv);
+    } else {
+      g->dc->OMSetRenderTargets(1, &gt.rtv, nullptr);
+    }
+    D3D11_VIEWPORT vp = {0, 0, float(gt.tex_w), float(gt.tex_h), 0, 1};
+    g->dc->RSSetViewports(1, &vp);
+    D3D11_RECT sr = {r.x0 + gt.ox, r.y0 + gt.oy, r.x1 + gt.ox, r.y1 + gt.oy};
+    g->dc->RSSetScissorRects(1, &sr);
+    g->dc->RSSetState(g->raster);
+    float z = is_depth ? depth * 2.0f - 1.0f : 0.0f;
+    float quad[16] = {-1, -1, z, 1, 1, -1, z, 1, 1, 1, z, 1, -1, 1, z, 1};
+    g->dc->UpdateSubresource(g->clear_vb, 0, nullptr, quad, 0, 0);
+    g->dc->UpdateSubresource(g->clear_cb, 0, nullptr, c, 0, 0);
+    UINT stride = 16, offset = 0;
+    g->dc->IASetInputLayout(g->clear_il);
+    g->dc->IASetVertexBuffers(0, 1, &g->clear_vb, &stride, &offset);
+    g->dc->IASetIndexBuffer(g->ib, DXGI_FORMAT_R16_UINT, 0);
+    g->dc->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    g->dc->VSSetShader(g->clear_vs, nullptr, 0);
+    g->dc->PSSetShader(g->clear_ps, nullptr, 0);
+    g->dc->PSSetConstantBuffers(0, 1, &g->clear_cb);
+    uint64_t key = is_depth ? 2 : 0;
+    ID3D11BlendState* bs = nullptr;
+    auto it = g->blends.find(key);
+    if (it != g->blends.end()) {
+      bs = it->second;
+    } else {
+      D3D11_BLEND_DESC bd = {};
+      bd.RenderTarget[0].RenderTargetWriteMask =
+          is_depth ? 0 : D3D11_COLOR_WRITE_ENABLE_ALL;
+      if (SUCCEEDED(g->dev->CreateBlendState(&bd, &bs))) {
+        g->blends[key] = bs;
+      }
+    }
+    g->dc->OMSetBlendState(bs, nullptr, 0xFFFFFFFF);
+    g->dc->OMSetDepthStencilState(is_depth ? g->depth_clear : g->depth_off, 0);
+    g->dc->DrawIndexed(6, 0, 0);
   }
   if (t.internal_format == GL_DEPTH_COMPONENT24) {
     t.set_cleared(true);
@@ -961,9 +1036,10 @@ static bool gpu_clear(Texture& t, const IntRect& rect, uint32_t color,
   gt.gpu_newer = true;
   gt.cpu_newer = false;
   g->stats.gpu_clears++;
-  if (swgl_gpu::trace()) {
-    fprintf(stderr, "gpu: clear %s %dx%d %s %08x\n", is_depth ? "depth" : "color",
-            t.width, t.height, full ? "full" : "part", color);
+  if (trace()) {
+    fprintf(stderr, "gpu: clear %s %dx%d %s %08x\n",
+            is_depth ? "depth" : "color", t.width, t.height,
+            full ? "full" : "part", color);
   }
   return true;
 }
@@ -977,9 +1053,9 @@ static bool gpu_check(Texture& colortex, Texture** sampled,
   GpuBackend* g = ctx->gpu;
   if (!g || g->broken) return false;
   Program& prog = ctx->programs[ctx->current_program];
-  ProgramImpl* impl = prog.impl;
+  ProgramImpl* impl = prog.gpu_impl;
   const GpuProgramInfo* info = impl ? impl->gpu_info() : nullptr;
-  if (!info) {
+  if (!info || !gpu_vertex_shader) {
     g->stats.refused_program++;
     return false;
   }
@@ -1017,7 +1093,8 @@ static bool gpu_check(Texture& colortex, Texture** sampled,
     DXGI_FORMAT f;
     bool e;
     if (!st.buf || !gl_format_on_gpu(g, st.internal_format, &f, &e) ||
-        st.internal_format == GL_DEPTH_COMPONENT24) {
+        st.internal_format == GL_DEPTH_COMPONENT24 ||
+        (st.gpu && st.gpu->external)) {
       g->stats.refused_state++;
       return false;
     }
@@ -1046,7 +1123,8 @@ static bool gpu_copy(Texture& src, const IntRect& src_rect, Texture& dst,
     return false;
   }
   GpuTex& sg = *src.gpu;
-  if (sg.cpu_newer || sg.width != src.width || sg.height != src.height) {
+  if (sg.cpu_newer || sg.external || sg.width != src.width ||
+      sg.height != src.height) {
     return false;
   }
   if (src.internal_format != dst.internal_format ||
@@ -1060,8 +1138,9 @@ static bool gpu_copy(Texture& src, const IntRect& src_rect, Texture& dst,
   if (s.is_empty()) return true;
   if (!to_gpu(g, dst) || dst.gpu->expanded != sg.expanded) return false;
   D3D11_BOX box = {UINT(s.x0), UINT(s.y0), 0, UINT(s.x1), UINT(s.y1), 1};
-  g->dc->CopySubresourceRegion(dst.gpu->tex, 0, UINT(s.x0 + dx),
-                               UINT(s.y0 + dy), 0, sg.tex, 0, &box);
+  g->dc->CopySubresourceRegion(dst.gpu->tex, 0, UINT(s.x0 + dx + dst.gpu->ox),
+                               UINT(s.y0 + dy + dst.gpu->oy), 0, sg.tex, 0,
+                               &box);
   dst.gpu->gpu_newer = true;
   dst.gpu->cpu_newer = false;
   if (trace()) {
@@ -1079,8 +1158,9 @@ static bool gpu_draw_elements(GLsizei count, GLsizei instancecount,
   using namespace swgl_gpu;
   GpuBackend* g = ctx->gpu;
   Program& prog = ctx->programs[ctx->current_program];
-  ProgramImpl* impl = prog.impl;
+  ProgramImpl* impl = prog.gpu_impl;
   const GpuProgramInfo* info = impl ? impl->gpu_info() : nullptr;
+  VertexShaderImpl* vs = gpu_vertex_shader;
   Texture* sampled[16] = {};
   ID3D11BlendState* bs = nullptr;
   ID3D11PixelShader* ps = nullptr;
@@ -1092,8 +1172,13 @@ static bool gpu_draw_elements(GLsizei count, GLsizei instancecount,
   if (!to_gpu(g, colortex)) return false;
   bool use_depth = ctx->depthtest && depthtex.buf;
   if (use_depth) {
+    // Direct3D wants the depth buffer at least as large as the render
+    // target's texture, which for a compositor tile is the whole tile.
     if (depthtex.width != colortex.width ||
-        depthtex.height != colortex.height || !to_gpu(g, depthtex)) {
+        depthtex.height != colortex.height ||
+        !ensure_resource(g, depthtex, colortex.gpu->tex_w,
+                         colortex.gpu->tex_h) ||
+        !to_gpu(g, depthtex)) {
       return false;
     }
   }
@@ -1213,8 +1298,8 @@ static bool gpu_draw_elements(GLsizei count, GLsizei instancecount,
 
   auto emit = [&](int nump) {
     char* ib = g->interps.data();
-    vertex_shader->run_primitive(ib, istride);
-    vec4 pos = vertex_shader->gl_Position;
+    vs->run_primitive(ib, istride);
+    vec4 pos = vs->gl_Position;
     if (nump < 4) {
       // A lone triangle: its fourth vertex repeats the third, which makes
       // the quad's second triangle empty.
@@ -1275,10 +1360,10 @@ static bool gpu_draw_elements(GLsizei count, GLsizei instancecount,
   count = min(count, (GLsizei)((indices_buf.size - offset) / sizeof(INDEX)));
   if (count == 6 && indices[1] == indices[0] + 1 &&
       indices[2] == indices[0] + 2 && indices[5] == indices[0] + 3) {
-    vertex_shader->load_attribs(v.attribs, indices[0], 0, 4);
+    vs->load_attribs(v.attribs, indices[0], 0, 4);
     emit(4);
     for (GLsizei instance = 1; instance < instancecount; instance++) {
-      vertex_shader->load_attribs(v.attribs, indices[0], instance, 0);
+      vs->load_attribs(v.attribs, indices[0], instance, 0);
       emit(4);
     }
   } else {
@@ -1289,11 +1374,11 @@ static bool gpu_draw_elements(GLsizei count, GLsizei instancecount,
           continue;
         }
         if (i + 6 <= count && indices[i + 5] == indices[i] + 3) {
-          vertex_shader->load_attribs(v.attribs, indices[i], instance, 4);
+          vs->load_attribs(v.attribs, indices[i], instance, 4);
           emit(4);
           i += 3;
         } else {
-          vertex_shader->load_attribs(v.attribs, indices[i], instance, 3);
+          vs->load_attribs(v.attribs, indices[i], instance, 3);
           emit(3);
         }
       }
@@ -1324,7 +1409,77 @@ static bool gpu_draw_elements(GLsizei count, GLsizei instancecount,
   return true;
 }
 
+// Called by ResolveFramebuffer for a texture that lives in someone else's
+// Direct3D texture: rather than bring its content to the CPU, send anything
+// the CPU drew there to the GPU. Returns true if it handled the texture.
+// Whether t is a texture held only on the GPU as someone else's.
+static bool gpu_resolve_external_pending(Texture& t) {
+  return t.gpu && t.gpu->external;
+}
+
+static bool gpu_resolve_external(Texture& t) {
+  using namespace swgl_gpu;
+  if (!t.gpu || !t.gpu->external) return false;
+  GpuBackend* g = ctx ? ctx->gpu : nullptr;
+  if (g && !g->broken) {
+    to_gpu(g, t);
+  }
+  return true;
+}
+
 extern "C" {
+
+// Makes texture `texid` the rectangle at (x, y), `width` by `height`, of a
+// Direct3D texture that belongs to the caller (an ID3D11Texture2D* created
+// with render target and shader resource binding) -- a compositor tile. GPU
+// draws go straight into it and it is never read back; SWGL allocates a CPU
+// buffer for it only if a CPU draw needs one. The current content of that
+// rectangle counts: nothing is uploaded over it.
+bool SwglGpuSetTextureTarget(GLuint texid, void* d3d_texture, GLsizei width,
+                             GLsizei height, GLint x, GLint y) {
+  using namespace swgl_gpu;
+  GpuBackend* g = ctx ? ctx->gpu : nullptr;
+  if (!g || g->broken || !d3d_texture) return false;
+  Texture& t = ctx->textures[texid];
+  if (t.width != width || t.height != height ||
+      t.internal_format != GL_RGBA8 || !t.should_free()) {
+    t.cleanup();
+    t.set_should_free(true);
+    t.internal_format = GL_RGBA8;
+    t.width = width;
+    t.height = height;
+  }
+  t.offset = IntPoint(0, 0);
+  t.disable_delayed_clear();
+  if (!t.gpu) t.gpu = new GpuTex;
+  GpuTex& gt = *t.gpu;
+  ID3D11Texture2D* tex = (ID3D11Texture2D*)d3d_texture;
+  if (gt.tex != tex) {
+    gt.release();
+    D3D11_TEXTURE2D_DESC td;
+    tex->GetDesc(&td);
+    tex->AddRef();
+    gt.tex = tex;
+    if (FAILED(g->dev->CreateRenderTargetView(tex, nullptr, &gt.rtv))) {
+      gt.release();
+      return false;
+    }
+    g->dev->CreateShaderResourceView(tex, nullptr, &gt.srv);
+    gt.format = td.Format;
+    gt.tex_w = td.Width;
+    gt.tex_h = td.Height;
+  }
+  gt.external = true;
+  gt.internal_format = GL_RGBA8;
+  gt.width = width;
+  gt.height = height;
+  gt.ox = x;
+  gt.oy = y;
+  gt.expanded = false;
+  gt.gpu_newer = true;
+  gt.cpu_newer = false;
+  return true;
+}
 
 // Attaches a Direct3D 11 device to the current SWGL context; from then on
 // draws that can run on it do. The device must belong to the thread that
@@ -1415,7 +1570,10 @@ static inline void gpu_invalidate(Texture&) {}
 static inline bool gpu_copy(Texture&, const IntRect&, Texture&, const IntRect&) {
   return false;
 }
+static inline bool gpu_resolve_external(Texture&) { return false; }
+static inline bool gpu_resolve_external_pending(Texture&) { return false; }
 static inline void gpu_count_cpu_draw() {}
+static inline int gpu_max_texture_size() { return 0; }
 static inline bool gpu_can_draw(Texture&) { return false; }
 template <typename INDEX>
 static inline bool gpu_draw_elements(GLsizei, GLsizei, size_t, VertexArray&,
@@ -1426,6 +1584,9 @@ Context::~Context() { delete gpu; }
 
 extern "C" {
 bool SwglGpuAttach(void*) { return false; }
+bool SwglGpuSetTextureTarget(GLuint, void*, GLsizei, GLsizei, GLint, GLint) {
+  return false;
+}
 bool SwglGpuAttachNewDevice(int, bool) { return false; }
 void SwglGpuStats(uint32_t* out8) { memset(out8, 0, 8 * sizeof(uint32_t)); }
 }

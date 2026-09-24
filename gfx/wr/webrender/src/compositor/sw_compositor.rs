@@ -1792,16 +1792,32 @@ impl Compositor for SwCompositor {
                         composite_thread.wait_for_composites(false);
                     }
                 }
-                self.gl.set_texture_buffer(
-                    tile.color_id,
-                    gl::RGBA8,
-                    valid_rect.width(),
-                    valid_rect.height(),
-                    stride,
-                    buf,
-                    surface.tile_size.width,
-                    surface.tile_size.height,
-                );
+                // A negative stride from the native compositor means the tile is
+                // a Direct3D texture that SWGL draws into on the GPU (see
+                // gpu_d3d11.h in swgl), not memory; buf is the texture.
+                if stride < 0
+                    && !buf.is_null()
+                    && self.gl.set_texture_gpu_target(
+                        tile.color_id,
+                        buf,
+                        valid_rect.width(),
+                        valid_rect.height(),
+                        valid_rect.min.x,
+                        valid_rect.min.y,
+                    )
+                {
+                } else {
+                    self.gl.set_texture_buffer(
+                        tile.color_id,
+                        gl::RGBA8,
+                        valid_rect.width(),
+                        valid_rect.height(),
+                        stride.max(0),
+                        if stride < 0 { ptr::null_mut() } else { buf },
+                        surface.tile_size.width,
+                        surface.tile_size.height,
+                    );
+                }
                 // Reallocate the shared depth buffer to fit the valid rect, but within
                 // a buffer sized to actually fit at least the maximum possible tile size.
                 // The maximum tile size is supplied to avoid reallocation by ensuring the

@@ -232,6 +232,7 @@ MediaResult WMFVideoMFTManager::InitInternal() {
   static const int MIN_H264_HW_HEIGHT = 132;
 
   mUseHwAccel = false;  // default value; changed if D3D setup succeeds.
+  mDXVAReadback = false;
   bool useDxva = true;
 
   if (mStreamType == WMFStreamType::H264 &&
@@ -301,6 +302,9 @@ MediaResult WMFVideoMFTManager::InitInternal() {
           decoder->SendMFTMessage(MFT_MESSAGE_SET_D3D_MANAGER, manager);
       if (SUCCEEDED(hr)) {
         mUseHwAccel = true;
+#if defined(GECKO_W10M)
+        mDXVAReadback = !gfx::DeviceManagerDx::Get()->TextureSharingWorks();
+#endif
       } else {
         mDXVAFailureReason = nsPrintfCString(
             "MFT_MESSAGE_SET_D3D_MANAGER failed with code %lX", hr);
@@ -396,13 +400,17 @@ MediaResult WMFVideoMFTManager::InitInternal() {
                          mVideoInfo.ImageRect().height, fps,
                          mUseHwAccel ? "YES" : "no",
                          mUseHwAccel || mDXVAFailureReason.IsEmpty() ? "" : " -- ",
-                         mUseHwAccel ? "" : mDXVAFailureReason.get());
+                         mUseHwAccel ? (mDXVAReadback
+                                            ? " (frames read back to memory)"
+                                            : "")
+                                     : mDXVAFailureReason.get());
     GeckoW10mNote(note.get());
   }
 #endif
 
-  // Now we need to convert the video decode output to a display format.
-  if (mUseHwAccel) {
+  // Now we need to convert the video decode output to a display format --
+  // unless the frames are read back to memory, which needs no conversion.
+  if (mUseHwAccel && !mDXVAReadback) {
     RETURN_PARAM_IF_FAILED(
         mDXVA2Manager->ConfigureForSize(
             outputType,
@@ -415,7 +423,8 @@ MediaResult WMFVideoMFTManager::InitInternal() {
         MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
                     RESULT_DETAIL("Fail to configure image size for "
                                   "DXVA2Manager.")));
-  } else {
+  }
+  if (!mUseHwAccel || mDXVAReadback) {
     GetDefaultStride(outputType, mVideoInfo.ImageRect().width, &mVideoStride);
   }
   LOG("WMFVideoMFTManager frame geometry stride={} picture=({}, {}, {}, {}) "
@@ -633,11 +642,14 @@ WMFVideoMFTManager::CreateBasicVideoFrame(IMFSample* aSample,
 
   const GUID& subType = mDecoder->GetOutputMediaSubType();
   MOZ_DIAGNOSTIC_ASSERT(subType == MFVideoFormat_YV12 ||
+                        subType == MFVideoFormat_NV12 ||
                         subType == MFVideoFormat_P010 ||
                         subType == MFVideoFormat_P016);
-  const gfx::ColorDepth colorDepth = subType == MFVideoFormat_YV12
-                                         ? gfx::ColorDepth::COLOR_8
-                                         : gfx::ColorDepth::COLOR_16;
+  // NV12 comes from DXVA read back to memory (mDXVAReadback).
+  const bool eightBit =
+      subType == MFVideoFormat_YV12 || subType == MFVideoFormat_NV12;
+  const gfx::ColorDepth colorDepth =
+      eightBit ? gfx::ColorDepth::COLOR_8 : gfx::ColorDepth::COLOR_16;
 
   // YV12, planar format (3 planes): [YYYY....][VVVV....][UUUU....]
   // i.e., Y, then V, then U.
@@ -656,11 +668,29 @@ WMFVideoMFTManager::CreateBasicVideoFrame(IMFSample* aSample,
   b.mPlanes[0].mWidth = videoWidth;
   b.mPlanes[0].mSkip = 0;
 
-  MOZ_DIAGNOSTIC_ASSERT(mSoftwareImageSize.height % 16 == 0,
-                        "decoded height must be 16 bytes aligned");
+  // A decoder surface read back to memory keeps its own height, which may
+  // be aligned further than the frame's: the chroma plane starts after it.
+  uint32_t planeHeight = mSoftwareImageSize.height;
+  if (mDXVAReadback) {
+    RefPtr<IMFDXGIBuffer> dxgiBuffer;
+    RefPtr<ID3D11Texture2D> surface;
+    if (SUCCEEDED(buffer->QueryInterface(
+            static_cast<IMFDXGIBuffer**>(getter_AddRefs(dxgiBuffer)))) &&
+        SUCCEEDED(dxgiBuffer->GetResource(__uuidof(ID3D11Texture2D),
+                                          getter_AddRefs(surface)))) {
+      D3D11_TEXTURE2D_DESC desc;
+      surface->GetDesc(&desc);
+      if (desc.Height >= planeHeight) {
+        planeHeight = desc.Height;
+      }
+    }
+  } else {
+    MOZ_DIAGNOSTIC_ASSERT(mSoftwareImageSize.height % 16 == 0,
+                          "decoded height must be 16 bytes aligned");
+  }
   mozilla::CheckedInt<uint32_t> y_size_checked =
       mozilla::CheckedInt<uint32_t>(static_cast<uint32_t>(stride)) *
-      mSoftwareImageSize.height;
+      planeHeight;
   if (!y_size_checked.isValid()) {
     LOG("CreateBasicVideoFrame: plane size overflow");
     return E_FAIL;
@@ -694,8 +724,8 @@ WMFVideoMFTManager::CreateBasicVideoFrame(IMFSample* aSample,
     b.mPlanes[1].mWidth = halfWidth;
     b.mPlanes[1].mSkip = 1;
 
-    // V plane (Cr)
-    b.mPlanes[2].mData = data + y_size + sizeof(short);
+    // V plane (Cr): the other half of each UV pair, a byte or a short on.
+    b.mPlanes[2].mData = data + y_size + (eightBit ? 1 : sizeof(short));
     b.mPlanes[2].mStride = stride;
     b.mPlanes[2].mHeight = halfHeight;
     b.mPlanes[2].mWidth = halfWidth;
@@ -921,7 +951,7 @@ WMFVideoMFTManager::Output(int64_t aStreamOffset, RefPtr<MediaData>& aOutData) {
       NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
 
       // Now we need to convert the video decode output to a display format.
-      if (mUseHwAccel) {
+      if (mUseHwAccel && !mDXVAReadback) {
         hr = mDXVA2Manager->ConfigureForSize(
             outputType,
             mColorSpace.refOr(
@@ -931,7 +961,8 @@ WMFVideoMFTManager::Output(int64_t aStreamOffset, RefPtr<MediaData>& aOutData) {
             mVideoInfo.mHDRMetadata, mVideoInfo.ImageRect().width,
             mVideoInfo.ImageRect().height);
         NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
-      } else {
+      }
+      if (!mUseHwAccel || mDXVAReadback) {
         // The stride may have changed, recheck for it.
         hr = GetDefaultStride(outputType, mVideoInfo.ImageRect().width,
                               &mVideoStride);
@@ -1025,7 +1056,7 @@ WMFVideoMFTManager::Output(int64_t aStreamOffset, RefPtr<MediaData>& aOutData) {
   }
 
   RefPtr<VideoData> frame;
-  if (mUseHwAccel) {
+  if (mUseHwAccel && !mDXVAReadback) {
     hr = CreateD3DVideoFrame(sample, aStreamOffset, getter_AddRefs(frame));
   } else {
     hr = CreateBasicVideoFrame(sample, aStreamOffset, getter_AddRefs(frame));

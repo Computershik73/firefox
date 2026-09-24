@@ -361,9 +361,16 @@ void gfxWindowsPlatform::InitPlatformHardwareVideoConfig() {
                             "Requires DeviceManagerDx",
                             "FEATURE_FAILURE_NO_DEVICE_MANAGER_DX"_ns);
   } else if (!dm->TextureSharingWorks()) {
+#if defined(GECKO_W10M)
+    // Feature level 9_3 phones share no textures between devices. Decoding
+    // still can run on the GPU: the browser is one process, DXVA decodes on
+    // a device of its own and WMFVideoMFTManager reads each frame back to
+    // memory, from where it goes the way a software-decoded frame goes.
+#else
     featureDec.ForceDisable(FeatureStatus::Unavailable,
                             "Requires texture sharing",
                             "FEATURE_FAILURE_BROKEN_TEXTURE_SHARING"_ns);
+#endif
     featureEnc.ForceDisable(FeatureStatus::Unavailable,
                             "Requires texture sharing",
                             "FEATURE_FAILURE_BROKEN_TEXTURE_SHARING"_ns);

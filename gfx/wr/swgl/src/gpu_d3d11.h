@@ -1062,9 +1062,9 @@ static bool gpu_clear(Texture& t, const IntRect& rect, uint32_t color,
     g->dc->OMSetDepthStencilState(is_depth ? g->depth_clear : g->depth_off, 0);
     g->dc->DrawIndexed(6, 0, 0);
   }
-  if (t.internal_format == GL_DEPTH_COMPONENT24) {
-    t.set_cleared(true);
-  }
+  // Not t.set_cleared(): that flag speaks for SWGL's CPU depth runs, which the
+  // caller clears next -- marking them cleared first would have it fill runs
+  // in a buffer that holds none yet.
   t.disable_delayed_clear();
   gt.gpu_newer = true;
   gt.cpu_newer = false;
@@ -1193,6 +1193,15 @@ static bool gpu_copy(Texture& src, const IntRect& src_rect, Texture& dst,
     fprintf(stderr, "gpu: copy %dx%d\n", s.width(), s.height());
   }
   return true;
+}
+
+static void gpu_trace_draw(Texture& colortex, int instances) {
+  if (!ctx->gpu || !swgl_gpu::trace()) return;
+  ProgramImpl* impl = ctx->programs[ctx->current_program].impl;
+  fprintf(stderr, "gpu: > %s x%d into %dx%d depth %d blend %d\n",
+          impl ? impl->get_name() : "?", instances, colortex.width,
+          colortex.height, ctx->depthtest, ctx->blend);
+  fflush(stderr);
 }
 
 static void gpu_record_quad(const vec4& pos, int nump) {
@@ -1794,6 +1803,7 @@ static inline bool gpu_copy(Texture&, const IntRect&, Texture&, const IntRect&) 
 }
 static inline bool gpu_resolve_external(Texture&) { return false; }
 static inline void gpu_record_quad(const vec4&, int) {}
+static inline void gpu_trace_draw(Texture&, int) {}
 static inline Texture* gpu_cpu_composite_begin(Texture&) { return nullptr; }
 static inline void gpu_cpu_composite_end(Texture&, Texture&) {}
 static inline bool gpu_resolve_external_pending(Texture&) { return false; }

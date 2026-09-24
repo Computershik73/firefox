@@ -973,6 +973,7 @@ static bool gpu_copy(Texture& src, const IntRect& src_rect, Texture& dst,
                      const IntRect& dst_rect);
 static bool gpu_resolve_external(Texture& t);
 static void gpu_record_quad(const vec4& pos, int nump);
+static void gpu_trace_draw(Texture& colortex, int instances);
 static Texture* gpu_cpu_composite_begin(Texture& colortex);
 static void gpu_cpu_composite_end(Texture& colortex, Texture& depthtex);
 static bool gpu_resolve_external_pending(Texture& t);
@@ -3177,6 +3178,7 @@ void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
 
   ctx->shaded_rows = 0;
   ctx->shaded_pixels = 0;
+  gpu_trace_draw(colortex, instancecount);
 
   // The pixels go to the GPU when a device is attached and this draw can run
   // there; its samplers are bound for the vertex stage without reading back

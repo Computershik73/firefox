@@ -948,6 +948,8 @@ static void gpu_storage_changed(Texture& t);
 static void gpu_invalidate(Texture& t);
 static bool gpu_clear(Texture& t, const IntRect& rect, uint32_t color,
                       bool is_depth, float depth);
+static bool gpu_copy(Texture& src, const IntRect& src_rect, Texture& dst,
+                     const IntRect& dst_rect);
 
 template <typename S>
 static inline void init_filter(S* s, Texture& t) {
@@ -2949,10 +2951,14 @@ void CopyImageSubData(GLuint srcName, GLenum srcTarget, UNUSED GLint srcLevel,
   }
   Texture& srctex = ctx->textures[srcName];
   if (!srctex.buf) return;
-  prepare_texture(srctex);
   Texture& dsttex = ctx->textures[dstName];
   if (!dsttex.buf) return;
   assert(!dsttex.locked);
+  if (gpu_copy(srctex, IntRect{srcX, srcY, srcX + srcWidth, srcY + srcHeight},
+               dsttex, IntRect{dstX, dstY, dstX + srcWidth, dstY + srcHeight})) {
+    return;
+  }
+  prepare_texture(srctex);
   IntRect skip = {dstX, dstY, dstX + srcWidth, dstY + srcHeight};
   prepare_texture(dsttex, &skip);
   assert(srctex.internal_format == dsttex.internal_format);

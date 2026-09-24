@@ -503,6 +503,10 @@ void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
     return;
   }
   IntRect clipRect = {0, 0, dstReq.width(), dstReq.height()};
+  if (!invertY && srcReq.same_size(dstReq) &&
+      gpu_copy(srctex, srcReq, dsttex, dstReq)) {
+    return;
+  }
   prepare_texture(srctex);
   prepare_texture(dsttex, &dstReq);
   if (!srcReq.same_size(dstReq) && srctex.width >= 2 && filter == GL_LINEAR &&
@@ -512,6 +516,7 @@ void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
   } else {
     scale_blit(srctex, srcReq, dsttex, dstReq, invertY, clipRect);
   }
+  gpu_cpu_wrote(dsttex);
 }
 
 // Get the underlying buffer for a locked resource

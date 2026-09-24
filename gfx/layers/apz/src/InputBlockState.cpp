@@ -21,6 +21,10 @@
 static mozilla::LazyLogModule sApzIbsLog("apz.inputstate");
 #define TBS_LOG(...) MOZ_LOG(sApzIbsLog, LogLevel::Debug, (__VA_ARGS__))
 
+#if defined(GECKO_W10M)
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 namespace mozilla {
 namespace layers {
 
@@ -76,6 +80,18 @@ bool InputBlockState::SetConfirmedTargetApzc(
   if (mTargetConfirmed != TargetConfirmationState::eUnconfirmed) {
     return false;
   }
+#if defined(GECKO_W10M)
+  // A confirmation of "nothing" throws away the target the compositor's own
+  // hit test already found, and every event in the block with it. The main
+  // thread comes back empty for content in the top layer -- a fullscreen
+  // video -- and the result is a tap that is never made and never explained.
+  // Keeping what we had is strictly better than dropping the gesture.
+  if (!aTargetApzc && mTargetApzc) {
+    mTargetConfirmed = aState;
+    return true;
+  }
+#endif
+
   mTargetConfirmed = aState;
 
   TBS_LOG("%p got confirmed target APZC %p\n", this, mTargetApzc.get());

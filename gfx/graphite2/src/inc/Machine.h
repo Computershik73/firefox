@@ -58,6 +58,12 @@ typedef Slot * slotref;
 
 enum {VARARGS = 0xff, MAX_NAME_LEN=32};
 
+// <winnt.h> defines DELETE as an access-mask constant; the opcode names
+// below are graphite2's own and must win inside this enum.
+#ifdef DELETE
+#  undef DELETE
+#endif
+
 enum opcode {
     NOP = 0,
 

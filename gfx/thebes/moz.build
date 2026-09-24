@@ -161,7 +161,6 @@ elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
     ]
     EXPORTS.mozilla.gfx += [
         "PrintTargetPDF.h",
-        "PrintTargetWindows.h",
     ]
     SOURCES += [
         "DisplayConfigWindows.cpp",
@@ -171,8 +170,17 @@ elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
         "gfxWindowsPlatform.cpp",
         "gfxWindowsSurface.cpp",
         "PrintTargetPDF.cpp",
-        "PrintTargetWindows.cpp",
     ]
+    # The GDI print target wraps cairo's win32 printing surface, which cairo
+    # only builds with printing on; without the gate the target linked
+    # against a symbol that no longer existed.
+    if CONFIG["NS_PRINTING"]:
+        EXPORTS.mozilla.gfx += [
+            "PrintTargetWindows.h",
+        ]
+        SOURCES += [
+            "PrintTargetWindows.cpp",
+        ]
     UNIFIED_SOURCES += [
         "gfxDWriteFontList.cpp",
     ]

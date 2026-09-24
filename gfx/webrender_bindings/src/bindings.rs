@@ -2233,7 +2233,17 @@ pub extern "C" fn wr_window_new(
         None
     };
 
-    let texture_cache_config = if is_main_window {
+    let texture_cache_config = if is_main_window && static_prefs::pref!("gfx.webrender.texture-cache.small") {
+        // A phone: see the pref. Each shared page is a quarter of the default.
+        TextureCacheConfig {
+            color8_linear_texture_size: 1024,
+            color8_nearest_texture_size: 512,
+            color8_glyph_texture_size: 1024,
+            alpha8_texture_size: 512,
+            alpha8_glyph_texture_size: 1024,
+            alpha16_texture_size: 512,
+        }
+    } else if is_main_window {
         TextureCacheConfig::DEFAULT
     } else {
         TextureCacheConfig {

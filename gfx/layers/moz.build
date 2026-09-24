@@ -56,6 +56,12 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
         "d3d11/CompositorD3D11.cpp",
         "d3d11/DeviceAttachmentsD3D11.cpp",
     ]
+    if CONFIG["MOZ_UWP"]:
+        # CompositorD3D11 presents to the shell's XAML SwapChainPanel; the
+        # WinRT headers stay in a file of their own.
+        SOURCES += [
+            "d3d11/GeckoW10mPanelSwapChain.cpp",
+        ]
 
     if CONFIG["MOZ_WMF_MEDIA_ENGINE"]:
         EXPORTS.mozilla.layers += [

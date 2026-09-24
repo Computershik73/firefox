@@ -13,6 +13,70 @@
 #include "libANGLE/renderer/d3d/d3d11/Renderer11.h"
 #include "libANGLE/renderer/d3d/d3d11/formatutils11.h"
 
+// GeckoW10m: the process carries 125 MB of write-combined private memory with
+// a blank tab, which is what D3D11 dynamic and staging resources look like
+// from outside, and nothing in the engine's own accounting names them. ANGLE
+// keeps a per-type total; every step of 16 MB up or down is written down,
+// and each single resource of a megabyte or more says its usage and size.
+namespace rx
+{
+void AngleUwpNote(const char *text);
+}
+static void GeckoW10mAngleStep(const char *type, uint64_t before, uint64_t after)
+{
+    const uint64_t step = 16u * 1024u * 1024u;
+    if (before / step != after / step)
+    {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "angle: %s total now %u MB (%s)", type,
+                 static_cast<unsigned>(after / (1024u * 1024u)),
+                 after > before ? "up" : "down");
+        rx::AngleUwpNote(buf);
+    }
+}
+static const char *GeckoW10mUsageName(D3D11_USAGE usage)
+{
+    switch (usage)
+    {
+        case D3D11_USAGE_DEFAULT:
+            return "default";
+        case D3D11_USAGE_IMMUTABLE:
+            return "immutable";
+        case D3D11_USAGE_DYNAMIC:
+            return "dynamic";
+        case D3D11_USAGE_STAGING:
+            return "staging";
+    }
+    return "?";
+}
+static void GeckoW10mAngleBig(const D3D11_TEXTURE2D_DESC *desc, uint64_t bytes)
+{
+    if (bytes >= 1024u * 1024u)
+    {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "angle: texture %ux%u x%u, %u MB, %s%s",
+                 static_cast<unsigned>(desc->Width), static_cast<unsigned>(desc->Height),
+                 static_cast<unsigned>(desc->ArraySize),
+                 static_cast<unsigned>(bytes / (1024u * 1024u)), GeckoW10mUsageName(desc->Usage),
+                 (desc->CPUAccessFlags & D3D11_CPU_ACCESS_WRITE) ? ", cpu-writable" : "");
+        rx::AngleUwpNote(buf);
+    }
+}
+static void GeckoW10mAngleBig(const D3D11_BUFFER_DESC *desc, uint64_t bytes)
+{
+    if (bytes >= 1024u * 1024u)
+    {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "angle: buffer %u MB, %s%s",
+                 static_cast<unsigned>(bytes / (1024u * 1024u)), GeckoW10mUsageName(desc->Usage),
+                 (desc->CPUAccessFlags & D3D11_CPU_ACCESS_WRITE) ? ", cpu-writable" : "");
+        rx::AngleUwpNote(buf);
+    }
+}
+template <typename T>
+static void GeckoW10mAngleBig(const T *, uint64_t)
+{}
+
 namespace rx
 {
 
@@ -496,6 +560,7 @@ angle::Result ResourceManager11::allocate(d3d::Context *context,
     }
 
     ASSERT(resource);
+    GeckoW10mAngleBig(desc, ComputeMemoryUsage(desc));
     incrResource(GetResourceTypeFromD3D11<T>(), ComputeMemoryUsage(desc));
     *resourceOut = std::move(Resource11<T>(resource, this));
     return angle::Result::Continue;
@@ -506,7 +571,13 @@ void ResourceManager11::incrResource(ResourceType resourceType, uint64_t memoryS
     size_t typeIndex = ResourceTypeIndex(resourceType);
 
     mAllocatedResourceCounts[typeIndex]++;
+    const uint64_t before = mAllocatedResourceDeviceMemory[typeIndex];
     mAllocatedResourceDeviceMemory[typeIndex] += memorySize;
+    if (resourceType == ResourceType::Texture2D || resourceType == ResourceType::Buffer)
+    {
+        GeckoW10mAngleStep(resourceType == ResourceType::Texture2D ? "textures" : "buffers",
+                         before, mAllocatedResourceDeviceMemory[typeIndex]);
+    }
 
     // This checks for integer overflow.
     ASSERT(mAllocatedResourceCounts[typeIndex] > 0);
@@ -520,7 +591,13 @@ void ResourceManager11::decrResource(ResourceType resourceType, uint64_t memoryS
     ASSERT(mAllocatedResourceCounts[typeIndex] > 0);
     mAllocatedResourceCounts[typeIndex]--;
     ASSERT(mAllocatedResourceDeviceMemory[typeIndex] >= memorySize);
+    const uint64_t before = mAllocatedResourceDeviceMemory[typeIndex];
     mAllocatedResourceDeviceMemory[typeIndex] -= memorySize;
+    if (resourceType == ResourceType::Texture2D || resourceType == ResourceType::Buffer)
+    {
+        GeckoW10mAngleStep(resourceType == ResourceType::Texture2D ? "textures" : "buffers",
+                         before, mAllocatedResourceDeviceMemory[typeIndex]);
+    }
 }
 
 void ResourceManager11::onReleaseGeneric(ResourceType resourceType, ID3D11DeviceChild *resource)

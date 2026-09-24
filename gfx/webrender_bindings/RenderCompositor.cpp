@@ -15,14 +15,24 @@
 #include "mozilla/webrender/RenderCompositorLayersSWGL.h"
 #include "mozilla/webrender/RenderCompositorOGL.h"
 #include "mozilla/webrender/RenderCompositorSWGL.h"
+#include "mozilla/webrender/RenderThread.h"
+#include "mozilla/webrender/webrender_ffi.h"
+#include "mozilla/TimeStamp.h"
 #include "mozilla/widget/CompositorWidget.h"
+
+#if defined(GECKO_W10M)
+#  include "mozilla/Sprintf.h"
+#  include "nsString.h"
+extern "C" void GeckoW10mNote(const char* text);
+extern "C" bool gecko_w10m_widget_is_overlay(mozilla::widget::CompositorWidget* aWidget);
+#endif
 
 #ifdef XP_WIN
 #  include "mozilla/webrender/RenderCompositorANGLE.h"
 #  include "mozilla/widget/WinCompositorWidget.h"
 #endif
 
-#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GTK)
+#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GTK) ||     defined(GECKO_W10M)
 #  include "mozilla/webrender/RenderCompositorEGL.h"
 #endif
 
@@ -214,11 +224,35 @@ UniquePtr<RenderCompositor> RenderCompositor::Create(
       return RenderCompositorNativeSWGL::Create(aWidget, aError);
     }
 #endif
+#if defined(GECKO_W10M)
+    // One XAML SwapChainPanel, and it belongs to the browser window. Menus,
+    // panels and dialogs are drawn in software into the widget's own buffer
+    // and laid over it by the shell; only the browser window is composited by
+    // D3D11, which presents to the panel. That is the path for GPUs that stop
+    // at feature level 9_3, where hardware WebRender cannot run.
+    if (gecko_w10m_widget_is_overlay(aWidget.get())) {
+      GeckoW10mNote("gfx: an overlay window -- software compositor over the panel");
+      return RenderCompositorSWGL::Create(aWidget, aError);
+    }
+    GeckoW10mNote("gfx: software WebRender, trying the D3D11 compositor");
+#endif
     UniquePtr<RenderCompositor> comp =
         RenderCompositorLayersSWGL::Create(aWidget, aError);
     if (comp) {
+#if defined(GECKO_W10M)
+      GeckoW10mNote("gfx: the D3D11 compositor is up -- tiles go to the GPU");
+#endif
       return comp;
     }
+#if defined(GECKO_W10M)
+    {
+      char note[192];
+      SprintfLiteral(note,
+                     "gfx: no D3D11 compositor (%s) -- software all the way",
+                     nsPromiseFlatCString(aError).get());
+      GeckoW10mNote(note);
+    }
+#endif
 #if defined(MOZ_WIDGET_ANDROID)
     // On Android, we do not want to fallback from RenderCompositorOGLSWGL to
     // RenderCompositorSWGL.
@@ -229,7 +263,38 @@ UniquePtr<RenderCompositor> RenderCompositor::Create(
     return RenderCompositorSWGL::Create(aWidget, aError);
   }
 
-#ifdef XP_WIN
+#if defined(GECKO_W10M)
+  // RenderCompositorANGLE is written around mWidget->AsWindows() -- GetHwnd,
+  // GetCompositorHwnd, MakeWindowAssociation, DestroyCompositorWindow. An app
+  // container is given no HWND and this widget is headless, so there is
+  // nothing for it to hold on to.
+  //
+  // RenderCompositorEGL is the one that asks the widget for a native window
+  // and leaves the rest to EGL, which is how Android and Wayland present. Here
+  // EGL is ANGLE, the native window is the XAML SwapChainPanel, and ANGLE
+  // makes a composition swap chain for it -- so the frame is handed to the
+  // system compositor as a texture instead of being copied out through main
+  // memory.
+  // Menus, panels and dialogs are windows of their own. There is one panel
+  // and it belongs to the browser window, so these are drawn in software --
+  // into the compositor widget's own buffer, as on the software path -- and
+  // the shell lays that buffer over the GPU picture.
+  if (gecko_w10m_widget_is_overlay(aWidget.get())) {
+    GeckoW10mNote("gfx: an overlay window -- software compositor over the panel");
+    return RenderCompositorSWGL::Create(aWidget, aError);
+  }
+  GeckoW10mNote("gfx: making the EGL compositor");
+  auto compositor = RenderCompositorEGL::Create(aWidget, aError);
+  if (compositor) {
+    GeckoW10mNote("gfx: the EGL compositor is up");
+  } else {
+    char note[192];
+    SprintfLiteral(note, "gfx: the EGL compositor failed -- %s",
+                   nsPromiseFlatCString(aError).get());
+    GeckoW10mNote(note);
+  }
+  return compositor;
+#elif defined(XP_WIN)
   if (gfx::gfxVars::UseWebRenderANGLE()) {
     return RenderCompositorANGLE::Create(aWidget, aError);
   }

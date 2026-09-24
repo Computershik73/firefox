@@ -72,6 +72,14 @@ DeviceManagerDx::DeviceManagerDx()
   mFeatureLevels.AppendElement(D3D_FEATURE_LEVEL_11_0);
   mFeatureLevels.AppendElement(D3D_FEATURE_LEVEL_10_1);
   mFeatureLevels.AppendElement(D3D_FEATURE_LEVEL_10_0);
+#if defined(GECKO_W10M)
+  // The Adreno 304/305/306 in the Lumia 550, 650 and their like stop at 9_3.
+  // Without this they get no device at all, and with no device nothing is
+  // composited on the GPU. At 9_3 texture sharing is off, so ANGLE and
+  // hardware WebRender stay off too; what it buys is software WebRender with
+  // the D3D11 compositor, whose shaders are built for 9_3.
+  mFeatureLevels.AppendElement(D3D_FEATURE_LEVEL_9_3);
+#endif
   MOZ_COUNT_CTOR(DeviceManagerDx);
 }
 

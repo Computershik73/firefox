@@ -12,6 +12,26 @@
 
 #include "libANGLE/renderer/d3d/ProgramExecutableD3D.h"
 
+#include <cstdarg>
+#include <cstdio>
+// GeckoW10m: on the phone the renderer thread fast-fails inside
+// setUniformMatrix4fv because mD3DUniforms is shorter than the GL layer's
+// uniform table. These notes say how the table was filled, and the lookup
+// refuses to index past the end instead of dying.
+namespace rx
+{
+void AngleUwpNote(const char *text);
+}
+static void GeckoW10mAngleNote(const char *fmt, ...)
+{
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    rx::AngleUwpNote(buf);
+}
+
 #include "common/bitset_utils.h"
 #include "common/span.h"
 #include "common/string_utils.h"
@@ -427,6 +447,8 @@ void ProgramExecutableD3D::destroy(const gl::Context *context) {}
 
 void ProgramExecutableD3D::reset()
 {
+    GeckoW10mAngleNote("angle: executable %p (gl %p) reset, had %u d3d uniforms", this,
+                     mExecutable, static_cast<unsigned>(mD3DUniforms.size()));
     mVertexExecutables.clear();
     mPixelExecutables.clear();
 
@@ -612,6 +634,8 @@ bool ProgramExecutableD3D::load(const gl::Context *context,
 
         mD3DUniforms.push_back(d3dUniform);
     }
+    GeckoW10mAngleNote("angle: executable %p (gl %p) loaded %u d3d uniforms from a binary", this,
+                     mExecutable, static_cast<unsigned>(mD3DUniforms.size()));
 
     size_t blockCount = stream->readInt<size_t>();
     if (stream->error())
@@ -1764,6 +1788,10 @@ void ProgramExecutableD3D::defineUniformsAndAssignRegisters(
     }
     assignAllImageRegisters();
     initializeUniformStorage(renderer, attachedShaders);
+    GeckoW10mAngleNote("angle: executable %p (gl %p) defined %u d3d uniforms of %u gl uniforms, %u locations",
+                     this, mExecutable, static_cast<unsigned>(mD3DUniforms.size()),
+                     static_cast<unsigned>(mExecutable->getUniforms().size()),
+                     static_cast<unsigned>(mExecutable->getUniformLocations().size()));
 }
 
 void ProgramExecutableD3D::defineUniformBase(gl::ShaderType shaderType,
@@ -2023,12 +2051,24 @@ void ProgramExecutableD3D::gatherTransformFeedbackVaryings(
 D3DUniform *ProgramExecutableD3D::getD3DUniformFromLocation(
     const gl::VariableLocation &locationInfo)
 {
+    if (locationInfo.index >= mD3DUniforms.size())
+    {
+        GeckoW10mAngleNote("angle: uniform index %u is beyond the %u d3d uniforms of executable %p (gl %p, %u gl uniforms, %u locations) -- ignoring the set",
+                         locationInfo.index, static_cast<unsigned>(mD3DUniforms.size()), this,
+                         mExecutable, static_cast<unsigned>(mExecutable->getUniforms().size()),
+                         static_cast<unsigned>(mExecutable->getUniformLocations().size()));
+        return nullptr;
+    }
     return mD3DUniforms[locationInfo.index];
 }
 
 const D3DUniform *ProgramExecutableD3D::getD3DUniformFromLocation(
     const gl::VariableLocation &locationInfo) const
 {
+    if (locationInfo.index >= mD3DUniforms.size())
+    {
+        return nullptr;
+    }
     return mD3DUniforms[locationInfo.index];
 }
 
@@ -2225,8 +2265,18 @@ void ProgramExecutableD3D::setUniformInternal(GLint location,
                                               const T *v,
                                               GLenum uniformType)
 {
+    if (static_cast<size_t>(location) >= mExecutable->getUniformLocations().size())
+    {
+        GeckoW10mAngleNote("angle-d3d: (setUniformInternal) location %d is beyond the %u locations this side can see -- ignoring the set",
+                         location, static_cast<unsigned>(mExecutable->getUniformLocations().size()));
+        return;
+    }
     const gl::VariableLocation &locationInfo = mExecutable->getUniformLocations()[location];
-    D3DUniform *targetUniform                = mD3DUniforms[locationInfo.index];
+    D3DUniform *targetUniform                = getD3DUniformFromLocation(locationInfo);
+    if (!targetUniform)
+    {
+        return;
+    }
 
     if (targetUniform->typeInfo.isSampler)
     {
@@ -2258,8 +2308,32 @@ void ProgramExecutableD3D::setUniformMatrixfvInternal(GLint location,
                                                       GLboolean transpose,
                                                       const GLfloat *value)
 {
+    {
+        static int geckoW10mNotes = 0;
+        if (geckoW10mNotes++ < 8)
+        {
+            GeckoW10mAngleNote(
+                "angle-d3d: this %p, exec %p, locations at %p size %u, uniforms %u, sizeof exec %u, sizeof vector %u, location %d, d3d uniforms %u",
+                this, mExecutable, static_cast<const void *>(&mExecutable->getUniformLocations()),
+                static_cast<unsigned>(mExecutable->getUniformLocations().size()),
+                static_cast<unsigned>(mExecutable->getUniforms().size()),
+                static_cast<unsigned>(sizeof(gl::ProgramExecutable)),
+                static_cast<unsigned>(sizeof(std::vector<gl::VariableLocation>)), location,
+                static_cast<unsigned>(mD3DUniforms.size()));
+        }
+        if (static_cast<size_t>(location) >= mExecutable->getUniformLocations().size())
+        {
+            GeckoW10mAngleNote("angle-d3d: location %d is beyond the %u locations this side can see -- ignoring the set",
+                             location, static_cast<unsigned>(mExecutable->getUniformLocations().size()));
+            return;
+        }
+    }
     const gl::VariableLocation &uniformLocation = mExecutable->getUniformLocations()[location];
     D3DUniform *targetUniform                   = getD3DUniformFromLocation(uniformLocation);
+    if (!targetUniform)
+    {
+        return;
+    }
     unsigned int arrayElementOffset             = uniformLocation.arrayIndex;
     unsigned int elementCount                   = targetUniform->getArraySizeProduct();
 

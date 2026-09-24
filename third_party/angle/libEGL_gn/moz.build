@@ -159,3 +159,12 @@ if CONFIG["MOZ_DEBUG"] == "1" and CONFIG["OS_TARGET"] == "WINNT":
     DEFINES["_HAS_ITERATOR_DEBUGGING"] = "0"
 
 GeckoSharedLibrary("EGL_gn")
+
+# GeckoW10m: clang's 32-bit ARM virtual-call thunks destroy r1 (see
+# tools/patch-vcall-thunks.py); the patcher finds them through the linker map,
+# and without one this DLL went unpatched. ANGLE dispatches every uniform set
+# through a pointer-to-member virtual call, so the uniform location arrived as
+# the thunk's own address and the STL bounds check ended the renderer thread
+# with a fast fail. Same map as xul.dll gets.
+if CONFIG["MOZ_UWP"]:
+    LDFLAGS += ["-MAP:libEGL.map"]

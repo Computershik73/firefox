@@ -3,6 +3,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "gfxPlatform.h"
+#if defined(GECKO_W10M) && defined(XP_WIN)
+#  include "mozilla/gfx/DeviceManagerDx.h"
+#endif
+
+#if defined(GECKO_W10M)
+#  include "mozilla/Sprintf.h"
+extern "C" void GeckoW10mNote(const char* text);
+#endif
 
 #include "GfxDriverInfo.h"
 #include "VRProcessManager.h"
@@ -1344,7 +1352,14 @@ void gfxPlatform::InitLayersIPC() {
 
   if (XRE_IsParentProcess()) {
 #if defined(XP_WIN)
-    if (gfxConfig::IsEnabled(gfx::Feature::WINDOW_OCCLUSION)) {
+    // There is nothing to track when there are no windows. Headless has none
+    // by definition, and a packaged app has a CoreWindow rather than the
+    // desktop windows this watches. Either way the tracker's constructor
+    // reaches WinEventWindow::Ensure, which registers a window class and
+    // creates a message-only window -- neither of which exists on a device
+    // without USER32's window functions, and it crashes rather than fail.
+    if (!gfxPlatform::IsHeadless() &&
+        gfxConfig::IsEnabled(gfx::Feature::WINDOW_OCCLUSION)) {
       widget::WinWindowOcclusionTracker::Ensure();
     }
 #endif
@@ -2552,11 +2567,23 @@ void gfxPlatform::InitCompositorAccelerationPrefs() {
                          "Acceleration blocked by safe-mode",
                          "FEATURE_FAILURE_COMP_SAFEMODE"_ns);
   }
+#if defined(GECKO_W10M)
+  // Not here. Headless blocks acceleration because a headless window has
+  // nothing to present to -- which was true of this one until it was given a
+  // XAML SwapChainPanel. It is headless because an app container is handed no
+  // HWND, not because there is no screen; the screen is the phone's.
+  //
+  // This is the single line that was keeping the frame in software. It turned
+  // off hardware compositing, which turned off D3D11 compositing, which turned
+  // off WebRender -- the log named all three and only the last two gave a
+  // reason, because the reason was this one.
+#else
   if (IsHeadless()) {
     feature.ForceDisable(FeatureStatus::Blocked,
                          "Acceleration blocked by headless mode",
                          "FEATURE_FAILURE_COMP_HEADLESSMODE"_ns);
   }
+#endif
 }
 
 /*static*/
@@ -2647,6 +2674,33 @@ void gfxPlatform::InitWebRenderConfig() {
       gfxConfig::IsEnabled(Feature::WEBRENDER_OPTIMIZED_SHADERS));
 
   gfxVars::SetUseSoftwareWebRender(!hasHardware);
+
+#if defined(GECKO_W10M)
+  {
+    // Which of these is off, and the reason it gives, is the whole answer to
+    // why the frame is still being rasterised in software -- and the decision
+    // is made here, long before anything reaches RenderCompositor.
+    auto say = [](const char* name, gfx::Feature aFeature) {
+      auto& feature = gfxConfig::GetFeature(aFeature);
+      const char* why = feature.GetFailureMessage();
+      char note[256];
+      SprintfLiteral(note, "gfx: %s is %s%s%s", name,
+                     feature.IsEnabled() ? "on" : "off",
+                     (why && *why) ? " -- " : "", (why && *why) ? why : "");
+      GeckoW10mNote(note);
+    };
+    say("hardware compositing", Feature::HW_COMPOSITING);
+    say("webrender", Feature::WEBRENDER);
+    say("d3d11 hardware angle", Feature::D3D11_HW_ANGLE);
+    say("webrender angle", Feature::WEBRENDER_ANGLE);
+    say("d3d11 compositing", Feature::D3D11_COMPOSITING);
+    say("hardware video decoding", Feature::HARDWARE_VIDEO_DECODING);
+    // Not canvas 2d: it is configured a few lines later than this runs, and
+    // says so itself from AcceleratedCanvas2DPrefChangeCallback.
+    say("gpu process", Feature::GPU_PROCESS);
+    GeckoW10mNote(AsyncPanZoomEnabled() ? "gfx: apz is on" : "gfx: apz is off");
+  }
+#endif
 
   Preferences::RegisterPrefixCallbackAndCall(SwapIntervalPrefChangeCallback,
                                              "gfx.swap-interval");
@@ -3136,6 +3190,26 @@ void gfxPlatform::InitHardwareVideoConfig() {
                                           canUseVulkanDecode);
   gfxVars::SetCanUseHardwareVideoEncoding(featureEnc.IsEnabled());
 
+#if defined(GECKO_W10M)
+  {
+    // This runs long after the feature notes above, and it is the decision
+    // that decides whether video is decoded on the GPU or on four phone
+    // cores. Texture sharing is named too, because it is the one thing that
+    // can force the feature off no matter what the prefs say.
+    const char* why = featureDec.GetFailureMessage();
+    bool sharing = false;
+    if (auto* dm = gfx::DeviceManagerDx::Get()) {
+      sharing = dm->TextureSharingWorks();
+    }
+    char note[256];
+    SprintfLiteral(note, "gfx: hardware video decoding is %s%s%s (texture sharing %s)",
+                   featureDec.IsEnabled() ? "ON" : "off",
+                   (why && *why) ? " -- " : "", (why && *why) ? why : "",
+                   sharing ? "works" : "does NOT work");
+    GeckoW10mNote(note);
+  }
+#endif
+
 #ifdef MOZ_WIDGET_ANDROID
 #  define CODEC_HW_FEATURE_SETUP_PLATFORM(name, type, encoder)             \
     feature##type##name.SetDefault(gfxAndroidPlatform::IsHwCodecSupported( \
@@ -3536,6 +3610,20 @@ static void AcceleratedCanvas2DPrefChangeCallback(const char*, void*) {
   }
 
   gfxVars::SetUseAcceleratedCanvas2D(feature.IsEnabled());
+
+#if defined(GECKO_W10M)
+  {
+    // The feature note near the WebRender ones is printed by
+    // InitWebRenderConfig, which runs before this -- so it always said "off",
+    // whatever this then decided. Here is the decision itself.
+    const char* why = feature.GetFailureMessage();
+    char note[256];
+    SprintfLiteral(note, "gfx: accelerated canvas 2d is %s%s%s",
+                   feature.IsEnabled() ? "ON" : "off",
+                   (why && *why) ? " -- " : "", (why && *why) ? why : "");
+    GeckoW10mNote(note);
+  }
+#endif
 }
 
 void gfxPlatform::InitAcceleratedCanvas2DConfig() {
@@ -3975,11 +4063,16 @@ bool gfxPlatform::UseDesktopZoomingScrollbars() {
 
 /*static*/
 bool gfxPlatform::AsyncPanZoomEnabled() {
-#if !defined(MOZ_WIDGET_ANDROID) && !defined(MOZ_WIDGET_UIKIT)
+#if !defined(MOZ_WIDGET_ANDROID) && !defined(MOZ_WIDGET_UIKIT) && \
+    !defined(GECKO_W10M)
   // For XUL applications (everything but Firefox on Android)
   // we only want to use APZ when E10S is enabled. If
   // we ever get input events off the main thread we can consider relaxing
   // this requirement.
+  //
+  // GeckoW10m runs the whole browser in one process, like Android used to, and
+  // wants its panning and zooming on the compositor for the same reason a
+  // phone always did: a finger cannot wait for the main thread.
   if (!BrowserTabsRemoteAutostart()) {
     return false;
   }

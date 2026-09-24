@@ -182,7 +182,7 @@ if CONFIG["OS_TARGET"] == "Darwin":
 if CONFIG["OS_TARGET"] == "WINNT":
 
     DEFINES["ANGLE_ENABLE_D3D11"] = True
-    DEFINES["ANGLE_ENABLE_D3D9"] = True
+    DEFINES["ANGLE_ENABLE_D3D9"] = False
     DEFINES["ANGLE_IS_WIN"] = True
     DEFINES["ANGLE_PRELOADED_D3DCOMPILER_MODULE_NAMES"] = "{ \"d3dcompiler_47.dll\", \"d3dcompiler_46.dll\", \"d3dcompiler_43.dll\" }"
     DEFINES["CERT_CHAIN_PARA_HAS_EXTRA_FIELDS"] = True
@@ -210,7 +210,6 @@ if CONFIG["OS_TARGET"] == "WINNT":
     DEFINES["__STD_C"] = True
 
     OS_LIBS += [
-        "d3d9",
         "delayimp",
         "dxgi",
         "dxguid",
@@ -222,7 +221,6 @@ if CONFIG["OS_TARGET"] == "WINNT":
 
     USE_LIBS += [
         "angle_d3d11_backend_gn",
-        "angle_d3d9_backend_gn"
     ]
 
 if CONFIG["TARGET_CPU"] == "aarch64":
@@ -238,3 +236,10 @@ if CONFIG["MOZ_DEBUG"] == "1" and CONFIG["OS_TARGET"] == "WINNT":
     DEFINES["_HAS_ITERATOR_DEBUGGING"] = "0"
 
 Library("ANGLE_no_vulkan_gn")
+
+# GeckoW10m: this build claims the desktop API family so that the rest of
+# Gecko keeps its Win32 APIs, so ANGLE cannot derive this for itself --
+# but the process really is an app container, and these are the paths
+# that work in one: emulated thread-local storage, no file writing, and
+# the SwapChainPanel window instead of the HWND one.
+DEFINES["ANGLE_ENABLE_WINDOWS_UWP"] = True

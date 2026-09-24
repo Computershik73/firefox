@@ -8810,6 +8810,19 @@
   mirror: once
 
 # Enable dithering in hardware WebRender
+# GeckoW10m: 1024-pixel shared cache textures for the main window instead of
+# 2048. On a phone the GPU's memory is the phone's memory: ANGLE's accounting
+# showed 145-160 MB of D3D11 textures with a blank tab, fourteen of them the
+# 16 MB pages of this cache, and that is the write-combined block that the
+# engine's own memory tree could not name. A quarter-size page holds a
+# quarter as much, so more pages get allocated under load, but the idle
+# footprint and the waste in a half-empty page drop fourfold.
+- name: gfx.webrender.texture-cache.small
+  type: bool
+  value: false
+  mirror: once
+  rust: true
+
 - name: gfx.webrender.dithering
   type: bool
   rust: true

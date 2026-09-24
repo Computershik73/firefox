@@ -7,6 +7,83 @@ use api::{ImageDescriptor, ImageFormat, Parameter, BoolParameter, IntParameter, 
 use api::{MixBlendMode, ImageBufferKind, VoidPtrToSizeFn};
 use api::{CrashAnnotator, CrashAnnotation, CrashAnnotatorGuard};
 use api::units::*;
+
+// GeckoW10m: the phone shell hides the window shortly after hardware WebRender
+// starts drawing. Note what the device does in its first frames so the hide
+// can be placed against a texture or a frame. GeckoW10mNote lives in xul.
+#[cfg(windows)]
+extern "C" {
+    fn GeckoW10mNote(text: *const std::os::raw::c_char);
+}
+// Off unless GECKO_W10M_WR_TRACE is set. Two of these go out per composited
+// frame, and every one of them used to open the note file, seek, write, flush
+// it to the eMMC and close it again -- on the renderer thread, between frames.
+// That is what held compositing to about thirty frames a second, which a
+// sixty-frame video notices as every second frame dropped.
+#[cfg(windows)]
+static GECKO_W10M_TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+#[cfg(windows)]
+pub fn gecko_w10m_note(text: &str) {
+    if !*GECKO_W10M_TRACE.get_or_init(|| std::env::var_os("GECKO_W10M_WR_TRACE").is_some()) {
+        return;
+    }
+    if let Ok(c) = std::ffi::CString::new(text) {
+        unsafe { GeckoW10mNote(c.as_ptr()) }
+    }
+}
+#[cfg(not(windows))]
+pub fn gecko_w10m_note(_text: &str) {}
+static GECKO_W10M_FRAMES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static GECKO_W10M_TEXTURES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static GECKO_W10M_DRAWS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static GECKO_W10M_CLEARS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static GECKO_W10M_BLITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static GECKO_W10M_TARGETS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static GECKO_W10M_UPLOADS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static GECKO_W10M_LINKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+fn gecko_w10m_count(counter: &std::sync::atomic::AtomicU32, first: u32) -> Option<u32> {
+    let n = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    GECKO_W10M_PULSE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if n <= first || n % 100 == 0 { Some(n) } else { None }
+}
+// A pulse the shell can read from its heartbeat: it rises on every noted GL
+// call, and `where` says what the renderer thread is inside right now
+// (0 idle, 1 a draw call, 2 a program link, 3 an instance-buffer upload,
+// 4 use_program). If the pulse stops rising while `where` stays non-zero, the
+// renderer thread is stuck inside that call.
+pub static GECKO_W10M_PULSE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub static GECKO_W10M_WHERE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[no_mangle]
+pub extern "C" fn gecko_w10m_wr_pulse_rust() -> u32 {
+    GECKO_W10M_PULSE.load(std::sync::atomic::Ordering::Relaxed)
+}
+#[no_mangle]
+pub extern "C" fn gecko_w10m_wr_where_rust() -> u32 {
+    GECKO_W10M_WHERE.load(std::sync::atomic::Ordering::Relaxed)
+}
+pub static GECKO_W10M_WR_TID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(windows)]
+extern "system" {
+    fn GetCurrentThreadId() -> u32;
+}
+#[no_mangle]
+pub extern "C" fn gecko_w10m_wr_thread_rust() -> u32 {
+    GECKO_W10M_WR_TID.load(std::sync::atomic::Ordering::Relaxed)
+}
+fn gecko_w10m_where(stage: u32) {
+    #[cfg(windows)]
+    {
+        if GECKO_W10M_WR_TID.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+            GECKO_W10M_WR_TID.store(unsafe { GetCurrentThreadId() }, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    GECKO_W10M_WHERE.store(stage, std::sync::atomic::Ordering::Relaxed);
+    GECKO_W10M_PULSE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+fn gecko_w10m_frame_noted(frame: u32) -> bool {
+    frame <= 4 || frame == 10 || frame == 30 || frame == 60 || frame == 120 || frame == 300
+}
 use euclid::default::Transform3D;
 use gleam::gl;
 use crate::render_api::MemoryReport;
@@ -2225,6 +2302,12 @@ impl Device {
     pub fn begin_frame(&mut self) -> GpuFrameId {
         debug_assert!(!self.inside_frame);
         self.inside_frame = true;
+        {
+            let frame = GECKO_W10M_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if gecko_w10m_frame_noted(frame) {
+                gecko_w10m_note(&format!("wr: device frame {} begins", frame));
+            }
+        }
         #[cfg(debug_assertions)]
         {
             self.shader_is_ready = false;
@@ -2431,6 +2514,9 @@ impl Device {
         };
 
         self.depth_available = depth_available;
+        if let Some(n) = gecko_w10m_count(&GECKO_W10M_TARGETS, 40) {
+            gecko_w10m_note(&format!("wr: draw target {} -- fbo {:?} rect {:?}", n, fbo_id, rect));
+        }
         self.bind_draw_target_impl(fbo_id);
         self.gl.viewport(
             rect.min.x,
@@ -2486,6 +2572,10 @@ impl Device {
         assert!(!program.is_initialized());
         let mut build_program = true;
         let info = &program.source_info;
+        let gecko_w10m_link_started = std::time::Instant::now();
+        let gecko_w10m_link_n = GECKO_W10M_LINKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        gecko_w10m_where(2);
+        gecko_w10m_note(&format!("wr: link {} -- {} begins", gecko_w10m_link_n, info.full_name()));
 
         // See if we hit the binary shader cache
         if let Some(ref cached_programs) = self.cached_programs {
@@ -2522,6 +2612,11 @@ impl Device {
             }
         }
 
+        gecko_w10m_note(&format!(
+            "wr: link {} -- {}: {}",
+            gecko_w10m_link_n, info.full_name(),
+            if build_program { "compiling from source" } else { "loaded from a program binary" }
+        ));
         // If not, we need to do a normal compile + link pass.
         if build_program {
             // Compile the vertex shader
@@ -2570,6 +2665,12 @@ impl Device {
 
             // Link!
             self.gl.link_program(program.id);
+            gecko_w10m_note(&format!(
+                "wr: link {} -- {} linked in {} ms",
+                gecko_w10m_link_n, info.full_name(),
+                gecko_w10m_link_started.elapsed().as_millis()
+            ));
+            gecko_w10m_where(0);
 
             // GL recommends detaching and deleting shaders once the link
             // is complete (whether successful or not). This allows the driver
@@ -2609,6 +2710,10 @@ impl Device {
         program.is_initialized = true;
         program.u_transform = self.gl.get_uniform_location(program.id, "uTransform");
         program.u_texture_size = self.gl.get_uniform_location(program.id, "uTextureSize");
+        gecko_w10m_note(&format!(
+            "wr: link {} -- {}: uTransform at {}, uTextureSize at {}",
+            gecko_w10m_link_n, info.full_name(), program.u_transform, program.u_texture_size
+        ));
 
         Ok(())
     }
@@ -2625,9 +2730,15 @@ impl Device {
         }
 
         if self.bound_program != program.id {
+            gecko_w10m_where(4);
             self.gl.use_program(program.id);
+            gecko_w10m_where(0);
             self.bound_program = program.id;
             self.bound_program_name = program.source_info.full_name_cstr.clone();
+            static USES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            if let Some(n) = gecko_w10m_count(&USES, 40) {
+                gecko_w10m_note(&format!("wr: use program {} -- {:?}", n, self.bound_program_name));
+            }
         }
         true
     }
@@ -2647,6 +2758,17 @@ impl Device {
             error!("Attempting to allocate a texture of size {}x{} above the limit, trimming", width, height);
             width = width.min(self.max_texture_size);
             height = height.min(self.max_texture_size);
+        }
+
+        {
+            let n = GECKO_W10M_TEXTURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if n <= 40 || n % 50 == 0 {
+                gecko_w10m_note(&format!(
+                    "wr: texture {} -- {}x{} {:?} {:?}{}",
+                    n, width, height, format, target,
+                    if render_target.is_some() { ", render target" } else { "" }
+                ));
+            }
         }
 
         // Set up the texture book-keeping.
@@ -2965,6 +3087,9 @@ impl Device {
 
         let src_x0 = src_rect.min.x + self.bound_read_fbo.1.x;
         let src_y0 = src_rect.min.y + self.bound_read_fbo.1.y;
+        if let Some(n) = gecko_w10m_count(&GECKO_W10M_BLITS, 30) {
+            gecko_w10m_note(&format!("wr: blit {} -- {:?} -> {:?}", n, src_rect, dest_rect));
+        }
 
         self.gl.blit_framebuffer(
             src_x0,
@@ -3159,6 +3284,19 @@ impl Device {
         #[cfg(debug_assertions)]
         debug_assert!(self.shader_is_ready);
 
+        // The renderer thread died inside ANGLE's GL_UniformMatrix4fv on the
+        // phone: with validation off (EGL_CONTEXT_OPENGL_NO_ERROR_KHR) a
+        // location of -1 goes straight into a bounds-checked vector index and
+        // the STL check ends in __fastfail, which no handler ever sees. GL says
+        // -1 is to be ignored, so ignore it here, as set_shader_texture_size
+        // already does for its own uniform.
+        if program.u_transform == -1 {
+            gecko_w10m_note(&format!(
+                "wr: {} has no uTransform location -- not setting it",
+                program.source_info.full_name()
+            ));
+            return;
+        }
         self.gl
             .uniform_matrix_4fv(program.u_transform, false, &transform.to_array());
     }
@@ -3535,6 +3673,17 @@ impl Device {
     ) {
         debug_assert_eq!(self.bound_vao, vao.id);
         debug_assert_eq!(vao.instance_stride as usize, mem::size_of::<V>());
+        static INSTANCE_UPLOADS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if let Some(n) = gecko_w10m_count(&INSTANCE_UPLOADS, 40) {
+            gecko_w10m_note(&format!(
+                "wr: instances {} -- {} x {} bytes, repeat {:?}",
+                n, instances.len(), mem::size_of::<V>(), repeat
+            ));
+        }
+        gecko_w10m_where(3);
+        struct WhereGuard;
+        impl Drop for WhereGuard { fn drop(&mut self) { gecko_w10m_where(0); } }
+        let _where_guard = WhereGuard;
 
         match repeat {
             Some(count) => {
@@ -3711,12 +3860,22 @@ impl Device {
             None
         };
 
+        let noted = gecko_w10m_count(&GECKO_W10M_DRAWS, 40);
+        if let Some(n) = noted {
+            gecko_w10m_note(&format!("wr: draw {} -- {:?}, {} indices", n, self.bound_program_name, index_count));
+        }
+        let started = std::time::Instant::now();
+        gecko_w10m_where(1);
         self.gl.draw_elements(
             gl::TRIANGLES,
             index_count,
             gl::UNSIGNED_SHORT,
             0,
         );
+        gecko_w10m_where(0);
+        if let Some(n) = noted {
+            gecko_w10m_note(&format!("wr: draw {} returned in {} ms", n, started.elapsed().as_millis()));
+        }
     }
 
     pub fn draw_indexed_triangles_instanced_u16(&mut self, index_count: i32, instance_count: i32) {
@@ -3734,6 +3893,12 @@ impl Device {
             None
         };
 
+        let noted = gecko_w10m_count(&GECKO_W10M_DRAWS, 40);
+        if let Some(n) = noted {
+            gecko_w10m_note(&format!("wr: draw {} -- {:?}, {} indices x {} instances", n, self.bound_program_name, index_count, instance_count));
+        }
+        let started = std::time::Instant::now();
+        gecko_w10m_where(1);
         self.gl.draw_elements_instanced(
             gl::TRIANGLES,
             index_count,
@@ -3741,6 +3906,10 @@ impl Device {
             0,
             instance_count,
         );
+        gecko_w10m_where(0);
+        if let Some(n) = noted {
+            gecko_w10m_note(&format!("wr: draw {} returned in {} ms", n, started.elapsed().as_millis()));
+        }
     }
 
     pub fn draw_indexed_triangles_instanced_base_instance_u16(
@@ -3763,6 +3932,15 @@ impl Device {
             None
         };
 
+        let noted = gecko_w10m_count(&GECKO_W10M_DRAWS, 40);
+        if let Some(n) = noted {
+            gecko_w10m_note(&format!(
+                "wr: draw {} -- {:?}, {} indices x {} instances from base {}",
+                n, self.bound_program_name, index_count, instance_count, base_instance
+            ));
+        }
+        let started = std::time::Instant::now();
+        gecko_w10m_where(1);
         self.gl.draw_elements_instanced_base_instance(
             gl::TRIANGLES,
             index_count,
@@ -3771,11 +3949,24 @@ impl Device {
             instance_count,
             base_instance,
         );
+        gecko_w10m_where(0);
+        if let Some(n) = noted {
+            gecko_w10m_note(&format!("wr: draw {} returned in {} ms", n, started.elapsed().as_millis()));
+        }
     }
 
     pub fn end_frame(&mut self) {
         self.reset_draw_target();
         self.reset_read_target();
+        {
+            let frame = GECKO_W10M_FRAMES.load(std::sync::atomic::Ordering::Relaxed);
+            if gecko_w10m_frame_noted(frame) {
+                gecko_w10m_note(&format!(
+                    "wr: device frame {} ends -- {} textures made, {} deleted",
+                    frame, self.textures_created, self.textures_deleted
+                ));
+            }
+        }
 
         debug_assert!(self.inside_frame);
         self.inside_frame = false;
@@ -3807,6 +3998,9 @@ impl Device {
         rect: Option<FramebufferIntRect>,
     ) {
         let mut clear_bits = 0;
+        if let Some(n) = gecko_w10m_count(&GECKO_W10M_CLEARS, 40) {
+            gecko_w10m_note(&format!("wr: clear {} -- color {:?} depth {:?} rect {:?}", n, color, depth, rect));
+        }
 
         if let Some(color) = color {
             self.gl.clear_color(color[0], color[1], color[2], color[3]);
@@ -4641,6 +4835,12 @@ impl<'a> TextureUploader<'a> {
 
         let bytes_pp = texture.format.bytes_per_pixel() as usize;
         let width_bytes = rect.width() as usize * bytes_pp;
+        if let Some(n) = gecko_w10m_count(&GECKO_W10M_UPLOADS, 40) {
+            gecko_w10m_note(&format!(
+                "wr: upload {} -- {:?} into {:?} {:?} via {:?}",
+                n, rect, texture.get_dimensions(), texture.format, device.upload_method
+            ));
+        }
 
         let src_stride = stride.map_or(width_bytes, |stride| {
             assert!(stride >= 0);

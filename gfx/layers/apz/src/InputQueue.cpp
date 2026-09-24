@@ -25,6 +25,11 @@ static mozilla::LazyLogModule sApzInpLog("apz.inputqueue");
 #define INPQ_LOG(...) MOZ_LOG(sApzInpLog, LogLevel::Debug, (__VA_ARGS__))
 #define INPQ_LOG_TEST() MOZ_LOG_TEST(sApzInpLog, LogLevel::Debug)
 
+#if defined(GECKO_W10M)
+#  include "nsPrintfCString.h"
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 namespace mozilla {
 namespace layers {
 

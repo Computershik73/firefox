@@ -31,7 +31,18 @@ class RenderCompositorEGL : public RenderCompositor {
 
   bool MakeCurrent() override;
 
+#if defined(GECKO_W10M)
+  // Here EGL *is* ANGLE, on D3D11, which is what this flag means to the rest
+  // of the stack: it says the compositor can take a D3D11 texture instead of
+  // a buffer of pixels. It travels to the decoder as
+  // TextureFactoryIdentifier::mUseANGLE, and without it
+  // KnowsCompositor::SupportsD3D11() is false and WMF turns DXVA down with
+  // "Unsupported layers backend" -- which is what kept every frame on the CPU
+  // even once hardware decoding was enabled and texture sharing worked.
+  bool UseANGLE() const override { return true; }
+#else
   bool UseANGLE() const override { return false; }
+#endif
 
   LayoutDeviceIntSize GetBufferSize() override;
 

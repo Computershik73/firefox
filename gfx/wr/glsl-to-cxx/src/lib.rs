@@ -7,6 +7,7 @@
 extern crate glsl;
 
 mod hir;
+pub mod hlsl;
 
 use glsl::parser::Parse;
 use glsl::syntax;
@@ -91,7 +92,7 @@ pub fn translate(args: &mut dyn Iterator<Item = String>) -> String {
     result
 }
 
-fn parse_shader(file: String) -> (hir::State, hir::TranslationUnit, bool) {
+pub(crate) fn parse_shader(file: String) -> (hir::State, hir::TranslationUnit, bool) {
     let mut contents = String::new();
     let is_frag = file.contains("frag");
     std::fs::File::open(&file)

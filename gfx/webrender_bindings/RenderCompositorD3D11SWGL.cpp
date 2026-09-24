@@ -21,6 +21,7 @@
 // swgl (gpu_d3d11.h): pixel shading on a Direct3D 11 device.
 extern "C" bool SwglGpuAttach(void* aDevice);
 extern "C" void SwglGpuStats(uint32_t* aOut8);
+extern "C" void SwglGpuDescribe(char* aOut, size_t aSize);
 #if defined(GECKO_W10M)
 extern "C" void GeckoW10mNote(const char* aText);
 #endif
@@ -80,6 +81,13 @@ UniquePtr<RenderCompositor> RenderCompositorD3D11SWGL::Create(
                       "targets"
                     : "gfx: SWGL could not take the device -- pixels stay on "
                       "the CPU");
+    if (result->mGpuShading) {
+      char desc[256];
+      SwglGpuDescribe(desc, sizeof(desc));
+      char note[320];
+      SprintfLiteral(note, "gfx: GPU shading device: %s", desc);
+      GeckoW10mNote(note);
+    }
 #endif
     if (result->mGpuShading) {
       // Tiles are drawn on the GPU; the staging paths never run.

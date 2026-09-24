@@ -1485,6 +1485,27 @@ bool SwglGpuSetTextureTarget(GLuint texid, void* d3d_texture, GLsizei width,
 // draws that can run on it do. The device must belong to the thread that
 // uses the context. Returns false, attaching nothing, if the device cannot
 // take the shaders.
+// One line about the attached device, for the log: its feature level and
+// what it can do that decides which draws stay on the CPU.
+void SwglGpuDescribe(char* out, size_t size) {
+  GpuBackend* g = ctx ? ctx->gpu : nullptr;
+  if (!g) {
+    snprintf(out, size, "no device");
+    return;
+  }
+  int programs = 0;
+  for (auto* p : ctx->programs) {
+    if (p && p->gpu_impl && p->gpu_impl->gpu_info()) programs++;
+  }
+  snprintf(out, size,
+           "feature level %x, R8 targets %s, float textures %s (flat data "
+           "and gradients %s), max texture %d",
+           unsigned(g->level), g->r8_ok ? "yes" : "no (BGRA instead)",
+           g->rgba32f_ok ? "yes" : "NO", g->rgba32f_ok ? "on the GPU" : "on the CPU",
+           gpu_max_texture_size());
+  (void)programs;
+}
+
 bool SwglGpuAttach(void* device) {
   if (!ctx) return false;
   delete ctx->gpu;
@@ -1584,6 +1605,9 @@ Context::~Context() { delete gpu; }
 
 extern "C" {
 bool SwglGpuAttach(void*) { return false; }
+void SwglGpuDescribe(char* out, size_t size) {
+  if (size) out[0] = 0;
+}
 bool SwglGpuSetTextureTarget(GLuint, void*, GLsizei, GLsizei, GLint, GLint) {
   return false;
 }

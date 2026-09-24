@@ -58,6 +58,25 @@ static inline void safe_release(T*& p) {
 
 // Bytes of CPU buffers freed because the GPU holds the texture (resident).
 static int64_t resident_bytes = 0;
+// Bytes of Direct3D textures: SWGL textures' GPU copies, and the caches
+// (spare depth buffers, readback staging, feedback copies). On a phone they
+// come out of the same memory as everything else.
+static int64_t gpu_tex_bytes = 0;
+static int64_t gpu_cache_bytes = 0;
+
+static int64_t texel_bytes(DXGI_FORMAT f, int64_t w, int64_t h) {
+  int b = f == DXGI_FORMAT_R8_UNORM                ? 1
+          : f == DXGI_FORMAT_R32G32B32A32_FLOAT    ? 16
+                                                   : 4;
+  return w * h * b;
+}
+
+static int64_t texture_bytes(ID3D11Texture2D* t) {
+  if (!t) return 0;
+  D3D11_TEXTURE2D_DESC d;
+  t->GetDesc(&d);
+  return texel_bytes(d.Format, d.Width, d.Height);
+}
 
 }  // namespace swgl_gpu
 
@@ -97,12 +116,16 @@ struct GpuTex {
 
   // What this texture counts in resident_bytes while resident.
   int64_t resident_size = 0;
+  // What its Direct3D texture counts in gpu_tex_bytes (0 for external ones).
+  int64_t gpu_size = 0;
 
   void release() {
     if (resident) {
       swgl_gpu::resident_bytes -= resident_size;
       resident_size = 0;
     }
+    swgl_gpu::gpu_tex_bytes -= gpu_size;
+    gpu_size = 0;
     swgl_gpu::safe_release(srv);
     swgl_gpu::safe_release(rtv);
     swgl_gpu::safe_release(dsv);
@@ -541,11 +564,15 @@ static bool ensure_resource(GpuBackend* g, Texture& t, int min_w = 0,
   bool keep_resident = gt.resident && !t.buf;
   if (depth && gt.tex && gt.dsv && gt.internal_format == t.internal_format) {
     if (g->spare_depth.size() >= 4) {
+      gpu_cache_bytes -= texture_bytes(g->spare_depth.front().tex);
       g->spare_depth.front().dsv->Release();
       g->spare_depth.front().tex->Release();
       g->spare_depth.erase(g->spare_depth.begin());
     }
     g->spare_depth.push_back({gt.tex_w, gt.tex_h, gt.tex, gt.dsv});
+    gpu_tex_bytes -= gt.gpu_size;
+    gpu_cache_bytes += gt.gpu_size;
+    gt.gpu_size = 0;
     gt.tex = nullptr;
     gt.dsv = nullptr;
   }
@@ -563,6 +590,9 @@ static bool ensure_resource(GpuBackend* g, Texture& t, int min_w = 0,
       if (d.w != want_w || d.h != want_h) continue;
       gt.tex = d.tex;
       gt.dsv = d.dsv;
+      gt.gpu_size = texture_bytes(d.tex);
+      gpu_cache_bytes -= gt.gpu_size;
+      gpu_tex_bytes += gt.gpu_size;
       g->spare_depth.erase(g->spare_depth.begin() + i);
       gt.format = format;
       gt.internal_format = t.internal_format;
@@ -617,6 +647,8 @@ static bool ensure_resource(GpuBackend* g, Texture& t, int min_w = 0,
   gt.tex_w = want_w;
   gt.tex_h = want_h;
   gt.expanded = expanded;
+  gt.gpu_size = texel_bytes(format, want_w, want_h);
+  gpu_tex_bytes += gt.gpu_size;
   // A new GPU copy holds nothing yet: whatever the CPU has is newer -- and
   // if the CPU has nothing (resident), neither holds anything.
   gt.gpu_newer = false;
@@ -694,11 +726,16 @@ static ID3D11Texture2D* get_staging(GpuBackend* g, GpuTex& gt) {
   td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
   ID3D11Texture2D* s = nullptr;
   if (FAILED(g->dev->CreateTexture2D(&td, nullptr, &s))) return nullptr;
-  // Few sizes recur; a handful is plenty.
-  if (g->staging.size() > 8) {
-    for (auto& e : g->staging) e.second->Release();
+  // A staging texture is as large as a whole render target and readbacks
+  // are rare: keep two.
+  if (g->staging.size() >= 2) {
+    for (auto& e : g->staging) {
+      gpu_cache_bytes -= texture_bytes(e.second);
+      e.second->Release();
+    }
     g->staging.clear();
   }
+  gpu_cache_bytes += texture_bytes(s);
   g->staging[key] = s;
   return s;
 }
@@ -936,11 +973,13 @@ static ID3D11ShaderResourceView* feedback_copy(GpuBackend* g, GpuTex& gt) {
     // One or two sizes recur; do not hoard.
     if (g->feedback.size() >= 2) {
       for (auto& e : g->feedback) {
+        gpu_cache_bytes -= texture_bytes(e.second.first);
         e.second.first->Release();
         e.second.second->Release();
       }
       g->feedback.clear();
     }
+    gpu_cache_bytes += texture_bytes(t);
     it = g->feedback.emplace(key, std::make_pair(t, v)).first;
   }
   g->dc->CopyResource(it->second.first, gt.tex);
@@ -2075,15 +2114,19 @@ void SwglGpuStats(uint32_t* out8) {
 
 // Since the last SwglGpuStats: CPU copies freed and brought back; and the
 // megabytes of CPU memory the GPU-only textures save now.
-void SwglGpuMemoryStats(uint32_t* out3) {
+// Then the megabytes of Direct3D textures: SWGL textures' GPU copies, and
+// SWGL's caches.
+void SwglGpuMemoryStats(uint32_t* out5) {
   GpuBackend* g = ctx ? ctx->gpu : nullptr;
   if (!g) {
-    memset(out3, 0, 3 * sizeof(uint32_t));
+    memset(out5, 0, 5 * sizeof(uint32_t));
     return;
   }
-  out3[0] = g->stats.cpu_freed;
-  out3[1] = g->stats.cpu_restored;
-  out3[2] = uint32_t(std::max<int64_t>(swgl_gpu::resident_bytes, 0) >> 20);
+  out5[0] = g->stats.cpu_freed;
+  out5[1] = g->stats.cpu_restored;
+  out5[2] = uint32_t(std::max<int64_t>(swgl_gpu::resident_bytes, 0) >> 20);
+  out5[3] = uint32_t(std::max<int64_t>(swgl_gpu::gpu_tex_bytes, 0) >> 20);
+  out5[4] = uint32_t(std::max<int64_t>(swgl_gpu::gpu_cache_bytes, 0) >> 20);
 }
 
 }  // extern "C"
@@ -2140,8 +2183,8 @@ bool SwglGpuTestReadTile(void*, int, int, int, int, void*, int) {
   return false;
 }
 void SwglGpuStats(uint32_t* out8) { memset(out8, 0, 8 * sizeof(uint32_t)); }
-void SwglGpuMemoryStats(uint32_t* out3) {
-  memset(out3, 0, 3 * sizeof(uint32_t));
+void SwglGpuMemoryStats(uint32_t* out5) {
+  memset(out5, 0, 5 * sizeof(uint32_t));
 }
 }
 

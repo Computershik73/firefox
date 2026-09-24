@@ -51,14 +51,13 @@ pub fn translate(args: &mut dyn Iterator<Item = String>) -> String {
 }
 
 /// As translate(), and when `gpu` is set, also the feature level 9_3 pixel
-/// shader for the fragment half (see hlsl.rs) with its layout, and the
-/// program class then carries the C++ that packs varyings for it. Shaders
-/// whose vertex half writes gl_ClipDistance stay on the CPU: SWGL clips
-/// those quads itself.
+/// shaders for the fragment half (see hlsl.rs), one per loop limit, with
+/// their layout; the program class then carries the C++ that packs varyings
+/// for them.
 pub fn translate_with_gpu(
     args: &mut dyn Iterator<Item = String>,
     gpu: bool,
-) -> (String, Option<(String, hlsl::Layout)>, Vec<String>) {
+) -> (String, Option<(Vec<String>, hlsl::Layout)>, Vec<String>) {
     let _cmd_name = args.next();
     let vertex_file = args.next().unwrap();
 
@@ -82,12 +81,22 @@ pub fn translate_with_gpu(
     let mut gpu_errors = Vec::new();
     let gpu_result = if !gpu {
         None
-    } else if vs_state.used_clip_dist != 0 {
-        gpu_errors.push("the vertex shader writes gl_ClipDistance".to_string());
-        None
     } else {
-        match hlsl::translate_fragment(&fs_state, &fs_hir) {
-            Ok(r) => Some(r),
+        // One pixel shader per loop limit, most generous first; the caller
+        // keeps the first one its compiler accepts. The layout is the same.
+        let clip = vs_state.used_clip_dist != 0;
+        match hlsl::translate_fragment_limited(&fs_state, &fs_hir, hlsl::LOOP_LIMITS[0], clip) {
+            Ok((first, layout)) => {
+                let mut sources = vec![first];
+                for &limit in &hlsl::LOOP_LIMITS[1..] {
+                    if let Ok((src, _)) =
+                        hlsl::translate_fragment_limited(&fs_state, &fs_hir, limit, clip)
+                    {
+                        sources.push(src);
+                    }
+                }
+                Some((sources, layout))
+            }
             Err(e) => {
                 gpu_errors = e.into_iter().filter(|e| !e.starts_with("-- partial")).collect();
                 None

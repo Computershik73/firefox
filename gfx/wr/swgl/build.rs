@@ -204,12 +204,12 @@ fn write_gpu_header(
     out_dir: &str,
     shader: &str,
     fxc: Option<&str>,
-    gpu: Option<(String, glsl_to_cxx::hlsl::Layout)>,
+    gpu: Option<(Vec<String>, glsl_to_cxx::hlsl::Layout)>,
     errors: &[String],
 ) {
     let path = format!("{out_dir}/{shader}_gpu.h");
     let stub = format!("static const GpuProgramInfo* {shader}_gpu_info() {{ return nullptr; }}\n");
-    let (fxc, (hlsl, layout)) = match (fxc, gpu) {
+    let (fxc, (sources, layout)) = match (fxc, gpu) {
         (Some(f), Some(g)) => (f, g),
         (Some(_), None) => {
             println!("cargo:warning=swgl: {shader} stays on the CPU: {}", errors.join(" | "));
@@ -221,7 +221,15 @@ fn write_gpu_header(
             return;
         }
     };
-    match fxc_compile(fxc, &hlsl, "ps_4_0_level_9_3", &format!("{out_dir}/{shader}_ps")) {
+    // Loops are unrolled; the first limit that fits in 512 instructions wins.
+    let mut compiled = Err(String::new());
+    for hlsl in &sources {
+        compiled = fxc_compile(fxc, hlsl, "ps_4_0_level_9_3", &format!("{out_dir}/{shader}_ps"));
+        if compiled.is_ok() {
+            break;
+        }
+    }
+    match compiled {
         Ok(bytes) => {
             let mut h = bytes_array(&format!("{shader}_ps"), &bytes);
             let rect: Vec<String> = layout

@@ -80,8 +80,13 @@ pub struct Layout {
 
 /// The input limit of ps_4_0_level_9_3 when SV_Position is not declared.
 pub const MAX_SLOTS: usize = 8;
-/// How far a loop whose bound is not a constant is unrolled.
-const LOOP_LIMIT: usize = 32;
+/// How far a loop whose bound is not a constant is unrolled, unless the
+/// caller asks for less: 9_3 allows 512 instructions, and the build tries
+/// smaller limits until the shader fits (see swgl's build.rs). WebRender's
+/// own loops are short: the gradient stop tree is five levels deep for 625
+/// stops, a blur takes at most six steps once WebRender has scaled the
+/// source so that the deviation is at most 4.
+pub const LOOP_LIMITS: [usize; 3] = [32, 16, 8];
 
 struct Emitter<'a> {
     st: &'a hir::State,
@@ -98,6 +103,7 @@ struct Emitter<'a> {
     array_wrappers: Vec<(String, String, usize)>,
     /// The wrapper the function being emitted returns, if any.
     ret_array: Option<String>,
+    loop_limit: usize,
 }
 
 fn floats_of(kind: hir::TypeKind) -> Option<usize> {
@@ -822,7 +828,7 @@ impl<'a> Emitter<'a> {
                 }
                 self.line(&format!(
                     "[unroll({0})] for (int glsl_iter = 0; glsl_iter < {0}; glsl_iter++)",
-                    LOOP_LIMIT
+                    self.loop_limit
                 ));
                 self.line("{");
                 self.indent += 1;
@@ -840,7 +846,7 @@ impl<'a> Emitter<'a> {
                 let cond = self.expr(c);
                 self.line(&format!(
                     "[unroll({0})] for (int glsl_iter = 0; glsl_iter < {0}; glsl_iter++)",
-                    LOOP_LIMIT
+                    self.loop_limit
                 ));
                 self.line("{");
                 self.indent += 1;
@@ -853,7 +859,7 @@ impl<'a> Emitter<'a> {
                 let cond = self.expr(c);
                 self.line(&format!(
                     "[unroll({0})] for (int glsl_iter = 0; glsl_iter < {0}; glsl_iter++)",
-                    LOOP_LIMIT
+                    self.loop_limit
                 ));
                 self.line("{");
                 self.indent += 1;
@@ -1143,6 +1149,19 @@ pub fn translate_fragment(
     st: &hir::State,
     tu: &hir::TranslationUnit,
 ) -> Result<(String, Layout), Vec<String>> {
+    translate_fragment_limited(st, tu, LOOP_LIMITS[0], false)
+}
+
+/// `clip_distance`: the vertex half writes gl_ClipDistance. SWGL clips such
+/// quads while rasterising; here the distances travel as one more
+/// interpolated varying (swgl_ClipDistance, first in InterpOutputs) and the
+/// pixel shader discards where any is negative, which is the same clip.
+pub fn translate_fragment_limited(
+    st: &hir::State,
+    tu: &hir::TranslationUnit,
+    loop_limit: usize,
+    clip_distance: bool,
+) -> Result<(String, Layout), Vec<String>> {
     let mut em = Emitter {
         st,
         out: String::new(),
@@ -1153,6 +1172,7 @@ pub fn translate_fragment(
         uses_discard: false,
         array_wrappers: Vec::new(),
         ret_array: None,
+        loop_limit,
     };
 
     // Find main and everything it reaches.
@@ -1228,6 +1248,9 @@ pub fn translate_fragment(
     // The packed layout: interpolated first, flat after. Whatever does not
     // fit in eight float4s goes to the flat texture, flat values only.
     let mut all = Vec::new();
+    if clip_distance {
+        all.push(("swgl_ClipDistance".to_string(), hir::TypeKind::Vec4, 4, false));
+    }
     for (list, flat) in [(&interps, false), (&flats, true)] {
         for (_, name, ty) in list.iter() {
             if ty.array_sizes.is_some() {
@@ -1366,6 +1389,9 @@ pub fn translate_fragment(
     if uses_fragcoord {
         em.line("static float4 gl_FragCoord;");
     }
+    if clip_distance {
+        em.line("static float4 swgl_ClipDistance;");
+    }
 
     let wrappers_at = em.out.len();
     // Prototypes first -- the sources forward-declare freely -- then the
@@ -1438,6 +1464,10 @@ pub fn translate_fragment(
     }
     if let Some(o) = layout.fragcoord_offset {
         em.line(&format!("gl_FragCoord = float4(glsl_v[{}], glsl_v[{}], 0.0, 1.0);", o, o + 1));
+    }
+    if clip_distance {
+        em.uses_discard = true;
+        em.line("if (any(swgl_ClipDistance < 0.0)) discard;");
     }
     em.line("glsl_main();");
     // oFragColor is SWGL's name for the colour output.

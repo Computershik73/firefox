@@ -130,6 +130,10 @@ struct GpuBackend {
 
   // Readback staging textures by (format, width, height).
   std::unordered_map<uint64_t, ID3D11Texture2D*> staging;
+  // Copies of render targets that a draw also samples, likewise.
+  std::unordered_map<uint64_t,
+                     std::pair<ID3D11Texture2D*, ID3D11ShaderResourceView*>>
+      feedback;
 
   bool broken = false;
 
@@ -169,6 +173,10 @@ struct GpuBackend {
     for (auto& b : blends) b.second->Release();
     for (auto& p : pixel_shaders) p.second->Release();
     for (auto& s : staging) s.second->Release();
+    for (auto& f : feedback) {
+      f.second.first->Release();
+      f.second.second->Release();
+    }
     safe_release(dc);
     safe_release(dev);
   }
@@ -733,6 +741,45 @@ static ID3D11BlendState* blend_state(GpuBackend* g) {
   return s;
 }
 
+// A copy of a texture that is also the draw's target, for reading from.
+static ID3D11ShaderResourceView* feedback_copy(GpuBackend* g, GpuTex& gt) {
+  uint64_t key = (uint64_t(gt.format) << 48) | (uint64_t(gt.width) << 24) |
+                 uint64_t(gt.height);
+  auto it = g->feedback.find(key);
+  if (it == g->feedback.end()) {
+    D3D11_TEXTURE2D_DESC td = {};
+    td.Width = gt.width;
+    td.Height = gt.height;
+    td.MipLevels = 1;
+    td.ArraySize = 1;
+    td.Format = gt.format;
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_DEFAULT;
+    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    ID3D11Texture2D* t = nullptr;
+    ID3D11ShaderResourceView* v = nullptr;
+    if (FAILED(g->dev->CreateTexture2D(&td, nullptr, &t))) return nullptr;
+    if (FAILED(g->dev->CreateShaderResourceView(t, nullptr, &v))) {
+      t->Release();
+      return nullptr;
+    }
+    // One or two sizes recur; do not hoard.
+    if (g->feedback.size() >= 2) {
+      for (auto& e : g->feedback) {
+        e.second.first->Release();
+        e.second.second->Release();
+      }
+      g->feedback.clear();
+    }
+    it = g->feedback.emplace(key, std::make_pair(t, v)).first;
+  }
+  g->dc->CopyResource(it->second.first, gt.tex);
+  if (trace()) {
+    fprintf(stderr, "gpu: feedback copy %dx%d\n", gt.width, gt.height);
+  }
+  return it->second.second;
+}
+
 static ID3D11PixelShader* pixel_shader(GpuBackend* g,
                                        const GpuProgramInfo* info) {
   auto it = g->pixel_shaders.find(info);
@@ -987,6 +1034,42 @@ static bool gpu_can_draw(Texture& colortex) {
   return gpu_check(colortex, sampled, &bs, &ps);
 }
 
+// A copy of a rectangle between two textures of one format, on the GPU,
+// when the source's GPU copy is current: the backdrop copies and texture
+// cache moves then need no readback. Rectangles are in texture space and of
+// one size. Returns false to leave it to the CPU.
+static bool gpu_copy(Texture& src, const IntRect& src_rect, Texture& dst,
+                     const IntRect& dst_rect) {
+  using namespace swgl_gpu;
+  GpuBackend* g = ctx ? ctx->gpu : nullptr;
+  if (!g || g->broken || &src == &dst || !src.gpu || !src.gpu->tex) {
+    return false;
+  }
+  GpuTex& sg = *src.gpu;
+  if (sg.cpu_newer || sg.width != src.width || sg.height != src.height) {
+    return false;
+  }
+  if (src.internal_format != dst.internal_format ||
+      !renderable(src.internal_format)) {
+    return false;
+  }
+  int dx = dst_rect.x0 - src_rect.x0;
+  int dy = dst_rect.y0 - src_rect.y0;
+  IntRect s = IntRect(src_rect).intersection(src.bounds());
+  s = s.intersection(dst.bounds() - IntPoint(dx, dy));
+  if (s.is_empty()) return true;
+  if (!to_gpu(g, dst) || dst.gpu->expanded != sg.expanded) return false;
+  D3D11_BOX box = {UINT(s.x0), UINT(s.y0), 0, UINT(s.x1), UINT(s.y1), 1};
+  g->dc->CopySubresourceRegion(dst.gpu->tex, 0, UINT(s.x0 + dx),
+                               UINT(s.y0 + dy), 0, sg.tex, 0, &box);
+  dst.gpu->gpu_newer = true;
+  dst.gpu->cpu_newer = false;
+  if (trace()) {
+    fprintf(stderr, "gpu: copy %dx%d\n", s.width(), s.height());
+  }
+  return true;
+}
+
 // Draws the current program's instances on the GPU. Returns false, having
 // changed nothing, when this draw has to run on the CPU instead.
 template <typename INDEX>
@@ -1048,6 +1131,13 @@ static bool gpu_draw_elements(GLsizei count, GLsizei instancecount,
   for (int i = 0; i < info->num_samplers; i++) {
     Texture& st = *sampled[i];
     srvs[i] = st.gpu->srv;
+    if (&st == &colortex) {
+      // WebRender reads one part of a render target while drawing into
+      // another (a backdrop copy, an atlas); SWGL allows it, Direct3D unbinds
+      // the one while the other is bound. The read goes to a copy.
+      srvs[i] = feedback_copy(g, *st.gpu);
+      if (!srvs[i]) return false;
+    }
     bool linear = st.mag_filter == GL_LINEAR &&
                   st.internal_format != GL_RGBA32F &&
                   st.internal_format != GL_RGBA32I;
@@ -1322,6 +1412,9 @@ static inline bool gpu_clear(Texture&, const IntRect&, uint32_t, bool, float) {
   return false;
 }
 static inline void gpu_invalidate(Texture&) {}
+static inline bool gpu_copy(Texture&, const IntRect&, Texture&, const IntRect&) {
+  return false;
+}
 static inline void gpu_count_cpu_draw() {}
 static inline bool gpu_can_draw(Texture&) { return false; }
 template <typename INDEX>

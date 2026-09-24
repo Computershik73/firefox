@@ -29,6 +29,13 @@
 #include "nsProxyRelease.h"
 #include "nsThreadUtils.h"
 
+#if defined(GECKO_W10M)
+// Gecko puts console messages on stderr, and a packaged app has no stderr
+// worth the name -- so a JS exception during startup leaves no trace at all.
+// This is the only way to read them off the device.
+extern "C" void GeckoW10mNote(const char* text);
+#endif
+
 #if defined(ANDROID)
 #  include <android/log.h>
 
@@ -276,6 +283,21 @@ nsresult nsConsoleService::LogMessageWithMode(
   if (!gLoggingEnabled) {
     return NS_OK;
   }
+
+#if defined(GECKO_W10M)
+  {
+    // Errors and chrome messages go to the device log. Warnings do not:
+    // they are CSP and deprecation notices, dozens per page, and each was
+    // a write.
+    nsCString text;
+    aMessage->ToString(text);
+    if (text.Find("[JavaScript Warning:") == kNotFound) {
+      nsCString note("console: ");
+      note.Append(text);
+      GeckoW10mNote(note.get());
+    }
+  }
+#endif
 
   if (NS_IsMainThread() && mDeliveringMessage) {
     nsCString msg;

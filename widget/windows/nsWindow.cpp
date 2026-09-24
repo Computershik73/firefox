@@ -6441,7 +6441,14 @@ void nsWindow::OnWindowPosChanged(WINDOWPOS* wp) {
   }
 
   // Recompute tiled state.
+#if defined(GECKO_W10M)
+  // IsWindowArranged is a Windows 11 API: it is absent from the Windows 10
+  // ARM32 user32 import library, and that platform has no window snapping
+  // for it to report on.
+  SetIsTiled(false);
+#else
   SetIsTiled(mWnd && ::IsWindowArranged(mWnd));
+#endif
 
   // Notify visibility change when window is activated.
   if (!(wp->flags & SWP_NOACTIVATE) && NeedsToTrackWindowOcclusionState()) {

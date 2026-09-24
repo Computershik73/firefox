@@ -17,6 +17,11 @@ class HeadlessScreenHelper final : public ScreenManager::Helper {
 
  private:
   static LayoutDeviceIntRect GetScreenRect();
+#if defined(GECKO_W10M)
+ public:
+  // Main thread only. Replaces the one screen with one of this size.
+  static void GeckoW10mSetScreen(int32_t aWidth, int32_t aHeight);
+#endif
 };
 
 }  // namespace widget

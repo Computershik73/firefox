@@ -98,6 +98,10 @@ class GfxInfo : public GfxInfoBase {
   uint32_t mWindowsVersion = 0;
   uint32_t mWindowsBuildNumber = 0;
   uint32_t mActiveGPUIndex = 0;  // This must be 0 or 1
+#if defined(GECKO_W10M)
+  uint32_t mGeckoW10mAdapterRAM = 0;  // MB, dedicated
+  uint32_t mGeckoW10mSharedRAM = 0;   // MB, shared system memory
+#endif
   bool mHasDualGPU = false;
   bool mHasDriverVersionMismatch = false;
   bool mHasBattery = false;

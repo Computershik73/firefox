@@ -9,6 +9,8 @@
 #include <intrin.h>
 #include <setupapi.h>  // for SetupDi*
 #include <windows.h>
+#include <dxgi.h>
+#include <algorithm>
 #include <winioctl.h>  // for IOCTL_*
 
 #include "GfxDriverInfo.h"
@@ -470,6 +472,7 @@ nsresult GfxInfo::Init() {
     }
   }
 
+#if !defined(GECKO_W10M)
   mDeviceKeyDebug = u"PrimarySearch"_ns;
 
   while (EnumDisplayDevicesW(nullptr, deviceIndex, &displayDevice, 0)) {
@@ -732,7 +735,60 @@ nsresult GfxInfo::Init() {
       SetupDiDestroyDeviceInfoList(devinfo);
     }
   }
+#else
+  // Neither EnumDisplayDevices (USER32, absent on the phone) nor SetupDi is
+  // available to an app container; the adapter is found through DXGI below.
+  (void)displayDevice;
+  (void)deviceIndex;
+  mDeviceKeyDebug = u"DXGI"_ns;
+  uint32_t adapterVendorID[2] = {0, 0};
+  uint32_t adapterDeviceID[2] = {0, 0};
+  uint32_t adapterSubsysID[2] = {0, 0};
+#endif
 
+#if defined(GECKO_W10M)
+  // An app container can open neither the display device list nor the driver
+  // keys under HKLM, so everything above comes out empty and about:support
+  // shows a browser that knows nothing about its GPU. DXGI is allowed, and it
+  // knows the adapter, its IDs, its memory and its user-mode driver version.
+  if (mDeviceString[0].IsEmpty()) {
+    nsModuleHandle dxgiModule(LoadLibrarySystem32(L"dxgi.dll"));
+    decltype(CreateDXGIFactory1)* createFactory1 =
+        dxgiModule ? (decltype(CreateDXGIFactory1)*)GetProcAddress(
+                         dxgiModule, "CreateDXGIFactory1")
+                   : nullptr;
+    RefPtr<IDXGIFactory1> factory;
+    if (createFactory1) {
+      createFactory1(__uuidof(IDXGIFactory1), getter_AddRefs(factory));
+    }
+    RefPtr<IDXGIAdapter1> adapter;
+    DXGI_ADAPTER_DESC1 desc;
+    PodZero(&desc);
+    if (factory && SUCCEEDED(factory->EnumAdapters1(0, getter_AddRefs(adapter))) &&
+        SUCCEEDED(adapter->GetDesc1(&desc))) {
+      mDeviceString[0].Assign(desc.Description);
+      adapterVendorID[0] = desc.VendorId;
+      adapterDeviceID[0] = desc.DeviceId;
+      adapterSubsysID[0] = desc.SubSysId;
+      mDeviceID[0].Truncate();
+      mDeviceID[0].AppendPrintf("PCI\\VEN_%04X&DEV_%04X&SUBSYS_%08X&REV_%02X",
+                                desc.VendorId, desc.DeviceId, desc.SubSysId,
+                                desc.Revision);
+      mGeckoW10mAdapterRAM = static_cast<uint32_t>(
+          std::min<SIZE_T>(desc.DedicatedVideoMemory / (1024 * 1024), 0xFFFFFFFF));
+      mGeckoW10mSharedRAM = static_cast<uint32_t>(
+          std::min<SIZE_T>(desc.SharedSystemMemory / (1024 * 1024), 0xFFFFFFFF));
+      LARGE_INTEGER umd;
+      if (SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd))) {
+        mDriverVersion[0].Truncate();
+        mDriverVersion[0].AppendPrintf(
+            "%u.%u.%u.%u", unsigned(umd.HighPart >> 16), unsigned(umd.HighPart & 0xFFFF),
+            unsigned(umd.LowPart >> 16), unsigned(umd.LowPart & 0xFFFF));
+      }
+      mDriverDate[0].AssignLiteral("unknown (app container)");
+    }
+  }
+#endif
   mAdapterVendorID[0].AppendPrintf("0x%04x", adapterVendorID[0]);
   mAdapterDeviceID[0].AppendPrintf("0x%04x", adapterDeviceID[0]);
   mAdapterSubsysID[0].AppendPrintf("%08x", adapterSubsysID[0]);
@@ -897,6 +953,14 @@ GfxInfo::GetAdapterRAM(uint32_t* aAdapterRAM) {
   AssertNotWin32kLockdown();
 
   uint32_t result = 0;
+#if defined(GECKO_W10M)
+  if (mGeckoW10mAdapterRAM > 0 || mGeckoW10mSharedRAM > 0) {
+    // A phone GPU has next to no dedicated memory and lives on the shared
+    // pool; report the larger of the two so the number means something.
+    *aAdapterRAM = std::max(mGeckoW10mAdapterRAM, mGeckoW10mSharedRAM);
+    return NS_OK;
+  }
+#endif
   if (NS_FAILED(GetKeyValue(mDeviceKey[mActiveGPUIndex].get(),
                             L"HardwareInformation.qwMemorySize", result,
                             REG_QWORD)) ||
@@ -1862,7 +1926,17 @@ nsresult GfxInfo::GetFeatureStatusImpl(
       return NS_OK;
     }
 
-    if (OnlyAllowFeatureOnKnownConfig(aFeature) &&
+#if defined(GECKO_W10M)
+    // The one GPU this port runs on is the phone's Adreno, which DXGI reports
+    // under Qualcomm's "QCOM" vendor id (0x4d4f4351) rather than the PCI one
+    // the list knows. Blocking "unknown" vendors here turned D3D11
+    // compositing and WebRender off for the whole run once about:support
+    // started reporting the real adapter (0.2.5.0).
+    constexpr bool kGeckoW10mKnownVendor = true;
+#else
+    constexpr bool kGeckoW10mKnownVendor = false;
+#endif
+    if (OnlyAllowFeatureOnKnownConfig(aFeature) && !kGeckoW10mKnownVendor &&
         !adapterVendorID.Equals(
             GfxDriverInfo::GetDeviceVendor(DeviceVendor::Intel),
             nsCaseInsensitiveStringComparator) &&
@@ -1916,12 +1990,25 @@ nsresult GfxInfo::GetFeatureStatusImpl(
     }
 
     if (adapterDriverVersionString.Length() == 0) {
+#if defined(GECKO_W10M)
+      // The driver version is read out of HKLM, which an app container is not
+      // allowed to open -- so it is empty here whatever the driver is, and
+      // treating that as an unknown configuration blocks every accelerated
+      // feature on every device. It blocked D3D11 compositing on this one,
+      // which blocked WebRender, and the adapter itself was never at issue:
+      // the vendor was recognised, so DXGI had enumerated the device fine.
+      //
+      // An unreadable registry is not evidence about the driver. Let it
+      // through and let the real thing fail if it is going to.
+      *aStatus = FEATURE_STATUS_OK;
+#else
       if (OnlyAllowFeatureOnKnownConfig(aFeature)) {
         aFailureId = "FEATURE_FAILURE_EMPTY_DRIVER_VERSION";
         *aStatus = FEATURE_BLOCKED_DRIVER_VERSION;
       } else {
         *aStatus = FEATURE_STATUS_OK;
       }
+#endif
       return NS_OK;
     }
 

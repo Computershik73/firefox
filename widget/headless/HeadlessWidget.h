@@ -49,6 +49,28 @@ class HeadlessWidget final : public nsIWidget {
     return nullptr;
   }
 
+#if defined(GECKO_W10M)
+  // What the screen actually is, in dots per inch. nsIWidget answers 96 and
+  // nothing here used to say otherwise, which is how APZ came to measure a
+  // finger against a desktop monitor: apz.touch_start_tolerance is a tenth of
+  // an inch, so a tap was allowed to wander nine pixels before it stopped
+  // being a tap. On a display of this density nine pixels is a fifth of a
+  // millimetre, and an ordinary tap moves further than that -- so taps turned
+  // into panning nobody asked for, and the tap never arrived. Swipes were
+  // unaffected, which is exactly what a fullscreen video player showed.
+  static void GeckoW10mSetDpi(int32_t aDpi);
+  float GetDPI() override;
+
+  // The window the shell is showing, and so the one a tap on the phone
+  // belongs to. Main thread only: set when a window is shown, cleared when
+  // it is destroyed, read by the input entry points in
+  // HeadlessCompositorWidget.cpp.
+  static HeadlessWidget* ShownWidget();
+  // True while focus is on something that takes text. It is the only
+  // signal a phone has that it should raise its keyboard.
+  static bool TextInputWanted();
+#endif
+
   nsresult Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
                   const widget::InitData&) override;
   using nsIWidget::Create;  // for Create signature not overridden here
@@ -78,9 +100,7 @@ class HeadlessWidget final : public nsIWidget {
   }
   LayoutDeviceIntPoint WidgetToScreenOffset() override;
   void SetInputContext(const InputContext& aContext,
-                       const InputContextAction& aAction) override {
-    mInputContext = aContext;
-  }
+                       const InputContextAction& aAction) override;
   InputContext GetInputContext() override { return mInputContext; }
 
   WindowRenderer* GetWindowRenderer() override;

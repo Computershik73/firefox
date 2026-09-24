@@ -3,6 +3,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "HeadlessWidget.h"
 
+#include <algorithm>
+
+#if defined(GECKO_W10M)
+#  include "mozilla/Atomics.h"
+#  include "mozilla/Sprintf.h"
+extern "C" void GeckoW10mNote(const char* text);
+#endif
+
 #include "BasicEvents.h"
 #include "ErrorList.h"
 #include "HeadlessCompositorWidget.h"
@@ -10,6 +18,8 @@
 #include "InputData.h"
 #include "MouseEvents.h"
 #include "UnitTransforms.h"
+#include <vector>
+
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/NativeKeyBindingsType.h"
@@ -51,6 +61,12 @@ already_AddRefed<nsIWidget> nsIWidget::CreateHeadlessWidget() {
   return widget.forget();
 }
 
+#if defined(GECKO_W10M)
+#  include "mozilla/Sprintf.h"
+extern "C" void GeckoW10mNote(const char* aText);
+extern "C" void GeckoW10mFullscreenChanged(bool aFullscreen);
+#endif
+
 namespace mozilla {
 namespace widget {
 
@@ -91,7 +107,54 @@ HeadlessWidget::~HeadlessWidget() {
   Destroy();
 }
 
+#if defined(GECKO_W10M)
+namespace {
+// Raw, and main thread only. A strong reference here would keep a window
+// alive past its own teardown, which is worse than the discipline.
+HeadlessWidget* sShownWidget = nullptr;
+// Popups in creation order; the last visible one under a point is on top.
+// The shell delivers every tap to the browser window, and an operating system
+// would have delivered it to the popup window under the finger instead, so
+// that is done here.
+std::vector<HeadlessWidget*> sGeckoW10mPopups;
+}  // namespace
+
+HeadlessWidget* HeadlessWidget::ShownWidget() {
+  MOZ_ASSERT(NS_IsMainThread());
+  return sShownWidget;
+}
+
+namespace {
+// Written on the main thread when focus moves, read by the shell from its own.
+// A bool either side of a torn read is still a bool.
+mozilla::Atomic<bool> sTextInputWanted{false};
+}  // namespace
+
+bool HeadlessWidget::TextInputWanted() { return sTextInputWanted; }
+
+void HeadlessWidget::SetInputContext(const InputContext& aContext,
+                                     const InputContextAction& aAction) {
+  mInputContext = aContext;
+  // Gecko says this whenever focus moves onto or off an editable field, which
+  // is exactly when a phone should raise or drop its keyboard.
+  sTextInputWanted =
+      aContext.mIMEState.mEnabled == IMEEnabled::Enabled ||
+      aContext.mIMEState.mEnabled == IMEEnabled::Password;
+}
+#endif
+
 void HeadlessWidget::Destroy() {
+#if defined(GECKO_W10M)
+  if (sShownWidget == this) {
+    sShownWidget = nullptr;
+  }
+  for (auto it = sGeckoW10mPopups.begin(); it != sGeckoW10mPopups.end(); ++it) {
+    if (*it == this) {
+      sGeckoW10mPopups.erase(it);
+      break;
+    }
+  }
+#endif
   if (mDestroyed) {
     return;
   }
@@ -125,6 +188,11 @@ nsresult HeadlessWidget::Create(nsIWidget* aParent,
   mBounds = aRect;
   mRestoreBounds = aRect;
   mAlwaysOnTop = aInitData.mAlwaysOnTop;
+#if defined(GECKO_W10M)
+  if (mWindowType == WindowType::Popup) {
+    sGeckoW10mPopups.push_back(this);
+  }
+#endif
   return NS_OK;
 }
 
@@ -161,7 +229,37 @@ void HeadlessWidget::RaiseWindow() {
   if (mWidgetListener) mWidgetListener->WindowActivated();
 }
 
+#if defined(GECKO_W10M)
+// The shell reports the room before the browser window exists, and the resize
+// it sent was dropped for want of a widget -- so the window kept the whole
+// screen it was first told about while the panel was shorter, and the
+// hardware frame was drawn 2560 tall into a 2308 surface. The last size seen
+// is kept and applied the moment a top-level window shows.
+int32_t gGeckoW10mPendingWidth = 0;
+int32_t gGeckoW10mPendingHeight = 0;
+#endif
+
 void HeadlessWidget::Show(bool aState) {
+#if defined(GECKO_W10M)
+  if (mCompositorWidget) {
+    mCompositorWidget->NotifyVisibilityChanged(aState);
+  }
+  if (aState && mWindowType == WindowType::TopLevel) {
+    // Last one shown wins, which after startup is the browser window: the
+    // graphics sanity test shows and hides one of its own before it.
+    sShownWidget = this;
+    if (gGeckoW10mPendingWidth > 0 && gGeckoW10mPendingHeight > 0) {
+      const int32_t width = gGeckoW10mPendingWidth;
+      const int32_t height = gGeckoW10mPendingHeight;
+      NS_DispatchToMainThread(NS_NewRunnableFunction(
+          "HeadlessWidget::ApplyPendingRoom", [width, height]() {
+            if (auto* widget = HeadlessWidget::ShownWidget()) {
+              widget->Resize(mozilla::DesktopSize(width, height), true);
+            }
+          }));
+    }
+  }
+#endif
   mVisible = aState;
 
   LOG(("HeadlessWidget::Show [%p] state %d\n", (void*)this, aState));
@@ -223,6 +321,29 @@ void HeadlessWidget::MoveInternal(int32_t aX, int32_t aY) {
   }
 
   mBounds.MoveTo(aX, aY);
+#if defined(GECKO_W10M)
+  // And having been made to fit, it has to be put somewhere it fits. A window
+  // placed for a screen it is no longer the size of would hang off an edge,
+  // and the part that hangs off is simply not drawn.
+  if (mWindowType != WindowType::TopLevel) {
+    if (nsCOMPtr<nsIScreen> screen = GetWidgetScreen()) {
+      int32_t left, top, screenWidth, screenHeight;
+      if (NS_SUCCEEDED(screen->GetRectDisplayPix(&left, &top, &screenWidth,
+                                                 &screenHeight))) {
+        const int32_t x = std::clamp(
+            mBounds.X(), left, std::max(left, left + screenWidth - mBounds.Width()));
+        const int32_t y = std::clamp(
+            mBounds.Y(), top, std::max(top, top + screenHeight - mBounds.Height()));
+        mBounds.MoveTo(x, y);
+      }
+    }
+  }
+  // A popup is a window of its own and the shell has to be told where to put
+  // it over the one underneath.
+  if (mCompositorWidget) {
+    mCompositorWidget->NotifyOriginChanged(mBounds.TopLeft());
+  }
+#endif
   NotifyWindowMoved(mBounds.TopLeft());
 }
 
@@ -257,8 +378,47 @@ void HeadlessWidget::Resize(const DesktopSize& aSize, bool aRepaint) {
 
 void HeadlessWidget::ResizeInternal(int32_t aWidth, int32_t aHeight,
                                     bool aRepaint) {
+#if defined(GECKO_W10M)
+  // What was asked for, what the constraints allowed, and what kind of window
+  // it was. This found the window that came out wider than the screen, and it
+  // stays because it is the only place the two numbers can be compared.
+  const int32_t asked = aWidth;
+  const int32_t askedHeight = aHeight;
+#endif
   ConstrainSize(&aWidth, &aHeight);
+#if defined(GECKO_W10M)
+  // ConstrainSize knows only the minimum and maximum the front end asked for;
+  // nothing in the path brings a window down to the size of the display. On a
+  // desktop a dialog wider than the screen is merely a window wider than the
+  // screen. Here there is nowhere for it to hang off to, so the About dialog
+  // arrived 1991 device pixels wide on a screen of 1440 and lost its right
+  // hand side. The screen wins, and layout is told the real size so the
+  // contents reflow into it rather than being cut.
+  //
+  // Only for windows that sit over the browser. The browser window itself is
+  // sized by the shell and has a minimum of its own that must not be fought.
+  if (mWindowType != WindowType::TopLevel) {
+    if (nsCOMPtr<nsIScreen> screen = GetWidgetScreen()) {
+      int32_t left, top, screenWidth, screenHeight;
+      if (NS_SUCCEEDED(screen->GetRectDisplayPix(&left, &top, &screenWidth,
+                                                 &screenHeight))) {
+        aWidth = std::min(aWidth, screenWidth);
+        aHeight = std::min(aHeight, screenHeight);
+      }
+    }
+  }
+#endif
   mBounds.SizeTo(LayoutDeviceIntSize(aWidth, aHeight));
+#if defined(GECKO_W10M)
+  {
+    char note[160];
+    SprintfLiteral(note,
+                   "resize: type %d asked %dx%d got %dx%d, scale %.3f",
+                   int(mWindowType), asked, askedHeight, aWidth, aHeight,
+                   double(GetDefaultScale().scale));
+    GeckoW10mNote(note);
+  }
+#endif
 
   if (mCompositorWidget) {
     mCompositorWidget->NotifyClientSizeChanged(mBounds.Size());
@@ -304,6 +464,18 @@ void HeadlessWidget::ApplySizeModeSideEffects() {
     return;
   }
 
+#if defined(GECKO_W10M)
+  // Every branch below resizes or moves the window, and on this port neither
+  // is the window's to do: the shell measures the room and the swap chain and
+  // hands both over together through gecko_w10m_resize. Record the mode and say
+  // so; the size stays what the shell last asked for.
+  mEffectiveSizeMode = mSizeMode;
+  if (mWidgetListener) {
+    mWidgetListener->SizeModeChanged(mSizeMode);
+  }
+  return;
+#else
+
   if (mEffectiveSizeMode == nsSizeMode_Normal) {
     // Store the last normal size bounds so it can be restored when entering
     // normal mode again.
@@ -342,7 +514,33 @@ void HeadlessWidget::ApplySizeModeSideEffects() {
   if (mWidgetListener) {
     mWidgetListener->SizeModeChanged(mSizeMode);
   }
+#endif
 }
+
+#if defined(GECKO_W10M)
+// Set by the shell from the display's own numbers, once at startup and again
+// whenever the phone reports a change.
+static float sGeckoW10mDpi = 96.0f;
+
+/* static */
+void HeadlessWidget::GeckoW10mSetDpi(int32_t aDpi) {
+  // A phone that reports something absurd is a phone we ignore.
+  if (aDpi < 50 || aDpi > 1200 || float(aDpi) == sGeckoW10mDpi) {
+    return;
+  }
+  sGeckoW10mDpi = float(aDpi);
+  char note[96];
+  SprintfLiteral(note, "screen: %d dpi -- a tap may wander %d px", aDpi,
+                 aDpi / 10);
+  GeckoW10mNote(note);
+  // APZ took a copy when the tree manager was configured; it needs the new one.
+  if (HeadlessWidget* shown = HeadlessWidget::ShownWidget()) {
+    shown->NotifyAPZOfDPIChange();
+  }
+}
+
+float HeadlessWidget::GetDPI() { return sGeckoW10mDpi; }
+#endif
 
 nsresult HeadlessWidget::MakeFullScreen(bool aFullScreen) {
   // Directly update the size mode here so a later call SetSizeMode does
@@ -356,6 +554,32 @@ nsresult HeadlessWidget::MakeFullScreen(bool aFullScreen) {
     mSizeMode = mLastSizeMode;
   }
 
+#if defined(GECKO_W10M)
+  // Order is the whole fix here.
+  //
+  // The window is resized first, synchronously, to the rectangle the shell
+  // reports as the screen -- which is the whole display, the size this window
+  // will have once the status bar and the navigation bar are out of the way.
+  // Only then does the size-mode change go out, and only then does the page
+  // hear "fullscreenchange". So the page builds its fullscreen player once,
+  // already at the final size.
+  //
+  // Doing it the other way round is what kept throwing the player back into a
+  // window: the shell hid the bars, the room grew a moment later, and the page
+  // was handed a resize in the middle of its own transition. vkvideo's player
+  // answers a resize by rebuilding itself, which removes the element that
+  // asked for fullscreen, and Gecko has no choice but to leave.
+  //
+  // The shell is told as well, because hiding the bars is its job; by the time
+  // it has, the window is already the size it will measure, so nothing resizes
+  // twice.
+  GeckoW10mFullscreenChanged(aFullScreen);
+  nsIWidget::InfallibleMakeFullScreen(aFullScreen);
+  if (mWidgetListener) {
+    mWidgetListener->SizeModeChanged(mSizeMode);
+  }
+  return NS_OK;
+#else
   // Notify the listener first so size mode change events are triggered before
   // resize events.
   if (mWidgetListener) {
@@ -374,6 +598,7 @@ nsresult HeadlessWidget::MakeFullScreen(bool aFullScreen) {
       }));
 
   return NS_OK;
+#endif
 }
 
 nsresult HeadlessWidget::AttachNativeKeyEvent(WidgetKeyboardEvent& aEvent) {
@@ -406,6 +631,18 @@ nsresult HeadlessWidget::SynthesizeNativeMouseEvent(
     MouseButton aButton, nsIWidget::NativeModifiers aModifierFlags,
     nsISynthesizedEventCallback* aCallback) {
   AutoSynthesizedEventCallbackNotifier notifier(aCallback);
+#if defined(GECKO_W10M)
+  if (mWindowType == WindowType::TopLevel) {
+    for (auto it = sGeckoW10mPopups.rbegin(); it != sGeckoW10mPopups.rend(); ++it) {
+      HeadlessWidget* popup = *it;
+      if (popup->mVisible && !popup->mDestroyed &&
+          popup->mBounds.Contains(aPoint.x, aPoint.y)) {
+        return popup->SynthesizeNativeMouseEvent(aPoint, aNativeMessage, aButton,
+                                                 aModifierFlags, nullptr);
+      }
+    }
+  }
+#endif
   EventMessage msg;
   switch (aNativeMessage) {
     case NativeMouseMessage::Move:
@@ -465,6 +702,20 @@ nsresult HeadlessWidget::SynthesizeNativeTouchPoint(
   if (aPointerState == TOUCH_HOVER) {
     return NS_ERROR_UNEXPECTED;
   }
+#if defined(GECKO_W10M)
+  // As with the mouse: a finger over a popup belongs to the popup window.
+  if (mWindowType == WindowType::TopLevel) {
+    for (auto it = sGeckoW10mPopups.rbegin(); it != sGeckoW10mPopups.rend(); ++it) {
+      HeadlessWidget* popup = *it;
+      if (popup->mVisible && !popup->mDestroyed &&
+          popup->mBounds.Contains(aPoint.x, aPoint.y)) {
+        return popup->SynthesizeNativeTouchPoint(aPointerId, aPointerState,
+                                                 aPoint, aPointerPressure,
+                                                 aPointerOrientation, nullptr);
+      }
+    }
+  }
+#endif
 
   if (!mSynthesizedTouchInput) {
     mSynthesizedTouchInput = MakeUnique<MultiTouchInput>();

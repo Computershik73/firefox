@@ -426,6 +426,20 @@ void AACAudioSpecificConfigToUserData(uint8_t aAACProfileLevelIndication,
 
 namespace wmf {
 
+#if defined(GECKO_W10M)
+#  define GECKO_W10M_FOURCC(a, b, c, d) \
+    (DWORD(a) | (DWORD(b) << 8) | (DWORD(c) << 16) | (DWORD(d) << 24))
+static constexpr DWORD FOURCC_NV12 = GECKO_W10M_FOURCC('N', 'V', '1', '2');
+static constexpr DWORD FOURCC_NV21 = GECKO_W10M_FOURCC('N', 'V', '2', '1');
+static constexpr DWORD FOURCC_YV12 = GECKO_W10M_FOURCC('Y', 'V', '1', '2');
+static constexpr DWORD FOURCC_I420 = GECKO_W10M_FOURCC('I', '4', '2', '0');
+static constexpr DWORD FOURCC_IYUV = GECKO_W10M_FOURCC('I', 'Y', 'U', 'V');
+static constexpr DWORD FOURCC_P010 = GECKO_W10M_FOURCC('P', '0', '1', '0');
+static constexpr DWORD FOURCC_P016 = GECKO_W10M_FOURCC('P', '0', '1', '6');
+static constexpr DWORD FOURCC_YUY2 = GECKO_W10M_FOURCC('Y', 'U', 'Y', '2');
+static constexpr DWORD FOURCC_UYVY = GECKO_W10M_FOURCC('U', 'Y', 'V', 'Y');
+#endif
+
 static const wchar_t* sDLLs[] = {
     L"mfplat.dll",
     L"mf.dll",
@@ -450,6 +464,15 @@ LoadDLLs() {
   nsTArray<const wchar_t*> loadedDlls;
   for (const wchar_t* dll : sDLLs) {
     if (!LoadLibrarySystem32(dll)) {
+#if defined(GECKO_W10M)
+      // Windows 10 Mobile has no evr.dll for an app container to load, and
+      // the one thing wanted from it -- the stride of a bitmap format -- is
+      // arithmetic. Without this the whole of WMF was refused, and with it
+      // every H.264 and AAC stream: FFVPX carries neither.
+      if (wcscmp(dll, L"evr.dll") == 0) {
+        continue;
+      }
+#endif
       NS_WARNING("Failed to load WMF DLLs");
       for (const wchar_t* loadedDll : loadedDlls) {
         FreeLibrary(GetModuleHandleW(loadedDll));
@@ -523,6 +546,32 @@ MFCreateMediaType(IMFMediaType** aOutMFType) {
 
 HRESULT
 MFGetStrideForBitmapInfoHeader(DWORD aFormat, DWORD aWidth, LONG* aOutStride) {
+#if defined(GECKO_W10M)
+  if (!GetModuleHandleW(L"evr.dll")) {
+    // The formats the decoder hands out here. Planar 4:2:0 and NV12 have one
+    // byte per pixel on the top plane; the packed ones are as listed.
+    switch (aFormat) {
+      case FOURCC_NV12: case FOURCC_YV12: case FOURCC_I420: case FOURCC_IYUV:
+      case FOURCC_NV21: case FOURCC_P010: case FOURCC_P016:
+        *aOutStride = (aFormat == FOURCC_P010 || aFormat == FOURCC_P016)
+                          ? LONG(aWidth) * 2
+                          : LONG(aWidth);
+        return S_OK;
+      case FOURCC_YUY2: case FOURCC_UYVY:
+        *aOutStride = LONG(aWidth) * 2;
+        return S_OK;
+      case 22 /* D3DFMT_A8R8G8B8, MFVideoFormat_ARGB32 */:
+      case 21 /* D3DFMT_X8R8G8B8, MFVideoFormat_RGB32 */:
+        *aOutStride = LONG(aWidth) * 4;
+        return S_OK;
+      case 20 /* MFVideoFormat_RGB24 */:
+        *aOutStride = LONG(aWidth) * 3;
+        return S_OK;
+      default:
+        return E_FAIL;
+    }
+  }
+#endif
   ENSURE_FUNCTION_PTR(MFGetStrideForBitmapInfoHeader, evr.dll)
   return (MFGetStrideForBitmapInfoHeaderPtr)(aFormat, aWidth, aOutStride);
 }

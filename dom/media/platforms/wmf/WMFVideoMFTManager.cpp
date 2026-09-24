@@ -47,6 +47,11 @@ using mozilla::layers::LayerManager;
 using mozilla::layers::LayersBackend;
 using mozilla::media::TimeUnit;
 
+#if defined(GECKO_W10M)
+#  include "nsPrintfCString.h"
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 namespace mozilla {
 
 LayersBackend GetCompositorBackendType(
@@ -133,11 +138,18 @@ bool WMFVideoMFTManager::InitializeDXVA() {
     return false;
   }
 
+  // Upstream keeps DXVA in the RDD or GPU process so a decoded texture never
+  // has to be carried back to the parent. This port has neither process: the
+  // browser, the compositor and the decoder are one process, and the texture
+  // is handed straight to WebRender. The reason for the restriction does not
+  // apply here, and obeying it would mean decoding every frame on the CPU.
+#if !defined(GECKO_W10M)
   if (!XRE_IsRDDProcess() && !XRE_IsGPUProcess()) {
     mDXVAFailureReason.AssignLiteral(
         "DXVA only supported in RDD or GPU process");
     return false;
   }
+#endif
 
   bool d3d11 = true;
   if (!StaticPrefs::media_wmf_dxva_d3d11_enabled()) {
@@ -363,6 +375,31 @@ MediaResult WMFVideoMFTManager::InitInternal() {
 
   LOG("Video Decoder initialized, Using DXVA: {}",
       (mUseHwAccel ? "Yes" : "No"));
+
+#if defined(GECKO_W10M)
+  {
+    // Into the note log, which survives a restart -- the MOZ_LOG file does not,
+    // and a video that only misbehaves at 60 fps is hard to catch in the one
+    // session that happens to still have its log.
+    UINT32 numerator = 0;
+    UINT32 denominator = 1;
+    int fps = 0;
+    if (SUCCEEDED(MFGetAttributeRatio(inputType, MF_MT_FRAME_RATE,
+                                           &numerator, &denominator)) &&
+        denominator) {
+      fps = int((numerator + denominator / 2) / denominator);
+    }
+    // No %f here either; see the note in APZEventState.
+    nsPrintfCString note("media: %s %dx%d at %d fps, DXVA %s%s%s",
+                         EnumValueToString(mStreamType),
+                         mVideoInfo.ImageRect().width,
+                         mVideoInfo.ImageRect().height, fps,
+                         mUseHwAccel ? "YES" : "no",
+                         mUseHwAccel || mDXVAFailureReason.IsEmpty() ? "" : " -- ",
+                         mUseHwAccel ? "" : mDXVAFailureReason.get());
+    GeckoW10mNote(note.get());
+  }
+#endif
 
   // Now we need to convert the video decode output to a display format.
   if (mUseHwAccel) {

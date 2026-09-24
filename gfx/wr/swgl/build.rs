@@ -368,6 +368,12 @@ fn write_gpu_common(out_dir: &str) {
     let bytes = fxc_compile(&fxc, clear_ps, "ps_4_0_level_9_3", &format!("{out_dir}/gpu_clear_ps"))
         .expect("the GPU clear pixel shader must compile");
     h.push_str(&bytes_array("swgl_gpu_clear_ps", &bytes));
+    // Pixels the CPU shaded, placed by the GPU: texture coordinate (u w, v w,
+    // 0, w), divided here so that perspective quads line up.
+    let copy_ps = "Texture2D t : register(t0);\nSamplerState s : register(s0);\nfloat4 main(float4 uv : TEXCOORD0) : SV_Target { return t.Sample(s, uv.xy / uv.w); }\n";
+    let bytes = fxc_compile(&fxc, copy_ps, "ps_4_0_level_9_3", &format!("{out_dir}/gpu_copy_ps"))
+        .expect("the GPU copy pixel shader must compile");
+    h.push_str(&bytes_array("swgl_gpu_copy_ps", &bytes));
     std::fs::write(path, h).unwrap();
 }
 

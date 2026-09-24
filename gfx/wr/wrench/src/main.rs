@@ -38,6 +38,8 @@ mod parse_function;
 mod perf;
 mod png;
 mod premultiply;
+#[cfg(feature = "software")]
+mod native_tiles;
 mod rawtest;
 mod rawtests;
 mod reftest;

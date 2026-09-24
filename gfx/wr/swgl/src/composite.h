@@ -475,9 +475,9 @@ void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
   Framebuffer* dstfb = get_framebuffer(GL_DRAW_FRAMEBUFFER);
   if (!dstfb) return;
   Texture& srctex = ctx->textures[srcfb->color_attachment];
-  if (!srctex.buf) return;
+  if (!srctex.buf && !gpu_resolve_external_pending(srctex)) return;
   Texture& dsttex = ctx->textures[dstfb->color_attachment];
-  if (!dsttex.buf) return;
+  if (!dsttex.buf && !gpu_resolve_external_pending(dsttex)) return;
   assert(!dsttex.locked);
   if (srctex.internal_format != dsttex.internal_format &&
       (!is_renderable_format(srctex.internal_format) ||
@@ -509,6 +509,8 @@ void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
   }
   prepare_texture(srctex);
   prepare_texture(dsttex, &dstReq);
+  // A compositor tile gets a CPU buffer only once something brings it back.
+  if (!srctex.buf || !dsttex.buf) return;
   if (!srcReq.same_size(dstReq) && srctex.width >= 2 && filter == GL_LINEAR &&
       srctex.internal_format == dsttex.internal_format &&
       is_renderable_format(srctex.internal_format)) {

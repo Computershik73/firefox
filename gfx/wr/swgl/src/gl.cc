@@ -1448,7 +1448,11 @@ static void hash_blend_key() {
     default:
       debugf("blendfunc: %x, %x, separate: %x, %x, equation: %x\n", srgb, drgb,
              sa, da, equation);
-      assert(false);
+      // With a GPU shading the pixels, WebRender may pick blend functions the
+      // CPU rasterizer has no key for (mix-blend-mode without the advanced
+      // equations); the GPU blends whatever GL can express.
+      assert(ctx->gpu);
+      ctx->blend_key = BLEND_KEY_NONE;
       break;
   }
 }

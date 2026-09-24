@@ -57,7 +57,7 @@ pub fn translate(args: &mut dyn Iterator<Item = String>) -> String {
 pub fn translate_with_gpu(
     args: &mut dyn Iterator<Item = String>,
     gpu: bool,
-) -> (String, Option<(Vec<String>, hlsl::Layout)>, Vec<String>) {
+) -> (String, Option<(Vec<(usize, String)>, hlsl::Layout)>, Vec<String>) {
     let _cmd_name = args.next();
     let vertex_file = args.next().unwrap();
 
@@ -87,12 +87,12 @@ pub fn translate_with_gpu(
         let clip = vs_state.used_clip_dist != 0;
         match hlsl::translate_fragment_limited(&fs_state, &fs_hir, hlsl::LOOP_LIMITS[0], clip) {
             Ok((first, layout)) => {
-                let mut sources = vec![first];
+                let mut sources = vec![(hlsl::LOOP_LIMITS[0], first)];
                 for &limit in &hlsl::LOOP_LIMITS[1..] {
                     if let Ok((src, _)) =
                         hlsl::translate_fragment_limited(&fs_state, &fs_hir, limit, clip)
                     {
-                        sources.push(src);
+                        sources.push((limit, src));
                     }
                 }
                 Some((sources, layout))

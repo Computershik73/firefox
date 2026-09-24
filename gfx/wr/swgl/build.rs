@@ -254,7 +254,7 @@ fn write_gpu_header(
     out_dir: &str,
     shader: &str,
     fxc: Option<&str>,
-    gpu: Option<(Vec<String>, glsl_to_cxx::hlsl::Layout)>,
+    gpu: Option<(Vec<(usize, String)>, glsl_to_cxx::hlsl::Layout)>,
     errors: &[String],
 ) -> bool {
     let path = format!("{out_dir}/{shader}_gpu.h");
@@ -273,9 +273,11 @@ fn write_gpu_header(
     };
     // Loops are unrolled; the first limit that fits in 512 instructions wins.
     let mut compiled = Err(String::new());
-    for hlsl in &sources {
+    let mut loop_limit = 0;
+    for (limit, hlsl) in &sources {
         compiled = fxc_compile(fxc, hlsl, "ps_4_0_level_9_3", &format!("{out_dir}/{shader}_ps"));
         if compiled.is_ok() {
+            loop_limit = *limit;
             break;
         }
     }
@@ -298,12 +300,14 @@ fn write_gpu_header(
             );
             let _ = writeln!(
                 h,
-                "static const GpuProgramInfo {shader}_gpu_info_data = {{ {shader}_ps, sizeof({shader}_ps), {}, {}, {}, {}, {}, \"{shader}\", {shader}_srect }};",
+                "static const GpuProgramInfo {shader}_gpu_info_data = {{ {shader}_ps, sizeof({shader}_ps), {}, {}, {}, {}, {}, \"{shader}\", {shader}_srect, {}, {} }};",
                 layout.slots,
                 layout.texture_floats,
                 layout.flat_coord_offset.map_or(-1, |o| o as i64),
                 layout.fragcoord_offset.map_or(-1, |o| o as i64),
                 layout.samplers.len(),
+                loop_limit,
+                !layout.accept.is_empty() as i32,
             );
             let _ = writeln!(
                 h,

@@ -41,6 +41,10 @@ struct GpuProgramInfo {
   const char* name;
   // Per sampler: 1 for sampler2DRect (bound as GL_TEXTURE_RECTANGLE), else 0.
   const unsigned char* sampler_rect;
+  // How far loops were unrolled to fit, and whether gpu_accept must be asked
+  // per quad whether this quad's loops fit.
+  int loop_limit;
+  int has_accept;
 };
 
 struct ProgramImpl {
@@ -60,6 +64,9 @@ struct ProgramImpl {
                         float* f) {}
   // The texture unit behind the pixel shader's i-th sampler.
   virtual int gpu_sampler_unit(int i) const { return -1; }
+  // After the vertex shader has run a quad: whether its loops fit the
+  // pixel shader's unroll limit (a long blur may not).
+  virtual bool gpu_accept(int limit) const { return true; }
 };
 
 typedef ProgramImpl* (*ProgramLoader)();

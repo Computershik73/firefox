@@ -66,6 +66,10 @@ pub struct Layout {
     pub varying_floats: usize,
     /// The float offset of gl_FragCoord.xy, when the shader reads it.
     pub fragcoord_offset: Option<usize>,
+    /// C++ conditions, over the program's flat values, under which every loop
+    /// whose trip count they bound fits the unroll limit (`limit` in them).
+    /// A quad for which any is false is shaded on the CPU.
+    pub accept: Vec<String>,
     /// Total float4 texture coordinates the pixel shader takes.
     pub slots: usize,
     pub uses_discard: bool,
@@ -86,7 +90,7 @@ pub const MAX_SLOTS: usize = 8;
 /// own loops are short: the gradient stop tree is five levels deep for 625
 /// stops, a blur takes at most six steps once WebRender has scaled the
 /// source so that the deviation is at most 4.
-pub const LOOP_LIMITS: [usize; 3] = [32, 16, 8];
+pub const LOOP_LIMITS: [usize; 4] = [32, 16, 12, 8];
 
 struct Emitter<'a> {
     st: &'a hir::State,
@@ -104,6 +108,11 @@ struct Emitter<'a> {
     /// The wrapper the function being emitted returns, if any.
     ret_array: Option<String>,
     loop_limit: usize,
+    /// Flat inputs by name, and local initialisers, for working out what
+    /// bounds a loop.
+    flat_names: HashSet<String>,
+    local_inits: HashMap<hir::SymRef, hir::Expr>,
+    accepts: Vec<String>,
 }
 
 fn floats_of(kind: hir::TypeKind) -> Option<usize> {
@@ -691,6 +700,7 @@ impl<'a> Emitter<'a> {
                 let cst = if storage == hir::StorageClass::Const { "const " } else { "" };
                 match &head.initializer {
                     Some(hir::Initializer::Simple(e)) => {
+                        self.local_inits.insert(head.name, (**e).clone());
                         let v = self.expr(e);
                         self.line(&format!("{}{} {}{} = {};", cst, tn, name, arr, v));
                     }
@@ -802,6 +812,94 @@ impl<'a> Emitter<'a> {
         }
     }
 
+    /// C++ for a bound made of flat values, following local initialisers and
+    /// min() (which only lowers it, so dropping it is safe).
+    fn bound_cxx(&self, e: &hir::Expr, depth: usize) -> Option<String> {
+        if depth > 8 {
+            return None;
+        }
+        match &e.kind {
+            hir::ExprKind::Variable(sym) => {
+                let name = self.st.sym(*sym).name.clone();
+                if self.flat_names.contains(&name) {
+                    return Some(name);
+                }
+                let init = self.local_inits.get(sym)?.clone();
+                self.bound_cxx(&init, depth + 1)
+            }
+            hir::ExprKind::SwizzleSelector(inner, sel) if sel.components.len() == 1 => {
+                if let hir::ExprKind::Variable(sym) = &inner.kind {
+                    let name = self.st.sym(*sym).name.clone();
+                    if self.flat_names.contains(&name) {
+                        return Some(format!("{}.{}", name, sel.to_field_set(hir::FieldSet::Xyzw)));
+                    }
+                }
+                None
+            }
+            hir::ExprKind::FunCall(hir::FunIdentifier::Identifier(f), args)
+                if self.st.sym(*f).name == "min" && args.len() == 2 =>
+            {
+                self.bound_cxx(&args[0], depth + 1)
+                    .or_else(|| self.bound_cxx(&args[1], depth + 1))
+            }
+            hir::ExprKind::IntConst(x) => Some(format!("{}", x)),
+            _ => None,
+        }
+    }
+
+    /// For `for (int i = c; i <= B; i += s)` (or < B, or i++) whose bound B
+    /// comes from flat values: the C++ that says the loop fits `limit`.
+    fn loop_accept(
+        &self,
+        init: &hir::ForInitStatement,
+        rest: &hir::ForRestStatement,
+    ) -> Option<String> {
+        let (var, c0) = match init {
+            hir::ForInitStatement::Declaration(d) => match &**d {
+                hir::Declaration::InitDeclaratorList(l) => match &l.head.initializer {
+                    Some(hir::Initializer::Simple(e)) => (l.head.name, int_const(e)?),
+                    _ => return None,
+                },
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let (inclusive, bound) = match &rest.condition {
+            Some(hir::Condition::Expr(c)) => match &c.kind {
+                hir::ExprKind::Binary(op, l, r) => match (&l.kind, op) {
+                    (hir::ExprKind::Variable(v), syntax::BinaryOp::LTE) if *v == var => (true, r),
+                    (hir::ExprKind::Variable(v), syntax::BinaryOp::LT) if *v == var => (false, r),
+                    _ => return None,
+                },
+                _ => return None,
+            },
+            None => return None,
+        };
+        let step = match rest.post_expr.as_deref().map(|p| &p.kind) {
+            Some(hir::ExprKind::PostInc(v)) | Some(hir::ExprKind::Unary(syntax::UnaryOp::Inc, v)) => {
+                match &v.kind {
+                    hir::ExprKind::Variable(s) if *s == var => 1,
+                    _ => return None,
+                }
+            }
+            Some(hir::ExprKind::Assignment(v, syntax::AssignmentOp::Add, s)) => match &v.kind {
+                hir::ExprKind::Variable(sv) if *sv == var => int_const(s)?,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        if step <= 0 {
+            return None;
+        }
+        let b = self.bound_cxx(bound, 0)?;
+        // Iterations: i = c0, c0 + s, ... while i <= B (or < B).
+        let last = if inclusive { "0" } else { "1" };
+        Some(format!(
+            "(int({}) - {} <= {} + (limit - 1) * {})",
+            b, last, c0, step
+        ))
+    }
+
     fn iteration(&mut self, it: &hir::IterationStatement) {
         match it {
             hir::IterationStatement::For(init, rest, body) => {
@@ -822,6 +920,11 @@ impl<'a> Emitter<'a> {
                     Some(hir::Condition::Expr(c)) => self.expr(c),
                     None => "true".into(),
                 };
+                if let Some(a) = self.loop_accept(init, rest) {
+                    if !self.accepts.contains(&a) {
+                        self.accepts.push(a);
+                    }
+                }
                 let post = rest.post_expr.as_ref().map(|p| self.expr(p));
                 if contains_continue(body) {
                     self.err("continue inside a loop".into());
@@ -1173,6 +1276,9 @@ pub fn translate_fragment_limited(
         array_wrappers: Vec::new(),
         ret_array: None,
         loop_limit,
+        flat_names: HashSet::new(),
+        local_inits: HashMap::new(),
+        accepts: Vec::new(),
     };
 
     // Find main and everything it reaches.
@@ -1303,6 +1409,10 @@ pub fn translate_fragment_limited(
     layout.slots = ((offset + 3) / 4).max(1);
     if layout.slots > MAX_SLOTS {
         em.err(format!("{} floats of varyings do not fit", offset));
+    }
+
+    for (_, name, _) in &flats {
+        em.flat_names.insert(name.clone());
     }
 
     // Emit.
@@ -1498,6 +1608,7 @@ pub fn translate_fragment_limited(
         em.out.insert_str(prelude_len, BITOPS);
     }
     layout.uses_discard = em.uses_discard;
+    layout.accept = em.accepts.clone();
 
     if em.errors.is_empty() {
         Ok((em.out, layout))
@@ -1561,6 +1672,13 @@ pub fn cxx_glue(layout: &Layout) -> String {
         }
     }
     s.push_str("}\n");
+    if !layout.accept.is_empty() {
+        let _ = writeln!(
+            s,
+            "bool gpu_accept(int limit) const override {{ return {}; }}",
+            layout.accept.join(" && ")
+        );
+    }
     s.push_str("int gpu_sampler_unit(int i) const override {\n switch (i) {\n");
     for smp in &layout.samplers {
         let _ = writeln!(

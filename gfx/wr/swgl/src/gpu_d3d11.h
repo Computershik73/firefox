@@ -1105,6 +1105,12 @@ static bool gpu_check(Texture& colortex, Texture** sampled,
   if (!info || !gpu_vertex_shader) {
     return refuse(g, true, "no GPU variant");
   }
+  // SWGL_GPU_CPU=<substring>: keep matching programs on the CPU, for
+  // telling a GPU shader's fault from the rest when testing.
+  static const char* keep_on_cpu = getenv("SWGL_GPU_CPU");
+  if (keep_on_cpu && strstr(info->name, keep_on_cpu)) {
+    return refuse(g, true, "SWGL_GPU_CPU");
+  }
   if (info->texture_floats > 0 && !g->flat_srv) {
     return refuse(g, true, "no float texture for flat data");
   }
@@ -1364,9 +1370,30 @@ static bool gpu_draw_elements(GLsizei count, GLsizei instancecount,
   ID3D11PixelShader* ps = nullptr;
   if (!gpu_check(colortex, sampled, &bs, &ps)) return false;
 
-  // Everything checks out: from here on the draw is the GPU's.
   Buffer& indices_buf = ctx->buffers[v.element_array_buffer_binding];
   if (!indices_buf.buf || offset >= indices_buf.size) return true;
+
+  // Some pixel shaders unroll a loop whose trip count comes with the quad (a
+  // blur's support): ask of every quad whether it fits before committing.
+  if (info->has_accept) {
+    size_t is = std::max(impl->interpolants_size(), sizeof(float));
+    if (g->interps.size() < is * 4) g->interps.resize(is * 4);
+    INDEX* ix = (INDEX*)(indices_buf.buf + offset);
+    GLsizei n = min(count, (GLsizei)((indices_buf.size - offset) / sizeof(INDEX)));
+    for (GLsizei instance = 0; instance < instancecount; instance++) {
+      for (GLsizei i = 0; i + 3 <= n; i += 3) {
+        bool quad = i + 6 <= n && ix[i + 5] == ix[i] + 3;
+        vs->load_attribs(v.attribs, ix[i], instance, quad ? 4 : 3);
+        vs->run_primitive(g->interps.data(), is);
+        if (!impl->gpu_accept(info->loop_limit)) {
+          return refuse(g, false, "a loop longer than the pixel shader's");
+        }
+        if (quad) i += 3;
+      }
+    }
+  }
+
+  // Everything checks out: from here on the draw is the GPU's.
   if (!to_gpu(g, colortex)) return refuse(g, false, "target on the GPU");
   bool use_depth = ctx->depthtest && depthtex.buf;
   if (use_depth) {

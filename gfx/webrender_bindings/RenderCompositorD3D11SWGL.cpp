@@ -136,6 +136,76 @@ void RenderCompositorD3D11SWGL::StartCompositing(
                                                aNumOpaqueRects);
 }
 
+// Reads one pixel of a texture on the compositor's device (BGRA as stored).
+bool RenderCompositorD3D11SWGL::ProbePixel(ID3D11Texture2D* aTexture, int aX,
+                                           int aY, uint32_t* aOut) {
+  if (!aTexture) {
+    return false;
+  }
+  D3D11_TEXTURE2D_DESC desc;
+  aTexture->GetDesc(&desc);
+  if (aX < 0 || aY < 0 || UINT(aX) >= desc.Width || UINT(aY) >= desc.Height) {
+    return false;
+  }
+  CD3D11_TEXTURE2D_DESC sd(desc.Format, 1, 1, 1, 1, 0, D3D11_USAGE_STAGING,
+                           D3D11_CPU_ACCESS_READ);
+  RefPtr<ID3D11Texture2D> staging;
+  if (FAILED(GetDevice()->CreateTexture2D(&sd, nullptr,
+                                          getter_AddRefs(staging)))) {
+    return false;
+  }
+  RefPtr<ID3D11DeviceContext> context;
+  GetDevice()->GetImmediateContext(getter_AddRefs(context));
+  D3D11_BOX box = {UINT(aX), UINT(aY), 0, UINT(aX + 1), UINT(aY + 1), 1};
+  context->CopySubresourceRegion(staging, 0, 0, 0, 0, aTexture, 0, &box);
+  D3D11_MAPPED_SUBRESOURCE map;
+  if (FAILED(context->Map(staging, 0, D3D11_MAP_READ, 0, &map))) {
+    return false;
+  }
+  *aOut = *(const uint32_t*)map.pData;
+  context->Unmap(staging, 0);
+  return true;
+}
+
+RenderedFrameId RenderCompositorD3D11SWGL::EndFrame(
+    const nsTArray<DeviceIntRect>& aDirtyRects) {
+#if defined(GECKO_W10M)
+  if (mGpuShading && (mFrameProbes < 8 || mFrameProbes % 300 == 0)) {
+    // What the composite put on screen, before it is presented.
+    RefPtr<CompositingRenderTarget> rt =
+        GetCompositorD3D11()->GetCurrentRenderTarget();
+    auto* rt11 = static_cast<CompositingRenderTargetD3D11*>(rt.get());
+    char note[256];
+    HRESULT removed = GetDevice()->GetDeviceRemovedReason();
+    if (rt11 && rt11->GetD3D11Texture()) {
+      gfx::IntSize size = rt11->GetSize();
+      uint32_t c = 0, l = 0, t = 0;
+      bool ok = ProbePixel(rt11->GetD3D11Texture(), size.width / 2,
+                           size.height / 2, &c) &&
+                ProbePixel(rt11->GetD3D11Texture(), size.width / 4,
+                           size.height / 2, &l) &&
+                ProbePixel(rt11->GetD3D11Texture(), size.width / 2,
+                           size.height / 8, &t);
+      SprintfLiteral(note,
+                     "gfx: frame probe %u: screen %dx%d centre %08x left %08x "
+                     "top %08x%s, device %08lx",
+                     mFrameProbes, size.width, size.height, c, l, t,
+                     ok ? "" : " (probe failed)", (unsigned long)removed);
+    } else {
+      SprintfLiteral(note,
+                     "gfx: frame probe %u: no composite this frame, device "
+                     "%08lx",
+                     mFrameProbes, (unsigned long)removed);
+    }
+    GeckoW10mNote(note);
+  }
+  if (mGpuShading) {
+    mFrameProbes++;
+  }
+#endif
+  return RenderCompositorLayersSWGL::EndFrame(aDirtyRects);
+}
+
 bool RenderCompositorD3D11SWGL::BeginFrame() {
   if (!RenderCompositorLayersSWGL::BeginFrame()) {
     return false;
@@ -405,6 +475,24 @@ void RenderCompositorD3D11SWGL::TileD3D11::Unmap(
 
   if (mRenderCompositor->mGpuShading) {
     // Already there: nothing to upload.
+#if defined(GECKO_W10M)
+    uint32_t n = mRenderCompositor->mTileProbes++;
+    if ((n < 16 || n % 500 == 0) && !aDirtyRect.IsEmpty()) {
+      gfx::IntPoint mid = aDirtyRect.Center();
+      uint32_t c = 0;
+      bool ok = mRenderCompositor->ProbePixel(mTexture->GetD3D11Texture(),
+                                              mid.x, mid.y, &c);
+      char note[256];
+      SprintfLiteral(note,
+                     "gfx: tile probe %u: valid %d,%d %dx%d dirty %d,%d %dx%d "
+                     "centre %08x%s",
+                     n, int(mValidRect.x), int(mValidRect.y),
+                     int(mValidRect.width), int(mValidRect.height),
+                     aDirtyRect.x, aDirtyRect.y, aDirtyRect.width,
+                     aDirtyRect.height, c, ok ? "" : " (probe failed)");
+      GeckoW10mNote(note);
+    }
+#endif
     return;
   }
 

@@ -3042,9 +3042,9 @@ void CopyImageSubData(GLuint srcName, GLenum srcTarget, UNUSED GLint srcLevel,
     dstName = rb.texture;
   }
   Texture& srctex = ctx->textures[srcName];
-  if (!srctex.buf) return;
+  if (!srctex.buf && !gpu_resolve_external_pending(srctex)) return;
   Texture& dsttex = ctx->textures[dstName];
-  if (!dsttex.buf) return;
+  if (!dsttex.buf && !gpu_resolve_external_pending(dsttex)) return;
   assert(!dsttex.locked);
   if (gpu_copy(srctex, IntRect{srcX, srcY, srcX + srcWidth, srcY + srcHeight},
                dsttex, IntRect{dstX, dstY, dstX + srcWidth, dstY + srcHeight})) {
@@ -3053,6 +3053,8 @@ void CopyImageSubData(GLuint srcName, GLenum srcTarget, UNUSED GLint srcLevel,
   prepare_texture(srctex);
   IntRect skip = {dstX, dstY, dstX + srcWidth, dstY + srcHeight};
   prepare_texture(dsttex, &skip);
+  // A compositor tile gets a CPU buffer only once something brings it back.
+  if (!srctex.buf || !dsttex.buf) return;
   assert(srctex.internal_format == dsttex.internal_format);
   assert(srcWidth >= 0);
   assert(srcHeight >= 0);

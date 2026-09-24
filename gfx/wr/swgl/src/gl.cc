@@ -28,6 +28,28 @@
 #  define ALWAYS_INLINE __forceinline
 #  define NO_INLINE __declspec(noinline)
 
+// The feature level 9_3 pixel shaders, when the build made them. With them
+// comes Direct3D 11 (gpu_d3d11.h), whose headers need Windows.h; it goes in
+// first, before anything of SWGL's own can collide with it.
+#  include "gpu_shaders.h"
+#endif
+
+#if defined(_WIN32) && SWGL_GPU_SHADERS
+#  define NOMINMAX
+#  define WIN32_LEAN_AND_MEAN
+#  define NOGDI
+// SWGL has its own LockResource.
+#  define LockResource LockResource_win32
+#  include <windows.h>
+#  include <d3d11.h>
+#  include <algorithm>
+#  include <unordered_map>
+#  include <vector>
+#  undef LockResource
+#  undef UnlockResource
+#  undef near
+#  undef far
+#elif defined(_WIN32)
 // Including Windows.h brings a huge amount of namespace polution so just
 // define a couple of things manually
 typedef int BOOL;
@@ -392,6 +414,11 @@ TextureFilter gl_filter_to_texture_filter(int type) {
   }
 }
 
+struct GpuTex;
+struct GpuBackend;
+struct Texture;
+static void gpu_release_texture(Texture& t);
+
 struct Texture {
   GLenum internal_format = 0;
   int width = 0;
@@ -570,7 +597,13 @@ struct Texture {
     disable_delayed_clear();
   }
 
-  ~Texture() { cleanup(); }
+  // The copy on the GPU, when a Direct3D device is attached (gpu_d3d11.h).
+  GpuTex* gpu = nullptr;
+
+  ~Texture() {
+    cleanup();
+    gpu_release_texture(*this);
+  }
 
   IntRect bounds() const { return IntRect{0, 0, width, height}; }
   IntRect offset_bounds() const { return bounds() + offset; }
@@ -779,6 +812,13 @@ struct ObjectStore {
 struct Context {
   int32_t references = 1;
 
+  // A Direct3D device for pixel shading, when one is attached (gpu_d3d11.h).
+  GpuBackend* gpu = nullptr;
+  // Set while a GPU draw binds its samplers, so that binding them for the
+  // CPU vertex stage does not read GPU-only content back.
+  bool gpu_defer_sync = false;
+  ~Context();
+
   ObjectStore<Query> queries;
   ObjectStore<Buffer> buffers;
   ObjectStore<Texture> textures;
@@ -901,6 +941,13 @@ static FragmentShaderImpl* fragment_shader = nullptr;
 static BlendKey blend_key = BLEND_KEY_NONE;
 
 static void prepare_texture(Texture& t, const IntRect* skip = nullptr);
+static void gpu_sync_to_cpu(Texture& t);
+static void gpu_cpu_wrote(Texture& t);
+static void gpu_cpu_wrote_rect(Texture& t, int x0, int y0, int x1, int y1);
+static void gpu_storage_changed(Texture& t);
+static void gpu_invalidate(Texture& t);
+static bool gpu_clear(Texture& t, const IntRect& rect, uint32_t color,
+                      bool is_depth, float depth);
 
 template <typename S>
 static inline void init_filter(S* s, Texture& t) {
@@ -1908,6 +1955,7 @@ static void set_tex_storage(Texture& t, GLenum external_format, GLsizei width,
                  (uint8_t*)t.buf, (uint8_t*)t.end_ptr(), (const uint8_t*)buf,
                  stride, nullptr, nullptr, width, height);
   }
+  gpu_storage_changed(t);
 }
 
 extern "C" {
@@ -1987,6 +2035,7 @@ void TexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                (uint8_t*)t.buf, (uint8_t*)t.end_ptr(), (const uint8_t*)data,
                row_length * src_bpp, pbo ? (const uint8_t*)pbo->buf : nullptr,
                pbo ? (const uint8_t*)pbo->end_ptr() : nullptr, width, height);
+  gpu_cpu_wrote_rect(t, xoffset, yoffset, xoffset + width, yoffset + height);
 }
 
 void TexImage2D(GLenum target, GLint level, GLint internal_format,
@@ -2510,6 +2559,7 @@ static void force_clear(Texture& t, const IntRect* skip = nullptr) {
 }
 
 static void prepare_texture(Texture& t, const IntRect* skip) {
+  gpu_sync_to_cpu(t);
   if (t.delay_clear) {
     switch (t.internal_format) {
       case GL_RGBA8:
@@ -2656,6 +2706,9 @@ void ClearTexSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset,
         assert(false);
         break;
     }
+    if (gpu_clear(t, scissor, 0, true, float(value) / float(0xFFFFFF))) {
+      return;
+    }
     if (t.cleared() && !scissor.contains(t.offset_bounds())) {
       // If we need to scissor the clear and the depth buffer was already
       // initialized, then just fill runs for that scissor area.
@@ -2666,6 +2719,7 @@ void ClearTexSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset,
       // the entire buffer with any value and thus ignore any scissoring.
       t.init_depth_runs(value);
     }
+    gpu_cpu_wrote(t);
     return;
   }
 
@@ -2720,6 +2774,16 @@ void ClearTexSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset,
       break;
   }
 
+  if (t.internal_format == GL_RGBA8 || t.internal_format == GL_R8) {
+    uint32_t bgra = t.internal_format == GL_RGBA8
+                        ? (color & 0xFF00FF00) | ((color << 16) & 0xFF0000) |
+                              ((color >> 16) & 0xFF)
+                        : color;
+    if (gpu_clear(t, scissor, bgra, false, 0.0f)) {
+      return;
+    }
+  }
+  gpu_cpu_wrote(t);
   switch (t.internal_format) {
     case GL_RGBA8:
       // Clear color needs to swizzle to BGRA.
@@ -2796,11 +2860,13 @@ void InvalidateFramebuffer(GLenum target, GLsizei num_attachments,
       case GL_DEPTH_ATTACHMENT: {
         Texture& t = ctx->textures[fb->depth_attachment];
         t.set_cleared(false);
+        gpu_invalidate(t);
         break;
       }
       case GL_COLOR_ATTACHMENT0: {
         Texture& t = ctx->textures[fb->color_attachment];
         t.disable_delayed_clear();
+        gpu_invalidate(t);
         break;
       }
     }
@@ -2915,6 +2981,7 @@ void CopyImageSubData(GLuint srcName, GLenum srcTarget, UNUSED GLint srcLevel,
     dest += dest_stride;
     src += src_stride;
   }
+  gpu_cpu_wrote(dsttex);
 }
 
 void CopyTexSubImage2D(GLenum target, UNUSED GLint level, GLint xoffset,
@@ -2949,6 +3016,8 @@ void CopyTexSubImage2D(GLenum target, UNUSED GLint level, GLint xoffset,
 #pragma GCC diagnostic pop
 
 #include "rasterize.h"
+
+#include "gpu_d3d11.h"
 
 void VertexArray::validate() {
   int last_enabled = -1;
@@ -3010,7 +3079,31 @@ void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
   ctx->shaded_rows = 0;
   ctx->shaded_pixels = 0;
 
+  // The pixels go to the GPU when a device is attached and this draw can run
+  // there; its samplers are bound for the vertex stage without reading back
+  // what only the GPU holds.
+  if (ctx->gpu && mode == GL_TRIANGLES &&
+      (type == GL_UNSIGNED_SHORT || type == GL_UNSIGNED_INT) &&
+      gpu_can_draw(colortex)) {
+    ctx->gpu_defer_sync = true;
+    vertex_shader->init_batch();
+    ctx->gpu_defer_sync = false;
+    bool drawn =
+        type == GL_UNSIGNED_SHORT
+            ? gpu_draw_elements<uint16_t>(count, instancecount, offset, v,
+                                          colortex, depthtex)
+            : gpu_draw_elements<uint32_t>(count, instancecount, offset, v,
+                                          colortex, depthtex);
+    if (drawn) {
+      return;
+    }
+  }
+
+  // On the CPU: whatever the GPU drew into these first comes back.
+  gpu_sync_to_cpu(colortex);
+  if (depthtex.buf) gpu_sync_to_cpu(depthtex);
   vertex_shader->init_batch();
+  gpu_count_cpu_draw();
 
   switch (type) {
     case GL_UNSIGNED_SHORT:
@@ -3050,6 +3143,9 @@ void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
       assert(false);
       break;
   }
+
+  gpu_cpu_wrote(colortex);
+  if (depthtex.buf && ctx->depthmask) gpu_cpu_wrote(depthtex);
 
   if (ctx->samples_passed_query) {
     Query& q = ctx->queries[ctx->samples_passed_query];

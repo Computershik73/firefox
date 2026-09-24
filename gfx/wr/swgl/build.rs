@@ -224,9 +224,23 @@ fn write_gpu_header(
     match fxc_compile(fxc, &hlsl, "ps_4_0_level_9_3", &format!("{out_dir}/{shader}_ps")) {
         Ok(bytes) => {
             let mut h = bytes_array(&format!("{shader}_ps"), &bytes);
+            let rect: Vec<String> = layout
+                .samplers
+                .iter()
+                .map(|s| {
+                    let r = format!("{:?}", s.kind).contains("Rect");
+                    (r as u8).to_string()
+                })
+                .chain(std::iter::once("0".to_string()))
+                .collect();
             let _ = writeln!(
                 h,
-                "static const GpuProgramInfo {shader}_gpu_info_data = {{ {shader}_ps, sizeof({shader}_ps), {}, {}, {}, {}, {}, \"{shader}\" }};",
+                "static const unsigned char {shader}_srect[] = {{ {} }};",
+                rect.join(", ")
+            );
+            let _ = writeln!(
+                h,
+                "static const GpuProgramInfo {shader}_gpu_info_data = {{ {shader}_ps, sizeof({shader}_ps), {}, {}, {}, {}, {}, \"{shader}\", {shader}_srect }};",
                 layout.slots,
                 layout.texture_floats,
                 layout.flat_coord_offset.map_or(-1, |o| o as i64),
@@ -265,10 +279,15 @@ fn write_gpu_common(out_dir: &str) {
         for i in 0..slots {
             let _ = write!(src, " float4 t{i} : TEXCOORD{i};");
         }
-        src.push_str(" };\nstruct VOut { float4 pos : SV_Position;");
+        // The texture coordinates come first: the pixel shaders declare only
+        // those (9_3 cannot read SV_Position, and declaring it would cost one
+        // of the eight inputs), and Direct3D links the stages by position,
+        // so they must be a prefix of what this stage writes.
+        src.push_str(" };\nstruct VOut {");
         for i in 0..slots {
             let _ = write!(src, " float4 t{i} : TEXCOORD{i};");
         }
+        src.push_str(" float4 pos : SV_Position;");
         src.push_str(
             " };\nVOut main(VIn i) { VOut o;\n o.pos = float4(i.pos.x, -i.pos.y, (i.pos.z + i.pos.w) * 0.5, i.pos.w);\n",
         );
@@ -331,6 +350,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/texture.h");
     println!("cargo:rerun-if-changed=src/vector_type.h");
     println!("cargo:rerun-if-changed=src/gl.cc");
+    println!("cargo:rerun-if-changed=src/gpu_d3d11.h");
     let mut build = cc::Build::new();
     build.cpp(true);
 

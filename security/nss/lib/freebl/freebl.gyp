@@ -687,10 +687,15 @@
       }, {
         'have_int128_support%': 0,
       }],
-      [ 'target_arch=="arm"', {
+      [ 'target_arch=="arm" and OS!="win"', {
         # When the compiler uses the softfloat ABI, we want to use the compatible softfp ABI when enabling NEON for these objects.
         # Confusingly, __SOFTFP__ is the name of the define for the softfloat ABI, not for the softfp ABI.
         'softfp_cflags': '<!(sh -c "${CC:-cc} -o - -E -dM - ${CFLAGS} < /dev/null | grep __SOFTFP__ > /dev/null && echo -mfloat-abi=softfp || true")',
+      }],
+      [ 'target_arch=="arm" and OS=="win"', {
+        # GeckoW10m: Windows on ARM32 has a fixed float ABI and the gcc-style
+        # probe above does not work with clang-cl; no extra flags needed.
+        'softfp_cflags': '',
       }],
       [ 'target_arch=="ppc64" or target_arch=="ppc64le"', {
        'ppc_abi': '<!(sh -c "${CC:-cc} -dM -E - < /dev/null | awk \'\\$2 == \\"_CALL_ELF\\" {print \\$3}\'")',

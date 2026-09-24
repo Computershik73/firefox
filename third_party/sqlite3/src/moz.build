@@ -142,3 +142,8 @@ DEFINES['SQLITE_ENABLE_CARRAY'] = 1
 
 # The percentile extension is part of the amalgamation but disabled by default.
 DEFINES['SQLITE_ENABLE_PERCENTILE'] = 1
+
+# clang implements no structured exception handling on 32-bit ARM Windows, and
+# SQLite turns SEH on by default for any _MSC_VER build.
+if CONFIG["TARGET_CPU"] == "arm":
+    DEFINES["SQLITE_OMIT_SEH"] = True

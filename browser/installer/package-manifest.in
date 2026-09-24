@@ -94,8 +94,10 @@
 #endif
 #ifdef XP_WIN
 @BINPATH@/@MOZ_CHILD_PROCESS_NAME@
+#ifndef MOZ_UWP
 @BINPATH@/@DLL_PREFIX@InstallationDirLayout@DLL_SUFFIX@
 @BINPATH@/installation_dir_layout/versioned/@DLL_PREFIX@InstallationDirLayout@DLL_SUFFIX@
+#endif
 #if MOZ_PACKAGE_MSVC_DLLS
 @BINPATH@/@MSVC_C_RUNTIME_DLL@
 #ifdef MSVC_C_RUNTIME_1_DLL
@@ -104,6 +106,7 @@
 @BINPATH@/@MSVC_CXX_RUNTIME_DLL@
 @BINPATH@/@MSVC_CXX_RUNTIME_ATOMIC_WAIT_DLL@
 #endif
+#ifndef MOZ_UWP
 ; Windows App SDK DLLs
 @BINPATH@/@DLL_PREFIX@CoreMessagingXP@DLL_SUFFIX@
 @BINPATH@/@DLL_PREFIX@marshal@DLL_SUFFIX@
@@ -113,6 +116,7 @@
 @BINPATH@/@DLL_PREFIX@Microsoft.UI.Input@DLL_SUFFIX@
 @BINPATH@/@DLL_PREFIX@Microsoft.UI.Windowing.Core@DLL_SUFFIX@
 @BINPATH@/@DLL_PREFIX@Microsoft.UI.Windowing@DLL_SUFFIX@
+#endif
 #endif
 #ifdef MOZ_GTK
 ; This is a standalone binary launched by Firefox on Linux to verify
@@ -151,7 +155,9 @@
 @BINPATH@/firefox.VisualElementsManifest.xml
 @BINPATH@/browser/VisualElements/VisualElements_150.png
 @BINPATH@/browser/VisualElements/VisualElements_70.png
+#ifndef MOZ_UWP
 @BINPATH@/private_browsing.exe
+#endif
 @BINPATH@/private_browsing.VisualElementsManifest.xml
 @BINPATH@/browser/VisualElements/PrivateBrowsing_150.png
 @BINPATH@/browser/VisualElements/PrivateBrowsing_70.png
@@ -176,12 +182,16 @@
 @BINPATH@/@DLL_PREFIX@gkcodecs@DLL_SUFFIX@
 @BINPATH@/@DLL_PREFIX@mozavutil@DLL_SUFFIX@
 @BINPATH@/@DLL_PREFIX@mozavcodec@DLL_SUFFIX@
+#ifndef MOZ_UWP
 @BINPATH@/@DLL_PREFIX@mozinference@DLL_SUFFIX@
+#endif
 
 ; [Components]
 #ifdef ACCESSIBILITY
 #ifdef XP_WIN
+#ifndef MOZ_UWP
 @BINPATH@/AccessibleMarshal.dll
+#endif
 #endif
 #endif
 
@@ -453,7 +463,9 @@ bin/libfreebl_64int_3.so
 #endif
 
 #if defined(DESKTOP_LAUNCHER_ENABLED)
+#ifndef MOZ_UWP
 @BINPATH@/desktop-launcher/desktop-launcher@BIN_SUFFIX@
+#endif
 #endif
 
 #if defined(BUILT_BY_MOZILLA)

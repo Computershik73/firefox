@@ -56,6 +56,9 @@ static inline void safe_release(T*& p) {
   }
 }
 
+// Bytes of CPU buffers freed because the GPU holds the texture (resident).
+static int64_t resident_bytes = 0;
+
 }  // namespace swgl_gpu
 
 // The GPU side of one SWGL texture.
@@ -82,12 +85,24 @@ struct GpuTex {
   bool external = false;
   int ox = 0;
   int oy = 0;
+  // A colour texture whose CPU buffer was freed once the GPU copy was
+  // current: on a phone the GPU's memory is the phone's memory, and two
+  // copies of every render target and atlas are twice the memory. The CPU
+  // buffer comes back (read back) when something on the CPU needs it.
+  bool resident = false;
   // The Direct3D texture's own size: larger than SWGL's for an external
   // texture, and for a depth buffer shared with one.
   int tex_w = 0;
   int tex_h = 0;
 
+  // What this texture counts in resident_bytes while resident.
+  int64_t resident_size = 0;
+
   void release() {
+    if (resident) {
+      swgl_gpu::resident_bytes -= resident_size;
+      resident_size = 0;
+    }
     swgl_gpu::safe_release(srv);
     swgl_gpu::safe_release(rtv);
     swgl_gpu::safe_release(dsv);
@@ -96,10 +111,30 @@ struct GpuTex {
     tex_w = tex_h = 0;
     format = DXGI_FORMAT_UNKNOWN;
     external = false;
+    resident = false;
     ox = oy = 0;
   }
   ~GpuTex() { release(); }
 };
+
+namespace swgl_gpu {
+
+static void mark_resident(GpuTex& gt, const Texture& t) {
+  if (gt.resident) return;
+  gt.resident = true;
+  gt.resident_size =
+      int64_t(t.width) * t.height * (t.internal_format == GL_R8 ? 1 : 4);
+  resident_bytes += gt.resident_size;
+}
+
+static void unmark_resident(GpuTex& gt) {
+  if (!gt.resident) return;
+  gt.resident = false;
+  resident_bytes -= gt.resident_size;
+  gt.resident_size = 0;
+}
+
+}  // namespace swgl_gpu
 
 struct GpuBackend {
   ID3D11Device* dev = nullptr;
@@ -179,6 +214,8 @@ struct GpuBackend {
     uint32_t refused_program = 0;
     uint32_t refused_state = 0;
     uint32_t depth_lost = 0;
+    uint32_t cpu_freed = 0;
+    uint32_t cpu_restored = 0;
   } stats;
 
   ~GpuBackend() {
@@ -500,6 +537,8 @@ static bool ensure_resource(GpuBackend* g, Texture& t, int min_w = 0,
              : gt.tex_w >= want_w && gt.tex_h >= want_h)) {
     return true;
   }
+  // A texture that lives only on the GPU stays so on a new resource.
+  bool keep_resident = gt.resident && !t.buf;
   if (depth && gt.tex && gt.dsv && gt.internal_format == t.internal_format) {
     if (g->spare_depth.size() >= 4) {
       g->spare_depth.front().dsv->Release();
@@ -511,6 +550,7 @@ static bool ensure_resource(GpuBackend* g, Texture& t, int min_w = 0,
     gt.dsv = nullptr;
   }
   gt.release();
+  if (keep_resident) mark_resident(gt, t);
   if (t.width <= 0 || t.height <= 0) return false;
   DXGI_FORMAT format;
   bool expanded;
@@ -577,9 +617,10 @@ static bool ensure_resource(GpuBackend* g, Texture& t, int min_w = 0,
   gt.tex_w = want_w;
   gt.tex_h = want_h;
   gt.expanded = expanded;
-  // A new GPU copy holds nothing yet: whatever the CPU has is newer.
+  // A new GPU copy holds nothing yet: whatever the CPU has is newer -- and
+  // if the CPU has nothing (resident), neither holds anything.
   gt.gpu_newer = false;
-  gt.cpu_newer = true;
+  gt.cpu_newer = !gt.resident;
   return true;
 }
 
@@ -948,15 +989,73 @@ static void set_target(GpuBackend* g, Texture& colortex, Texture* depthtex) {
 
 }  // namespace swgl_gpu
 
+namespace swgl_gpu {
+
+// Frees t's CPU buffer when the GPU copy is current (see GpuTex::resident).
+static void drop_cpu_copy(GpuBackend* g, Texture& t) {
+  if (!t.gpu || !t.gpu->tex || t.gpu->external || t.gpu->resident) return;
+  if (!t.buf || !t.should_free() || t.locked || t.delay_clear) return;
+  if (t.internal_format != GL_RGBA8 && t.internal_format != GL_R8) return;
+  if (t.gpu->cpu_newer || &t == g->scratch) return;
+  if (t.gpu->width != t.width || t.gpu->height != t.height) return;
+  t.cleanup();
+  mark_resident(*t.gpu, t);
+  t.gpu->gpu_newer = true;
+  g->stats.cpu_freed++;
+  if (trace()) {
+    fprintf(stderr, "gpu: CPU copy of %dx%d fmt %x freed\n", t.width,
+            t.height, t.internal_format);
+  }
+}
+
+}  // namespace swgl_gpu
+
+// TexSubImage2D into a texture that lives only on the GPU: straight there,
+// with no CPU buffer. False if it cannot, and the caller brings the CPU
+// buffer back.
+static bool gpu_upload_direct(Texture& t, int x, int y, int w, int h,
+                              const void* data, int row_bytes) {
+  using namespace swgl_gpu;
+  GpuBackend* g = ctx ? ctx->gpu : nullptr;
+  if (!g || g->broken || !t.gpu || !t.gpu->resident || t.buf || w <= 0 ||
+      h <= 0) {
+    return false;
+  }
+  if (!ensure_resource(g, t)) return false;
+  GpuTex& gt = *t.gpu;
+  gt.gpu_newer = true;
+  D3D11_BOX box = {UINT(x), UINT(y), 0, UINT(x + w), UINT(y + h), 1};
+  if (gt.expanded) {
+    std::vector<uint8_t> tmp(size_t(w) * h * 4);
+    for (int row = 0; row < h; row++) {
+      copy_red_to_bgra8(&tmp[size_t(row) * w * 4],
+                        (const uint8_t*)data + size_t(row) * row_bytes, w);
+    }
+    g->dc->UpdateSubresource(gt.tex, 0, &box, tmp.data(), w * 4, 0);
+  } else {
+    g->dc->UpdateSubresource(gt.tex, 0, &box, data, UINT(row_bytes), 0);
+  }
+  g->stats.uploads++;
+  if (trace()) {
+    fprintf(stderr, "gpu: upload %dx%d of %dx%d fmt %x straight to the GPU\n",
+            w, h, t.width, t.height, t.internal_format);
+  }
+  return true;
+}
+
 // Called from prepare_texture: before the CPU reads t, bring back what only
 // the GPU has.
 static void gpu_sync_to_cpu(Texture& t) {
-  if (!t.gpu || !t.gpu->gpu_newer || !ctx || !ctx->gpu || ctx->gpu_defer_sync)
-    return;
-  if (!t.buf && t.gpu->external) {
+  if (!t.gpu || !ctx || !ctx->gpu || ctx->gpu_defer_sync) return;
+  if (!t.buf && (t.gpu->external || t.gpu->resident)) {
     // The CPU wants a texture that so far lived only on the GPU.
     if (!t.allocate()) return;
+    if (t.gpu->resident) {
+      swgl_gpu::unmark_resident(*t.gpu);
+      ctx->gpu->stats.cpu_restored++;
+    }
   }
+  if (!t.gpu->gpu_newer) return;
   swgl_gpu::readback(ctx->gpu, t);
   t.gpu->gpu_newer = false;
 }
@@ -986,7 +1085,26 @@ static void gpu_storage_changed(Texture& t) {
   if (t.gpu) {
     t.gpu->gpu_newer = false;
     t.gpu->cpu_newer = true;
+    swgl_gpu::unmark_resident(*t.gpu);
   }
+}
+
+// With a device attached, a colour texture SWGL allocates itself is born on
+// the GPU (resident): no CPU buffer until the CPU needs one, and nothing to
+// upload, its content being undefined until drawn, cleared or uploaded.
+// Called by set_tex_storage in place of allocating; false if it cannot.
+static bool gpu_storage_on_gpu(Texture& t) {
+  GpuBackend* g = ctx ? ctx->gpu : nullptr;
+  if (!g || g->broken || !t.should_free() || t.locked) return false;
+  if (t.internal_format != GL_RGBA8 && t.internal_format != GL_R8) return false;
+  if (t.width <= 0 || t.height <= 0 || &t == g->scratch) return false;
+  if (t.buf) t.cleanup();
+  if (!t.gpu) t.gpu = new GpuTex;
+  swgl_gpu::unmark_resident(*t.gpu);
+  swgl_gpu::mark_resident(*t.gpu, t);
+  t.gpu->gpu_newer = false;
+  t.gpu->cpu_newer = false;
+  return true;
 }
 
 static void gpu_release_texture(Texture& t) {
@@ -1061,6 +1179,9 @@ static bool gpu_clear(Texture& t, const IntRect& rect, uint32_t color,
   } else {
     // Colour only when the GPU is where this texture lives now; otherwise
     // the CPU clear is free (usually delayed) and the upload happens anyway.
+    if (t.gpu && t.gpu->resident && !t.buf && !ensure_resource(g, t)) {
+      return false;
+    }
     if (!t.gpu || !t.gpu->tex) return false;
     if (!t.gpu->gpu_newer && t.gpu->cpu_newer) return false;
     if (!t.gpu->external &&
@@ -1146,6 +1267,7 @@ static bool gpu_clear(Texture& t, const IntRect& rect, uint32_t color,
             is_depth ? "depth" : "color", t.width, t.height,
             full ? "full" : "part", color);
   }
+  drop_cpu_copy(g, t);
   return true;
 }
 
@@ -1217,7 +1339,8 @@ static bool gpu_check(Texture& colortex, Texture** sampled,
       sampled[i] = nullptr;
       continue;
     }
-    if (!st.buf || !gl_format_on_gpu(g, st.internal_format, &f, &e) ||
+    if ((!st.buf && !(st.gpu && st.gpu->resident)) ||
+        !gl_format_on_gpu(g, st.internal_format, &f, &e) ||
         st.internal_format == GL_DEPTH_COMPONENT24 ||
         (st.gpu && st.gpu->external)) {
       return refuse(g, false, "sampled texture");
@@ -1272,6 +1395,7 @@ static bool gpu_copy(Texture& src, const IntRect& src_rect, Texture& dst,
   if (trace()) {
     fprintf(stderr, "gpu: copy %dx%d\n", s.width(), s.height());
   }
+  drop_cpu_copy(g, dst);
   return true;
 }
 
@@ -1718,6 +1842,11 @@ static bool gpu_draw_elements(GLsizei count, GLsizei instancecount,
               sampled[i]->internal_format, sampled[i]->mag_filter);
     }
   }
+  // The GPU holds these now: their CPU copies are only memory.
+  drop_cpu_copy(g, colortex);
+  for (int i = 0; i < info->num_samplers; i++) {
+    if (sampled[i]) drop_cpu_copy(g, *sampled[i]);
+  }
   return true;
 }
 
@@ -1726,14 +1855,14 @@ static bool gpu_draw_elements(GLsizei count, GLsizei instancecount,
 // the CPU drew there to the GPU. Returns true if it handled the texture.
 // Whether t is a texture held only on the GPU as someone else's.
 static bool gpu_resolve_external_pending(Texture& t) {
-  return t.gpu && t.gpu->external;
+  return t.gpu && (t.gpu->external || t.gpu->resident);
 }
 
 static bool gpu_resolve_external(Texture& t) {
   using namespace swgl_gpu;
-  if (!t.gpu || !t.gpu->external) return false;
+  if (!t.gpu || !(t.gpu->external || t.gpu->resident)) return false;
   GpuBackend* g = ctx ? ctx->gpu : nullptr;
-  if (g && !g->broken) {
+  if (g && !g->broken && t.gpu->external) {
     to_gpu(g, t);
   }
   return true;
@@ -1944,6 +2073,19 @@ void SwglGpuStats(uint32_t* out8) {
   g->stats = GpuBackend::Stats();
 }
 
+// Since the last SwglGpuStats: CPU copies freed and brought back; and the
+// megabytes of CPU memory the GPU-only textures save now.
+void SwglGpuMemoryStats(uint32_t* out3) {
+  GpuBackend* g = ctx ? ctx->gpu : nullptr;
+  if (!g) {
+    memset(out3, 0, 3 * sizeof(uint32_t));
+    return;
+  }
+  out3[0] = g->stats.cpu_freed;
+  out3[1] = g->stats.cpu_restored;
+  out3[2] = uint32_t(std::max<int64_t>(swgl_gpu::resident_bytes, 0) >> 20);
+}
+
 }  // extern "C"
 
 #else  // no GPU path on this platform
@@ -1968,6 +2110,11 @@ static inline void gpu_trace_draw(Texture&, int) {}
 static inline Texture* gpu_cpu_composite_begin(Texture&) { return nullptr; }
 static inline void gpu_cpu_composite_end(Texture&, Texture&) {}
 static inline bool gpu_resolve_external_pending(Texture&) { return false; }
+static inline bool gpu_upload_direct(Texture&, int, int, int, int,
+                                     const void*, int) {
+  return false;
+}
+static inline bool gpu_storage_on_gpu(Texture&) { return false; }
 static inline void gpu_count_cpu_draw() {}
 static inline int gpu_max_texture_size() { return 0; }
 static inline bool gpu_can_draw(Texture&) { return false; }
@@ -1993,6 +2140,9 @@ bool SwglGpuTestReadTile(void*, int, int, int, int, void*, int) {
   return false;
 }
 void SwglGpuStats(uint32_t* out8) { memset(out8, 0, 8 * sizeof(uint32_t)); }
+void SwglGpuMemoryStats(uint32_t* out3) {
+  memset(out3, 0, 3 * sizeof(uint32_t));
+}
 }
 
 #endif

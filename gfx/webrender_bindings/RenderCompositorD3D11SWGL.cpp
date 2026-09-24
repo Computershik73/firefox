@@ -21,6 +21,7 @@
 // swgl (gpu_d3d11.h): pixel shading on a Direct3D 11 device.
 extern "C" bool SwglGpuAttach(void* aDevice);
 extern "C" void SwglGpuStats(uint32_t* aOut8);
+extern "C" void SwglGpuMemoryStats(uint32_t* aOut3);
 extern "C" void SwglGpuDescribe(char* aOut, size_t aSize);
 #if defined(GECKO_W10M)
 extern "C" void GeckoW10mNote(const char* aText);
@@ -119,6 +120,8 @@ void RenderCompositorD3D11SWGL::StartCompositing(
     GetCompositorD3D11()->ForgetDeviceState();
 #if defined(GECKO_W10M)
     if (++mGpuStatsFrames % 300 == 1) {
+      uint32_t m[3];
+      SwglGpuMemoryStats(m);  // before SwglGpuStats, which resets the counts
       uint32_t s[8];
       SwglGpuStats(s);
       char note[256];
@@ -127,6 +130,11 @@ void RenderCompositorD3D11SWGL::StartCompositing(
                      "%u uploads, %u readbacks, %u clears, refused %u program "
                      "%u state",
                      s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]);
+      GeckoW10mNote(note);
+      SprintfLiteral(note,
+                     "gfx: GPU-only textures -- %u CPU copies freed, %u brought "
+                     "back, %u MB of CPU memory saved now",
+                     m[0], m[1], m[2]);
       GeckoW10mNote(note);
     }
 #endif

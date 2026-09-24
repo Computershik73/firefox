@@ -977,6 +977,9 @@ static void gpu_trace_draw(Texture& colortex, int instances);
 static Texture* gpu_cpu_composite_begin(Texture& colortex);
 static void gpu_cpu_composite_end(Texture& colortex, Texture& depthtex);
 static bool gpu_resolve_external_pending(Texture& t);
+static bool gpu_upload_direct(Texture& t, int x, int y, int w, int h,
+                              const void* data, int row_bytes);
+static bool gpu_storage_on_gpu(Texture& t);
 
 template <typename S>
 static inline void init_filter(S* s, Texture& t) {
@@ -1025,10 +1028,25 @@ static inline void null_filter(S* s) {
   s->filter = TextureFilter::NEAREST;
 }
 
+// A texture that lives only on the GPU comes back for the CPU, except while
+// a GPU draw binds its samplers for the vertex stage, which reads only sizes.
+template <typename S>
+static inline bool gpu_only_sampler(S* s, Texture& t) {
+  if (t.buf || !gpu_resolve_external_pending(t)) return false;
+  gpu_sync_to_cpu(t);
+  if (t.buf) return false;
+  null_sampler(s);
+  s->width = t.width;
+  s->height = t.height;
+  return true;
+}
+
 template <typename S>
 S* lookup_sampler(S* s, int texture) {
   Texture& t = ctx->get_texture(s, texture);
-  if (!t.buf) {
+  if (gpu_only_sampler(s, t)) {
+    null_filter(s);
+  } else if (!t.buf) {
     null_sampler(s);
     null_filter(s);
   } else {
@@ -1041,7 +1059,8 @@ S* lookup_sampler(S* s, int texture) {
 template <typename S>
 S* lookup_isampler(S* s, int texture) {
   Texture& t = ctx->get_texture(s, texture);
-  if (!t.buf) {
+  if (gpu_only_sampler(s, t)) {
+  } else if (!t.buf) {
     null_sampler(s);
   } else {
     init_sampler(s, t);
@@ -2018,6 +2037,10 @@ static void set_tex_storage(Texture& t, GLenum external_format, GLsizei width,
     t.set_buffer(buf, stride);
   }
   t.disable_delayed_clear();
+  // With a GPU attached, a colour texture lives there (gpu_d3d11.h).
+  if (!buf && gpu_storage_on_gpu(t)) {
+    return;
+  }
   if (!t.allocate(changed, min_width, min_height)) {
     out_of_memory();
   }
@@ -2090,6 +2113,13 @@ void TexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
   }
   if (!data) return;
   Texture& t = ctx->textures[ctx->get_binding(target)];
+  if (!t.buf && !format_requires_conversion(format, t.internal_format) &&
+      gpu_upload_direct(
+          t, xoffset, yoffset, width, height, data,
+          (ctx->unpack_row_length != 0 ? ctx->unpack_row_length : width) *
+              bytes_for_internal_format(t.internal_format))) {
+    return;
+  }
   IntRect skip = {xoffset, yoffset, xoffset + width, yoffset + height};
   prepare_texture(t, &skip);
   assert(xoffset + width <= t.width);
@@ -2155,6 +2185,7 @@ typedef Texture LockedTexture;
 // Lock the given texture to prevent modification.
 LockedTexture* LockTexture(GLuint texId) {
   Texture& tex = ctx->textures[texId];
+  if (!tex.buf) gpu_sync_to_cpu(tex);
   if (!tex.buf) {
     assert(tex.buf != nullptr);
     return nullptr;
@@ -2716,7 +2747,7 @@ void* GetColorBuffer(GLuint fbo, GLboolean flush, int32_t* width,
     return nullptr;
   }
   Texture& colortex = ctx->textures[fb->color_attachment];
-  if (flush) {
+  if (flush || !colortex.buf) {
     prepare_texture(colortex);
   }
   assert(colortex.offset == IntPoint(0, 0));
@@ -2877,6 +2908,8 @@ void ClearTexSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset,
       return;
     }
   }
+  if (!t.buf) gpu_sync_to_cpu(t);
+  if (!t.buf) return;
   gpu_cpu_wrote(t);
   switch (t.internal_format) {
     case GL_RGBA8:
@@ -2979,8 +3012,8 @@ void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
   assert(format == GL_RED || format == GL_RGBA || format == GL_RGBA_INTEGER ||
          format == GL_BGRA || format == GL_RG);
   Texture& t = ctx->textures[fb->color_attachment];
-  if (!t.buf) return;
   prepare_texture(t);
+  if (!t.buf) return;
   // debugf("read pixels %d, %d, %d, %d from fb %d with format %x\n", x, y,
   // width, height, ctx->read_framebuffer_binding, t.internal_format);
   x -= t.offset.x;

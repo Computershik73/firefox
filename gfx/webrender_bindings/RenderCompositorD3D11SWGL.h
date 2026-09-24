@@ -41,6 +41,7 @@ class RenderCompositorD3D11SWGL : public RenderCompositorLayersSWGL {
 
   bool BeginFrame() override;
   RenderedFrameId EndFrame(const nsTArray<DeviceIntRect>& aDirtyRects) override;
+  void CompositorEndFrame() override;
   void StartCompositing(wr::ColorF aClearColor,
                         const wr::DeviceIntRect* aDirtyRects,
                         size_t aNumDirtyRects,

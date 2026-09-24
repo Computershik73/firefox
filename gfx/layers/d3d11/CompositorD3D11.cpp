@@ -571,6 +571,22 @@ void CompositorD3D11::ForgetDeviceState() {
   }
 }
 
+void CompositorD3D11::RestoreDeviceState() {
+  if (!mContext || !mAttachments) {
+    return;
+  }
+  mContext->OMSetDepthStencilState(nullptr, 0);
+  mContext->RSSetState(mAttachments->mRasterizerState);
+  PrepareStaticVertexBuffer();
+  mContext->OMSetBlendState(mAttachments->mPremulBlendState, sBlendFactor,
+                            0xFFFFFFFF);
+  if (mCurrentRT) {
+    // Binds it again and sets its viewport.
+    RefPtr<CompositingRenderTargetD3D11> rt = std::move(mCurrentRT);
+    SetRenderTarget(rt);
+  }
+}
+
 void CompositorD3D11::SetRenderTarget(CompositingRenderTarget* aRenderTarget) {
   MOZ_ASSERT(aRenderTarget);
   CompositingRenderTargetD3D11* newRT =

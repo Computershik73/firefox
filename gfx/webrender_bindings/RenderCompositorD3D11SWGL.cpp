@@ -167,6 +167,15 @@ bool RenderCompositorD3D11SWGL::ProbePixel(ID3D11Texture2D* aTexture, int aX,
   return true;
 }
 
+void RenderCompositorD3D11SWGL::CompositorEndFrame() {
+  if (mGpuShading) {
+    // WebRender started compositing before it drew the tiles, and SWGL drew
+    // them with this context: the composite needs its own state back.
+    GetCompositorD3D11()->RestoreDeviceState();
+  }
+  RenderCompositorLayersSWGL::CompositorEndFrame();
+}
+
 RenderedFrameId RenderCompositorD3D11SWGL::EndFrame(
     const nsTArray<DeviceIntRect>& aDirtyRects) {
 #if defined(GECKO_W10M)

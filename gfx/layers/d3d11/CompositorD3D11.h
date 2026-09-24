@@ -104,6 +104,11 @@ class CompositorD3D11 : public Compositor {
   // bound, so that the next one is bound again, and leave no depth state.
   void ForgetDeviceState();
 
+  // Someone else has drawn with the immediate context after BeginFrame --
+  // WebRender draws the tiles after it starts compositing: set again all the
+  // state BeginFrame set and the draws that follow rely on.
+  void RestoreDeviceState();
+
   ID3D11DeviceContext* GetDC() { return mContext; }
 
   virtual void RequestAllowFrameRecording(bool aWillRecord) override {

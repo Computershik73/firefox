@@ -577,8 +577,13 @@ already_AddRefed<Promise> ScreenOrientation::LockInternal(
   }
 
   AbortInProcessOrientationPromises(bc);
-  dom::ContentChild::GetSingleton()->SendAbortOtherOrientationPendingPromises(
-      bc);
+  // Only a content process has anyone else to tell. Without this check the
+  // send dereferences a null ContentChild and takes the browser down, which is
+  // what happened every time a video player asked to lock the orientation on
+  // its way into fullscreen.
+  if (dom::ContentChild* contentChild = dom::ContentChild::GetSingleton()) {
+    contentChild->SendAbortOtherOrientationPendingPromises(bc);
+  }
 
   if (!doc->SetOrientationPendingPromise(p)) {
     p->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);

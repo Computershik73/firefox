@@ -2814,6 +2814,20 @@
         b.setAttribute(attribute, defaultBrowserAttributes[attribute]);
       }
 
+      // With no content processes there is nothing to be remote in, and
+      // saying otherwise does not merely fail quietly: a browser carrying
+      // remote="true" takes the cross-process document path, so the start page
+      // came back 200 OK, went to ParentChannelListener to be handed to a
+      // content process, and stopped there. The tab sat on about:blank
+      // reporting a load forever, and closing it fixed nothing except that its
+      // replacement was built without the attribute.
+      //
+      // remoteType is predicted from the URI without anyone asking whether
+      // e10s is on, so the question is asked here.
+      if (!gMultiProcessBrowser) {
+        remoteType = E10SUtils.NOT_REMOTE;
+      }
+
       if (gMultiProcessBrowser || remoteType) {
         b.setAttribute("maychangeremoteness", "true");
       }
@@ -6083,8 +6097,13 @@
 
       if (aTab.linkedPanel) {
         if (!adoptedByTab && !gMultiProcessBrowser) {
-          // Prevent this tab from showing further dialogs, since we're closing it
-          browser.contentWindow.windowUtils.disableDialogs();
+          // Prevent this tab from showing further dialogs, since we're closing it.
+          // A tab can have a linkedPanel and still no content window -- a tab
+          // restored but never selected, for one -- and throwing here abandons
+          // the rest of _endRemoveTab, leaving the progress listener attached
+          // and the tab half removed, after which nothing in this window
+          // navigates again.
+          browser.contentWindow?.windowUtils.disableDialogs();
         }
 
         // Remove the tab's filter and progress listener.

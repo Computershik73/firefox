@@ -1046,12 +1046,45 @@ class CheckPermitUnloadRequest final : public PromiseNativeHandler,
       // but we still need to handle the traversable navigate handler.
       mozilla::NotNull<RefPtr<nsDocShellLoadState>> loadState =
           WrapNotNull(aDocShellLoadState);
+      // GetContentParent() is null when the top-level window global lives in
+      // this process, which is every window when the browser runs without
+      // content processes. Sending to it crashes in ParamTraits while it
+      // serialises the load state -- pressing Back was enough, by way of
+      // nsDocShell::GoBack, nsSHistory::LoadURIs and
+      // MaybeCheckUnloadingIsCanceled. The walk below already handles the same
+      // case by running the child-side code here instead; this branch had been
+      // left out.
       if (mAction ==
           nsIDocumentViewer::PermitUnloadAction::eDontPromptAndUnload) {
-        cp->SendDispatchNavigateToTraversable(bc, loadState, resolve, reject);
+        if (cp) {
+          cp->SendDispatchNavigateToTraversable(bc, loadState, resolve, reject);
+        } else {
+          NS_DispatchToMainThread(NS_NewRunnableFunction(
+              "DispatchNavigateToTraversable",
+              [bc = RefPtr{bc}, loadState, resolve]()
+                  MOZ_CAN_RUN_SCRIPT_BOUNDARY_LAMBDA {
+                    if (!bc || !bc->GetDocShell()) {
+                      resolve(nsIDocumentViewer::eContinue);
+                      return;
+                    }
+                    RefPtr<nsDocShell> docShell =
+                        nsDocShell::Cast(bc->GetDocShell());
+                    resolve(docShell->MaybeFireTraversableTraverseHistory(
+                        MOZ_KnownLive(loadState.get()), Nothing()));
+                  }));
+        }
       } else {
-        cp->SendDispatchBeforeUnloadToSubtree(bc, Some(loadState), resolve,
-                                              reject);
+        if (cp) {
+          cp->SendDispatchBeforeUnloadToSubtree(bc, Some(loadState), resolve,
+                                                reject);
+        } else {
+          NS_DispatchToMainThread(NS_NewRunnableFunction(
+              "DispatchBeforeUnloadToSubtree",
+              [bc = RefPtr{bc}, loadState, resolve]() {
+                ContentChild::DispatchBeforeUnloadToSubtree(
+                    bc, Some(loadState), resolve);
+              }));
+        }
       }
     } else {
       bc->PreOrderWalk([&](dom::BrowsingContext* aBC) {

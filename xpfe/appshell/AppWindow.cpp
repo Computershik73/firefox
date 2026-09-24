@@ -7,6 +7,11 @@
 
 // Local includes
 #include "AppWindow.h"
+#if defined(GECKO_W10M)
+#  include "nsPrintfCString.h"
+#include "xpcpublic.h"
+extern "C" void GeckoW10mNote(const char* text);
+#endif
 #include <algorithm>
 
 // Helper classes
@@ -485,6 +490,28 @@ NS_IMETHODIMP AppWindow::RollupAllPopups() {
 
 NS_IMETHODIMP AppWindow::Destroy() {
   nsCOMPtr<nsIAppWindow> kungFuDeathGrip(this);
+#if defined(GECKO_W10M)
+  {
+    // The browser quit twice within a minute of starting, from a window
+    // close nobody asked for. Name the window on its way out.
+    nsAutoCString spec("(no document)");
+    if (mDocShell) {
+      if (nsCOMPtr<dom::Document> doc = mDocShell->GetDocument()) {
+        if (nsIURI* uri = doc->GetDocumentURI()) {
+          uri->GetSpec(spec);
+        }
+      }
+    }
+    nsPrintfCString note("window: destroying %s", spec.get());
+    GeckoW10mNote(note.get());
+    if (JSContext* cx = nsContentUtils::GetCurrentJSContext()) {
+      if (JS::UniqueChars stack = xpc_PrintJSStack(cx, false, false, false)) {
+        nsPrintfCString js("window: closed from JS: %s", stack.get());
+        GeckoW10mNote(js.get());
+      }
+    }
+  }
+#endif
 
   if (mDocShell) {
     mDocShell->RemoveProgressListener(this);

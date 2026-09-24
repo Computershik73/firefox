@@ -3,6 +3,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsAppStartup.h"
+#include "xpcpublic.h"
+#include "nsContentUtils.h"
+
+#if defined(GECKO_W10M)
+#  include "nsPrintfCString.h"
+extern "C" void GeckoW10mNote(const char* text);
+#endif
 
 #include "nsComponentManagerUtils.h"
 #include "nsIAppShellService.h"
@@ -324,6 +331,23 @@ nsAppStartup::Run(void) {
 
 NS_IMETHODIMP
 nsAppStartup::Quit(uint32_t aMode, int aExitCode, bool* aUserAllowedQuit) {
+#if defined(GECKO_W10M)
+  // Startup reaches final-ui-startup and then quits without ever opening a
+  // window. Whoever calls this is the reason, and the return address names
+  // them -- the caller is JS more often than not, in which case the console
+  // notes above say which script.
+  {
+    nsPrintfCString note("quit: mode=0x%x exit=%d from %p", aMode, aExitCode,
+                         __builtin_return_address(0));
+    GeckoW10mNote(note.get());
+    if (JSContext* cx = nsContentUtils::GetCurrentJSContext()) {
+      if (JS::UniqueChars stack = xpc_PrintJSStack(cx, false, false, false)) {
+        nsPrintfCString js("quit: JS stack: %s", stack.get());
+        GeckoW10mNote(js.get());
+      }
+    }
+  }
+#endif
   if ((aMode & eSilently) != 0 && (aMode & eRestart) == 0) {
     // eSilently is only valid when combined with eRestart.
     return NS_ERROR_INVALID_ARG;

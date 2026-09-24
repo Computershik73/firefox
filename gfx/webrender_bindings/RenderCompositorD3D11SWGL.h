@@ -40,6 +40,7 @@ class RenderCompositorD3D11SWGL : public RenderCompositorLayersSWGL {
   }
 
   bool BeginFrame() override;
+  RenderedFrameId EndFrame(const nsTArray<DeviceIntRect>& aDirtyRects) override;
   void StartCompositing(wr::ColorF aClearColor,
                         const wr::DeviceIntRect* aDirtyRects,
                         size_t aNumDirtyRects,
@@ -109,6 +110,11 @@ class RenderCompositorD3D11SWGL : public RenderCompositorLayersSWGL {
   // targets and there are no staging textures.
   bool mGpuShading = false;
   uint32_t mGpuStatsFrames = 0;
+  // For the log, while GPU shading is young: what the GPU put into the first
+  // tiles and onto the screen in the first frames.
+  bool ProbePixel(ID3D11Texture2D* aTexture, int aX, int aY, uint32_t* aOut);
+  uint32_t mTileProbes = 0;
+  uint32_t mFrameProbes = 0;
 };
 
 class SurfaceD3D11SWGL : public RenderCompositorLayersSWGL::Surface {

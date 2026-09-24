@@ -373,6 +373,12 @@ impl WindowWrapper {
 fn make_software_context() -> swgl::Context {
     let ctx = swgl::Context::create();
     ctx.make_current();
+    // SWGL_GPU=hw or SWGL_GPU=warp: pixel shading on a Direct3D 11 device
+    // capped at feature level 9_3, as on the Lumia 650.
+    if let Ok(mode) = std::env::var("SWGL_GPU") {
+        let ok = ctx.gpu_attach_new_device(0x9300, mode == "warp");
+        eprintln!("swgl: GPU pixel shading ({}) {}", mode, if ok { "on" } else { "FAILED" });
+    }
     ctx
 }
 

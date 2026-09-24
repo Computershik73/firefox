@@ -322,6 +322,9 @@ extern "C" {
     fn ReferenceContext(ctx: *mut c_void);
     fn DestroyContext(ctx: *mut c_void);
     fn MakeCurrent(ctx: *mut c_void);
+    fn SwglGpuAttach(device: *mut c_void) -> bool;
+    fn SwglGpuAttachNewDevice(max_level: i32, warp: bool) -> bool;
+    fn SwglGpuStats(out8: *mut u32);
     fn ReportMemory(ctx: *mut c_void, size_of_op: unsafe extern "C" fn(ptr: *const c_void) -> usize) -> usize;
 }
 
@@ -349,6 +352,30 @@ impl Context {
         unsafe {
             MakeCurrent(self.0);
         }
+    }
+
+    /// Hands pixel shading to a Direct3D 11 device (an ID3D11Device*), for
+    /// GPUs that cannot run WebRender themselves -- feature level 9_3 is
+    /// enough. The context must be current. Null detaches. Returns false if
+    /// the device cannot take the shaders, or on platforms without the path.
+    pub fn gpu_attach(&self, device: *mut c_void) -> bool {
+        unsafe { SwglGpuAttach(device) }
+    }
+
+    /// As gpu_attach, with a device of its own on the default adapter, capped
+    /// at `max_level` (0x9300 for 9_3): for testing on a better GPU than the
+    /// one being imitated. `warp` uses Microsoft's software rasteriser.
+    pub fn gpu_attach_new_device(&self, max_level: i32, warp: bool) -> bool {
+        unsafe { SwglGpuAttachNewDevice(max_level, warp) }
+    }
+
+    /// Counters since the last call: GPU draws, CPU draws, GPU quads,
+    /// uploads, readbacks, GPU clears, draws refused for their program, and
+    /// for their state.
+    pub fn gpu_stats(&self) -> [u32; 8] {
+        let mut out = [0u32; 8];
+        unsafe { SwglGpuStats(out.as_mut_ptr()) };
+        out
     }
 
     pub fn init_default_framebuffer(

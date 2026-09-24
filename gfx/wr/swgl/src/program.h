@@ -39,6 +39,8 @@ struct GpuProgramInfo {
   int fragcoord_offset;
   int num_samplers;
   const char* name;
+  // Per sampler: 1 for sampler2DRect (bound as GL_TEXTURE_RECTANGLE), else 0.
+  const unsigned char* sampler_rect;
 };
 
 struct ProgramImpl {

@@ -18,6 +18,17 @@ extern crate tracy_rs;
 /// therefore quantized to 1/60 px (bug 2059570).
 pub const AU_PER_DEV_PX: f32 = 60.0;
 
+// WebRender's device reports to the Windows 10 Mobile port's log through
+// GeckoW10mNote, which lives in xul. Wrench has no xul; the notes go to stderr.
+#[cfg(windows)]
+#[no_mangle]
+pub extern "C" fn GeckoW10mNote(text: *const std::os::raw::c_char) {
+    if !text.is_null() {
+        let s = unsafe { std::ffi::CStr::from_ptr(text) };
+        eprintln!("note: {}", s.to_string_lossy());
+    }
+}
+
 mod angle;
 mod blob;
 #[cfg(target_os = "windows")]

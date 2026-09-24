@@ -1483,3 +1483,62 @@ pub fn translate_fragment_file(path: &str) -> Result<(String, Layout), Vec<Strin
     let (state, hir, _) = crate::parse_shader(path.to_string());
     translate_fragment(&state, &hir)
 }
+
+/// The C++ that goes into SWGL's program class so the GPU path can use it:
+/// packing the varyings of the quad the vertex shader just ran into the
+/// layout above, and naming the texture unit behind each sampler.
+///
+/// `interps` points at four InterpOutputs, `stride` bytes apart; `v` receives
+/// 32 floats per vertex; `f` receives the flat values that live in the flat
+/// texture. Flat values are fields of the program, which is where SWGL's
+/// vertex shader leaves them.
+pub fn cxx_glue(layout: &Layout) -> String {
+    let mut s = String::new();
+    s.push_str(
+        "void gpu_pack(const char* interps, size_t stride, float* v, float* f) override {\n",
+    );
+    s.push_str(" (void)interps; (void)stride; (void)v; (void)f;\n");
+    let comps = ["x", "y", "z", "w"];
+    let access = |var: &Varying, k: usize, base: &str| -> String {
+        if var.floats == 1 {
+            format!("float({}{})", base, var.name)
+        } else if var.kind.is_matrix() {
+            // Column-major, as GLSL constructs them and hlsl.rs unpacks them.
+            let n = match var.kind {
+                hir::TypeKind::Mat2 => 2,
+                hir::TypeKind::Mat3 => 3,
+                _ => 4,
+            };
+            format!("float({}{}[{}].{})", base, var.name, k / n, comps[k % n])
+        } else {
+            format!("float({}{}.{})", base, var.name, comps[k])
+        }
+    };
+    s.push_str(" for (int n = 0; n < 4; n++) {\n");
+    s.push_str("  const InterpOutputs& io = *reinterpret_cast<const InterpOutputs*>(interps + n * stride);\n");
+    s.push_str("  (void)io;\n");
+    s.push_str("  float* o = v + n * 32;\n");
+    for var in layout.varyings.iter().filter(|v| !v.in_texture) {
+        for k in 0..var.floats {
+            let base = if var.flat { "" } else { "io." };
+            let _ = writeln!(s, "  o[{}] = {};", var.offset + k, access(var, k, base));
+        }
+    }
+    s.push_str(" }\n");
+    for var in layout.varyings.iter().filter(|v| v.in_texture) {
+        for k in 0..var.floats {
+            let _ = writeln!(s, " f[{}] = {};", var.offset + k, access(var, k, ""));
+        }
+    }
+    s.push_str("}\n");
+    s.push_str("int gpu_sampler_unit(int i) const override {\n switch (i) {\n");
+    for smp in &layout.samplers {
+        let _ = writeln!(
+            s,
+            "  case {}: return samplers.{}_slot;",
+            smp.register, smp.name
+        );
+    }
+    s.push_str("  default: return -1;\n }\n}\n");
+    s
+}

@@ -109,6 +109,12 @@
 // https://crbug.com/958373
 #define TRAP_SEQUENCE2_() __asm volatile("")
 
+#elif defined(ARCH_CPU_ARMEL)
+
+// Same sequence as the GCC/Arm32 path above: int3/ud2 are x86 opcodes.
+#define TRAP_SEQUENCE1_() asm volatile("bkpt #0")
+#define TRAP_SEQUENCE2_() asm volatile("udf #0")
+
 #else
 
 #define TRAP_SEQUENCE1_() asm volatile("int3")

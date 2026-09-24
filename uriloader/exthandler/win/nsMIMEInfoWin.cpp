@@ -286,8 +286,23 @@ nsMIMEInfoWin::GetProperty(const nsAString& aName, nsIVariant** _retval) {
 
 // this implementation was pretty much copied verbatime from
 // Tony Robinson's code in nsExternalProtocolWin.cpp
+#if defined(GECKO_W10M)
+extern "C" bool gecko_w10m_launch_uri(const char* aUri);
+#endif
+
 nsresult nsMIMEInfoWin::LoadUriInternal(nsIURI* aURL) {
   nsresult rv = NS_OK;
+#if defined(GECKO_W10M)
+  // ShellExecute is not available to an app container, and the phone opens
+  // URIs through the shell's Launcher instead. mailto:, tel:, ms-settings:
+  // and the like all arrive here.
+  if (aURL) {
+    nsAutoCString spec;
+    if (NS_SUCCEEDED(aURL->GetSpec(spec)) && gecko_w10m_launch_uri(spec.get())) {
+      return NS_OK;
+    }
+  }
+#endif
 
   // 1. Find the default app for this protocol
   // 2. Set up the command line

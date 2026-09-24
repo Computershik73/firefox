@@ -63,8 +63,23 @@ static nsresult GetExtensionFromWindowsMimeDatabase(const nsACString& aMimeType,
   return NS_OK;
 }
 
+#if defined(GECKO_W10M)
+extern "C" bool gecko_w10m_has_uri_launcher();
+#endif
+
 nsresult nsOSHelperAppService::OSProtocolHandlerExists(
     const char* aProtocolScheme, bool* aHandlerExists) {
+#if defined(GECKO_W10M)
+  // The registry this would read is closed to an app container, so it always
+  // said "no handler" and Gecko refused every external link. The shell's
+  // launcher knows better: let the system decide whether it can open the
+  // scheme.
+  if (gecko_w10m_has_uri_launcher()) {
+    *aHandlerExists = true;
+    return NS_OK;
+  }
+#endif
+
   // look up the protocol scheme in the windows registry....if we find a match
   // then we have a handler for it...
   *aHandlerExists = false;

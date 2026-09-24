@@ -14,6 +14,11 @@
 namespace mozilla {
 
 inline bool IsWindows10BuildOrLater(uint32_t aBuild) {
+#if defined(GECKO_W10M)
+  // VerifyVersionInfoW is desktop-partition only. Windows 10 Mobile tops out at
+  // build 15254, so report that as the running build.
+  return aBuild <= 15254;
+#else
   static Atomic<uint32_t> minBuild(0);
   static Atomic<uint32_t> maxBuild(UINT32_MAX);
 
@@ -48,6 +53,7 @@ inline bool IsWindows10BuildOrLater(uint32_t aBuild) {
 
   maxBuild = aBuild;
   return false;
+#endif  // !GECKO_W10M
 }
 
 MOZ_ALWAYS_INLINE bool IsWin10AnniversaryUpdateOrLater() {

@@ -260,11 +260,17 @@ _PR_MD_SET_CURRENT_THREAD_NAME(const char* name)
     info.dwThreadID = -1;
     info.dwFlags = 0;
 
+#if defined(_M_ARM) && defined(__clang__)
+    /* clang implements no SEH on 32-bit ARM Windows, and this exception is
+       purely a debugger thread-naming convention, so skip it. */
+    (void)info;
+#else
     __try {
         RaiseException(MS_VC_EXCEPTION, 0, sizeof(info) / sizeof(ULONG_PTR),
                        (ULONG_PTR*)&info);
     } __except (EXCEPTION_CONTINUE_EXECUTION) {
     }
+#endif
 #endif
 }
 

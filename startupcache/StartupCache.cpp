@@ -97,6 +97,11 @@ static const size_t STARTUP_CACHE_MAX_CAPACITY = 5000;
 // Not const because we change it for gtests.
 static uint8_t STARTUP_CACHE_WRITE_TIMEOUT = 60;
 
+#if defined(GECKO_W10M)
+#  include "nsPrintfCString.h"
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 #define STARTUP_CACHE_NAME "startupCache." SC_WORDSIZE "." SC_ENDIAN
 
 #define INITIAL_WRITE_TOPIC "browser-idle-startup-tasks-finished"
@@ -186,6 +191,13 @@ nsresult StartupCache::Init() {
   if (mozilla::RunningGTest()) {
     STARTUP_CACHE_WRITE_TIMEOUT = 3;
   }
+#if defined(GECKO_W10M)
+  // Sixty seconds after the last script is put in, on a phone, is sixty
+  // seconds in which the user may well have closed the app -- and the app is
+  // never closed here, it is ended. Two launches in one device log ended
+  // before this fired, and the third compiled everything from source again.
+  STARTUP_CACHE_WRITE_TIMEOUT = 5;
+#endif
 
   // This allows to override the startup cache filename
   // which is useful from xpcshell, when there is no ProfLDS directory to keep
@@ -525,8 +537,22 @@ Result<Ok, nsresult> StartupCache::WriteToDisk(WriteType aWriteType) {
   }
 
   AutoFDClose raiiFd;
+#if defined(GECKO_W10M)
+  {
+    nsresult openRv = mFile->OpenNSPRFileDesc(
+        PR_WRONLY | PR_CREATE_FILE | PR_TRUNCATE, 0644,
+        getter_Transfers(raiiFd));
+    if (NS_FAILED(openRv)) {
+      nsPrintfCString note("startup cache: could not open the file for writing, rv=%x",
+                           static_cast<unsigned>(openRv));
+      GeckoW10mNote(note.get());
+      return Err(openRv);
+    }
+  }
+#else
   MOZ_TRY(mFile->OpenNSPRFileDesc(PR_WRONLY | PR_CREATE_FILE | PR_TRUNCATE,
                                   0644, getter_Transfers(raiiFd)));
+#endif
   const auto fd = raiiFd.get();
 
   nsTArray<StartupCacheEntry::KeyValuePair> entries(mTable.count());
@@ -539,8 +565,17 @@ Result<Ok, nsresult> StartupCache::WriteToDisk(WriteType aWriteType) {
   }
 
   if (entries.IsEmpty()) {
+#if defined(GECKO_W10M)
+    GeckoW10mNote("startup cache: nothing was requested this run, nothing to write");
+#endif
     return Ok();
   }
+#if defined(GECKO_W10M)
+  {
+    nsPrintfCString note("startup cache: writing %d entries", (int)entries.Length());
+    GeckoW10mNote(note.get());
+  }
+#endif
 
   entries.Sort(StartupCacheEntry::Comparator());
   loader::OutputBuffer buf;
@@ -779,10 +814,14 @@ void StartupCache::MaybeWriteOffMainThread(WriteType aWriteType,
     MutexAutoLock lock(mTableLock);
     if (mRegularWriteDone ||
         (mCacheData.initialized() && !ShouldCompactCache())) {
+#if defined(GECKO_W10M)
+      GeckoW10mNote(mRegularWriteDone
+                      ? "startup cache: not writing, the regular write is done"
+                      : "startup cache: not writing, the file on disk is good enough");
+#endif
       return;
     }
   }
-  // Keep this code in sync with EnsureShutdownWriteComplete.
   WaitOnPrefetch();
   {
     MutexAutoLock lock(mTableLock);

@@ -8,6 +8,8 @@
 
 #include "nsChromeRegistryChrome.h"
 
+#include "nsPrintfCString.h"
+
 #if defined(XP_WIN)
 #  include <windows.h>
 #elif defined(XP_MACOSX)
@@ -413,6 +415,12 @@ void nsChromeRegistryChrome::nsProviderArray::EnumerateToArray(
     a->AppendElement(mArray[i].provider);
   }
 }
+
+#if defined(GECKO_W10M)
+// Defined in toolkit/xre/Bootstrap.cpp: one line to a file the shell names,
+// for when there is no debugger, no console and no MOZ_LOG yet.
+extern "C" void GeckoW10mNote(const char* text);
+#endif
 
 nsIURI* nsChromeRegistry::ManifestProcessingContext::GetManifestURI() {
   if (!mManifestURI) {

@@ -175,7 +175,7 @@ fn translate_shader(
     };
     // YUV: the GPU dialect's colour-matrix code needs matrix operations SWGL's
     // C++ runtime lacks. Video reaches the compositor as its own surfaces.
-    if shader_key.contains("YUV") || shader_key.contains("yuv") {
+    if std::env::var("SWGL_GPU_NO_YUV").is_ok() && (shader_key.contains("YUV") || shader_key.contains("yuv")) {
         return false;
     }
     // Shaders glsl-to-cxx cannot take outside SWGL's dialect just have no GPU

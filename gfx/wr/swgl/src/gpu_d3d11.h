@@ -66,6 +66,7 @@ static int64_t gpu_cache_bytes = 0;
 
 static int64_t texel_bytes(DXGI_FORMAT f, int64_t w, int64_t h) {
   int b = f == DXGI_FORMAT_R8_UNORM                ? 1
+          : f == DXGI_FORMAT_R8G8_UNORM            ? 2
           : f == DXGI_FORMAT_R32G32B32A32_FLOAT    ? 16
                                                    : 4;
   return w * h * b;
@@ -165,6 +166,7 @@ struct GpuBackend {
   D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_9_1;
 
   bool r8_ok = false;
+  bool rg8_ok = false;
   bool rgba32f_ok = false;
 
   ID3D11VertexShader* vs[9] = {};
@@ -314,6 +316,11 @@ static bool init_backend(GpuBackend* g) {
              (support & D3D11_FORMAT_SUPPORT_TEXTURE2D) &&
              (support & D3D11_FORMAT_SUPPORT_RENDER_TARGET) &&
              (support & D3D11_FORMAT_SUPPORT_SHADER_SAMPLE);
+  support = 0;
+  g->rg8_ok = SUCCEEDED(g->dev->CheckFormatSupport(DXGI_FORMAT_R8G8_UNORM,
+                                                   &support)) &&
+              (support & D3D11_FORMAT_SUPPORT_TEXTURE2D) &&
+              (support & D3D11_FORMAT_SUPPORT_SHADER_SAMPLE);
   support = 0;
   g->rgba32f_ok =
       SUCCEEDED(g->dev->CheckFormatSupport(DXGI_FORMAT_R32G32B32A32_FLOAT,
@@ -521,6 +528,10 @@ static inline bool gl_format_on_gpu(GpuBackend* g, GLenum internal_format,
         *expanded = true;
       }
       return true;
+    case GL_RG8:
+      // The chroma plane of NV12 video.
+      *format = DXGI_FORMAT_R8G8_UNORM;
+      return g->rg8_ok;
     case GL_RGBA32F:
     case GL_RGBA32I:
       *format = DXGI_FORMAT_R32G32B32A32_FLOAT;
@@ -1979,9 +1990,10 @@ void SwglGpuDescribe(char* out, size_t size) {
     if (p && p->gpu_impl && p->gpu_impl->gpu_info()) programs++;
   }
   snprintf(out, size,
-           "feature level %x, R8 targets %s, float textures %s (flat data "
-           "and gradients %s), max texture %d",
+           "feature level %x, R8 targets %s, RG8 textures %s (NV12 video), "
+           "float textures %s (flat data and gradients %s), max texture %d",
            unsigned(g->level), g->r8_ok ? "yes" : "no (BGRA instead)",
+           g->rg8_ok ? "yes" : "no",
            g->rgba32f_ok ? "yes" : "NO", g->rgba32f_ok ? "on the GPU" : "on the CPU",
            gpu_max_texture_size());
   (void)programs;

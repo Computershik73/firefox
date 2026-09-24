@@ -559,6 +559,7 @@ struct vec2 {
   }
   Float& sel(XYZW c1) { return select(c1); }
   vec2 sel(XYZW c1, XYZW c2) { return vec2(select(c1), select(c2)); }
+  vec3 sel(XYZW c1, XYZW c2, XYZW c3);
 
   vec4 sel(XYZW c1, XYZW c2, XYZW c3, XYZW c4);
 
@@ -1255,6 +1256,11 @@ struct ivec4 {
   I32 w;
 };
 
+// A constant vector shifted per vertex (the GPU variants' YUV set-up).
+inline ivec4 operator<<(ivec4_scalar a, I32 b) {
+  return ivec4(I32(a.x) << b, I32(a.y) << b, I32(a.z) << b, I32(a.w) << b);
+}
+
 ivec4_scalar force_scalar(const ivec4& v) {
   return ivec4_scalar{force_scalar(v.x), force_scalar(v.y), force_scalar(v.z),
                       force_scalar(v.w)};
@@ -1929,6 +1935,11 @@ struct vec4_scalar {
 
 vec3_scalar vec2_scalar::sel(XYZW c1, XYZW c2, XYZW c3) {
   return {select(c1), select(c2), select(c3)};
+}
+// For the GPU variants, whose vertex stage runs on vectors what SWGL's own
+// shaders run on scalars (the YUV colour set-up, for one).
+vec3 vec2::sel(XYZW c1, XYZW c2, XYZW c3) {
+  return vec3(select(c1), select(c2), select(c3));
 }
 vec4_scalar vec2_scalar::sel(XYZW c1, XYZW c2, XYZW c3, XYZW c4) {
   return vec4_scalar{select(c1), select(c2), select(c3), select(c4)};
@@ -2636,6 +2647,28 @@ mat3 make_mat3(const N& n) {
 template <typename X, typename Y, typename Z>
 mat3 make_mat3(const X& x, const Y& y, const Z& z) {
   return mat3(x, y, z);
+}
+
+// Nine components of which some vary per vertex (the GPU variants' vertex
+// stage), and products of such matrices.
+template <typename A, typename B, typename C, typename D, typename E,
+          typename F, typename G, typename H, typename I>
+mat3 make_mat3(const A& m0, const B& m1, const C& m2, const D& m3,
+               const E& m4, const F& m5, const G& m6, const H& m7,
+               const I& m8) {
+  return mat3(Float(m0), Float(m1), Float(m2), Float(m3), Float(m4),
+              Float(m5), Float(m6), Float(m7), Float(m8));
+}
+
+inline mat3 operator*(const mat3& a, const mat3& b) {
+  mat3 r;
+  for (int c = 0; c < 3; c++) {
+    const vec3& v = b[c];
+    r[c].x = a[0].x * v.x + a[1].x * v.y + a[2].x * v.z;
+    r[c].y = a[0].y * v.x + a[1].y * v.y + a[2].y * v.z;
+    r[c].z = a[0].z * v.x + a[1].z * v.y + a[2].z * v.z;
+  }
+  return r;
 }
 
 struct mat3x4_scalar {

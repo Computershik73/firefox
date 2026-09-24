@@ -142,6 +142,7 @@ struct GpuBackend {
     uint32_t gpu_clears = 0;
     uint32_t refused_program = 0;
     uint32_t refused_state = 0;
+    uint32_t depth_lost = 0;
   } stats;
 
   ~GpuBackend() {
@@ -531,6 +532,14 @@ static ID3D11Texture2D* get_staging(GpuBackend* g, GpuTex& gt) {
 static void readback(GpuBackend* g, Texture& t) {
   GpuTex& gt = *t.gpu;
   if (!t.buf || !gt.tex) return;
+  if (t.internal_format == GL_DEPTH_COMPONENT24) {
+    // Feature level 9 copies no depth buffer anywhere. The CPU keeps what
+    // it had; a CPU draw testing against depth the GPU wrote will be wrong,
+    // which is why everything drawn with depth has a GPU shader.
+    g->stats.depth_lost++;
+    if (trace()) fprintf(stderr, "gpu: depth cannot come back to the CPU\n");
+    return;
+  }
   ID3D11Texture2D* s = get_staging(g, gt);
   if (!s) {
     g->broken = true;
@@ -596,8 +605,30 @@ static bool to_gpu(GpuBackend* g, Texture& t) {
         prepare_texture(t);
         upload_rows(g, t, 0, 0, t.width, t.height);
       }
-    } else if (t.internal_format == GL_DEPTH_COMPONENT24 && !t.cleared()) {
-      // Never cleared: nothing worth sending.
+    } else if (t.internal_format == GL_DEPTH_COMPONENT24) {
+      // Direct3D takes no UpdateSubresource into a depth buffer, and reads
+      // none back at 9_3. What SWGL holds is almost always one clear value,
+      // which is a clear here too; anything else keeps the draw on the CPU.
+      if (t.cleared() && t.buf) {
+        uint32_t first = 0;
+        bool uniform = true;
+        for (int y = 0; y < t.height && uniform; y++) {
+          DepthRun* row = (DepthRun*)t.sample_ptr(0, y);
+          flatten_depth_runs(row, t.width);
+          const uint32_t* v = (const uint32_t*)row;
+          if (y == 0) first = v[0] & 0xFFFFFF;
+          for (int x = 0; x < t.width; x++) {
+            if ((v[x] & 0xFFFFFF) != first) {
+              uniform = false;
+              break;
+            }
+          }
+        }
+        if (!uniform) return false;
+        g->dc->ClearDepthStencilView(gt.dsv, D3D11_CLEAR_DEPTH,
+                                     float(first) / float(0xFFFFFF), 0);
+        g->stats.gpu_clears++;
+      }
     } else {
       upload_rows(g, t, 0, 0, t.width, t.height);
     }

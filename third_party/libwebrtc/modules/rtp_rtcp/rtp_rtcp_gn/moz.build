@@ -207,7 +207,10 @@ if CONFIG["TARGET_CPU"] == "arm":
 
     DEFINES["WEBRTC_ARCH_ARM"] = True
     DEFINES["WEBRTC_ARCH_ARM_V7"] = True
-    DEFINES["WEBRTC_HAS_NEON"] = True
+    # Windows on ARM32 has no libwebrtc NEON sources to go with this;
+    # see tools/patch-libwebrtc-win-arm32-neon.py.
+    if CONFIG["OS_TARGET"] != "WINNT":
+        DEFINES["WEBRTC_HAS_NEON"] = True
 
 if CONFIG["TARGET_CPU"] == "loongarch64":
 

@@ -142,11 +142,21 @@ if CONFIG["TARGET_CPU"] == "arm":
 
     DEFINES["WEBRTC_ARCH_ARM"] = True
     DEFINES["WEBRTC_ARCH_ARM_V7"] = True
-    DEFINES["WEBRTC_HAS_NEON"] = True
+    # Windows on ARM32 has no libwebrtc NEON sources to go with this;
+    # see tools/patch-libwebrtc-win-arm32-neon.py.
+    if CONFIG["OS_TARGET"] != "WINNT":
+        DEFINES["WEBRTC_HAS_NEON"] = True
 
-    SOURCES += [
-        "/third_party/libwebrtc/common_audio/third_party/spl_sqrt_floor/spl_sqrt_floor_arm.S"
-    ]
+    # A32 (ARM mode) assembly; Windows on ARM32 is Thumb-2 only, so the
+    # portable C implementation is used there instead.
+    if CONFIG["OS_TARGET"] == "WINNT":
+        # The portable spl_sqrt_floor.c is already picked up by the WINNT
+        # block above, so nothing to add here.
+        pass
+    else:
+        SOURCES += [
+            "/third_party/libwebrtc/common_audio/third_party/spl_sqrt_floor/spl_sqrt_floor_arm.S"
+        ]
 
 if CONFIG["TARGET_CPU"] == "loongarch64":
 

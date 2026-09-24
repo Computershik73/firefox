@@ -130,12 +130,25 @@ if CONFIG["TARGET_CPU"] == "arm":
 
     DEFINES["WEBRTC_ARCH_ARM"] = True
     DEFINES["WEBRTC_ARCH_ARM_V7"] = True
-    DEFINES["WEBRTC_HAS_NEON"] = True
+    # Windows on ARM32 has no libwebrtc NEON sources to go with this;
+    # see tools/patch-libwebrtc-win-arm32-neon.py.
+    if CONFIG["OS_TARGET"] != "WINNT":
+        DEFINES["WEBRTC_HAS_NEON"] = True
 
-    SOURCES += [
-        "/third_party/libwebrtc/common_audio/signal_processing/complex_bit_reverse_arm.S",
-        "/third_party/libwebrtc/common_audio/signal_processing/filter_ar_fast_q12_armv7.S"
-    ]
+    # libwebrtc's 32-bit ARM assembly is written in A32 (ARM mode), which
+    # Windows on ARM32 does not support -- it is Thumb-2 only, and the
+    # assembler rejects the predicated instructions outright. The portable C
+    # implementations of the same two routines are used instead.
+    if CONFIG["OS_TARGET"] == "WINNT":
+        # The portable C implementations of these two routines are already
+        # pulled in by common_audio_c_gn's WINNT block; adding them here too
+        # would define them twice in libxul.
+        pass
+    else:
+        SOURCES += [
+            "/third_party/libwebrtc/common_audio/signal_processing/complex_bit_reverse_arm.S",
+            "/third_party/libwebrtc/common_audio/signal_processing/filter_ar_fast_q12_armv7.S"
+        ]
 
 if CONFIG["TARGET_CPU"] == "loongarch64":
 

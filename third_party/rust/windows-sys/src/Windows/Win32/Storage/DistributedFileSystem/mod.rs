@@ -135,7 +135,7 @@ impl Default for DFS_INFO_150 {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct DFS_INFO_1_32 {
     pub EntryPath: u32,
@@ -164,7 +164,7 @@ impl Default for DFS_INFO_200 {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct DFS_INFO_2_32 {
     pub EntryPath: u32,
@@ -198,7 +198,7 @@ impl Default for DFS_INFO_300 {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct DFS_INFO_3_32 {
     pub EntryPath: u32,
@@ -224,7 +224,7 @@ impl Default for DFS_INFO_4 {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct DFS_INFO_4_32 {
     pub EntryPath: u32,
@@ -374,7 +374,7 @@ impl Default for DFS_STORAGE_INFO {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct DFS_STORAGE_INFO_0_32 {
     pub State: u32,

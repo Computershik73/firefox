@@ -546,14 +546,14 @@ impl Default for JET_COMMIT_ID {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct JET_COMMIT_ID {
     pub signLog: JET_SIGNATURE,
     pub reserved: i32,
     pub commitId: i64,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for JET_COMMIT_ID {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -1211,13 +1211,13 @@ impl Default for JET_INDEXID {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct JET_INDEXID {
     pub cbStruct: u32,
     pub rgbIndexId: [u8; 16],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for JET_INDEXID {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -1424,7 +1424,7 @@ pub struct JET_OBJECTINFO {
     pub cPage: u32,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct JET_OBJECTINFO {
     pub cbStruct: u32,
@@ -1540,7 +1540,7 @@ pub struct JET_RECPOS2 {
     pub centriesTotal: u64,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct JET_RECPOS2 {
     pub cbStruct: u32,
@@ -1564,7 +1564,7 @@ pub struct JET_RECSIZE {
     pub cMultiValues: u64,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct JET_RECSIZE {
     pub cbData: u64,
@@ -1593,7 +1593,7 @@ pub struct JET_RECSIZE2 {
     pub cbLongValueDataCompressed: u64,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct JET_RECSIZE2 {
     pub cbData: u64,
@@ -2008,7 +2008,7 @@ pub struct JET_THREADSTATS2 {
     pub cPageCacheMiss: u32,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct JET_THREADSTATS2 {
     pub cbStruct: u32,

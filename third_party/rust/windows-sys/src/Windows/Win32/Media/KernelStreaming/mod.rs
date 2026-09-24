@@ -2211,13 +2211,13 @@ impl Default for KSNODEPROPERTY_AUDIO_3D_LISTENER {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct KSNODEPROPERTY_AUDIO_3D_LISTENER {
     pub NodeProperty: KSNODEPROPERTY,
     pub ListenerId: *mut core::ffi::c_void,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for KSNODEPROPERTY_AUDIO_3D_LISTENER {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -2264,14 +2264,14 @@ impl Default for KSNODEPROPERTY_AUDIO_PROPERTY {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct KSNODEPROPERTY_AUDIO_PROPERTY {
     pub NodeProperty: KSNODEPROPERTY,
     pub AppContext: *mut core::ffi::c_void,
     pub Length: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for KSNODEPROPERTY_AUDIO_PROPERTY {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4583,7 +4583,7 @@ impl Default for KSSTREAM_HEADER {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct KSSTREAM_HEADER {
     pub Size: u32,
@@ -4596,7 +4596,7 @@ pub struct KSSTREAM_HEADER {
     pub OptionsFlags: u32,
     pub Reserved: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for KSSTREAM_HEADER {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }

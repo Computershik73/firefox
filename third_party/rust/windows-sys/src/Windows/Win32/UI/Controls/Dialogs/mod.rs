@@ -124,7 +124,7 @@ impl Default for CHOOSECOLORA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct CHOOSECOLORA {
     pub lStructSize: u32,
@@ -137,7 +137,7 @@ pub struct CHOOSECOLORA {
     pub lpfnHook: LPCCHOOKPROC,
     pub lpTemplateName: windows_sys::core::PCSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for CHOOSECOLORA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -164,7 +164,7 @@ impl Default for CHOOSECOLORW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct CHOOSECOLORW {
     pub lStructSize: u32,
@@ -177,7 +177,7 @@ pub struct CHOOSECOLORW {
     pub lpfnHook: LPCCHOOKPROC,
     pub lpTemplateName: windows_sys::core::PCWSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for CHOOSECOLORW {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -214,7 +214,7 @@ impl Default for CHOOSEFONTA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_Graphics_Gdi")]
 #[derive(Clone, Copy)]
 pub struct CHOOSEFONTA {
@@ -235,7 +235,7 @@ pub struct CHOOSEFONTA {
     pub nSizeMin: i32,
     pub nSizeMax: i32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_Graphics_Gdi")]
 impl Default for CHOOSEFONTA {
     fn default() -> Self {
@@ -272,7 +272,7 @@ impl Default for CHOOSEFONTW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_Graphics_Gdi")]
 #[derive(Clone, Copy)]
 pub struct CHOOSEFONTW {
@@ -293,7 +293,7 @@ pub struct CHOOSEFONTW {
     pub nSizeMin: i32,
     pub nSizeMax: i32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_Graphics_Gdi")]
 impl Default for CHOOSEFONTW {
     fn default() -> Self {
@@ -346,7 +346,7 @@ pub struct DEVNAMES {
     pub wDefault: u16,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct DEVNAMES {
     pub wDriverOffset: u16,
@@ -385,7 +385,7 @@ impl Default for FINDREPLACEA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct FINDREPLACEA {
     pub lStructSize: u32,
@@ -400,7 +400,7 @@ pub struct FINDREPLACEA {
     pub lpfnHook: LPFRHOOKPROC,
     pub lpTemplateName: windows_sys::core::PCSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for FINDREPLACEA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -429,7 +429,7 @@ impl Default for FINDREPLACEW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct FINDREPLACEW {
     pub lStructSize: u32,
@@ -444,7 +444,7 @@ pub struct FINDREPLACEW {
     pub lpfnHook: LPFRHOOKPROC,
     pub lpTemplateName: windows_sys::core::PCWSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for FINDREPLACEW {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -517,14 +517,14 @@ impl Default for OFNOTIFYA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct OFNOTIFYA {
     pub hdr: super::NMHDR,
     pub lpOFN: *mut OPENFILENAMEA,
     pub pszFile: windows_sys::core::PSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for OFNOTIFYA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -546,7 +546,7 @@ impl Default for OFNOTIFYEXA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct OFNOTIFYEXA {
     pub hdr: super::NMHDR,
@@ -554,7 +554,7 @@ pub struct OFNOTIFYEXA {
     pub psf: *mut core::ffi::c_void,
     pub pidl: *mut core::ffi::c_void,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for OFNOTIFYEXA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -576,7 +576,7 @@ impl Default for OFNOTIFYEXW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct OFNOTIFYEXW {
     pub hdr: super::NMHDR,
@@ -584,7 +584,7 @@ pub struct OFNOTIFYEXW {
     pub psf: *mut core::ffi::c_void,
     pub pidl: *mut core::ffi::c_void,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for OFNOTIFYEXW {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -605,14 +605,14 @@ impl Default for OFNOTIFYW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct OFNOTIFYW {
     pub hdr: super::NMHDR,
     pub lpOFN: *mut OPENFILENAMEW,
     pub pszFile: windows_sys::core::PWSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for OFNOTIFYW {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -684,7 +684,7 @@ impl Default for OPENFILENAMEA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct OPENFILENAMEA {
     pub lStructSize: u32,
@@ -711,7 +711,7 @@ pub struct OPENFILENAMEA {
     pub dwReserved: u32,
     pub FlagsEx: OPEN_FILENAME_FLAGS_EX,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for OPENFILENAMEA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -752,7 +752,7 @@ impl Default for OPENFILENAMEW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct OPENFILENAMEW {
     pub lStructSize: u32,
@@ -779,7 +779,7 @@ pub struct OPENFILENAMEW {
     pub dwReserved: u32,
     pub FlagsEx: OPEN_FILENAME_FLAGS_EX,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for OPENFILENAMEW {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -817,7 +817,7 @@ impl Default for OPENFILENAME_NT4A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct OPENFILENAME_NT4A {
     pub lStructSize: u32,
@@ -841,7 +841,7 @@ pub struct OPENFILENAME_NT4A {
     pub lpfnHook: LPOFNHOOKPROC,
     pub lpTemplateName: windows_sys::core::PCSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for OPENFILENAME_NT4A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -879,7 +879,7 @@ impl Default for OPENFILENAME_NT4W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct OPENFILENAME_NT4W {
     pub lStructSize: u32,
@@ -903,7 +903,7 @@ pub struct OPENFILENAME_NT4W {
     pub lpfnHook: LPOFNHOOKPROC,
     pub lpTemplateName: windows_sys::core::PCWSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for OPENFILENAME_NT4W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -937,7 +937,7 @@ impl Default for PAGESETUPDLGA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct PAGESETUPDLGA {
     pub lStructSize: u32,
@@ -955,7 +955,7 @@ pub struct PAGESETUPDLGA {
     pub lpPageSetupTemplateName: windows_sys::core::PCSTR,
     pub hPageSetupTemplate: super::super::super::Foundation::HGLOBAL,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for PAGESETUPDLGA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -987,7 +987,7 @@ impl Default for PAGESETUPDLGW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct PAGESETUPDLGW {
     pub lStructSize: u32,
@@ -1005,7 +1005,7 @@ pub struct PAGESETUPDLGW {
     pub lpPageSetupTemplateName: windows_sys::core::PCWSTR,
     pub hPageSetupTemplate: super::super::super::Foundation::HGLOBAL,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for PAGESETUPDLGW {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -1089,7 +1089,7 @@ impl Default for PRINTDLGA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_Graphics_Gdi")]
 #[derive(Clone, Copy)]
 pub struct PRINTDLGA {
@@ -1113,7 +1113,7 @@ pub struct PRINTDLGA {
     pub hPrintTemplate: super::super::super::Foundation::HGLOBAL,
     pub hSetupTemplate: super::super::super::Foundation::HGLOBAL,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_Graphics_Gdi")]
 impl Default for PRINTDLGA {
     fn default() -> Self {
@@ -1155,7 +1155,7 @@ impl Default for PRINTDLGEXA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_Graphics_Gdi")]
 #[derive(Clone, Copy)]
 pub struct PRINTDLGEXA {
@@ -1181,7 +1181,7 @@ pub struct PRINTDLGEXA {
     pub nStartPage: u32,
     pub dwResultAction: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_Graphics_Gdi")]
 impl Default for PRINTDLGEXA {
     fn default() -> Self {
@@ -1223,7 +1223,7 @@ impl Default for PRINTDLGEXW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_Graphics_Gdi")]
 #[derive(Clone, Copy)]
 pub struct PRINTDLGEXW {
@@ -1249,7 +1249,7 @@ pub struct PRINTDLGEXW {
     pub nStartPage: u32,
     pub dwResultAction: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_Graphics_Gdi")]
 impl Default for PRINTDLGEXW {
     fn default() -> Self {
@@ -1290,7 +1290,7 @@ impl Default for PRINTDLGW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_Graphics_Gdi")]
 #[derive(Clone, Copy)]
 pub struct PRINTDLGW {
@@ -1314,7 +1314,7 @@ pub struct PRINTDLGW {
     pub hPrintTemplate: super::super::super::Foundation::HGLOBAL,
     pub hSetupTemplate: super::super::super::Foundation::HGLOBAL,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_Graphics_Gdi")]
 impl Default for PRINTDLGW {
     fn default() -> Self {
@@ -1330,7 +1330,7 @@ pub struct PRINTPAGERANGE {
     pub nToPage: u32,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct PRINTPAGERANGE {
     pub nFromPage: u32,

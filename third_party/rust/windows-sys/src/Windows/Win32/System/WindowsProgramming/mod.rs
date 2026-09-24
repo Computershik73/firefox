@@ -233,21 +233,21 @@ windows_link::link!("kernel32.dll" "system" fn _llseek(hfile : i32, loffset : i3
 windows_link::link!("kernel32.dll" "system" fn _lopen(lppathname : windows_sys::core::PCSTR, ireadwrite : i32) -> i32);
 windows_link::link!("kernel32.dll" "system" fn _lread(hfile : i32, lpbuffer : *mut core::ffi::c_void, ubytes : u32) -> u32);
 windows_link::link!("kernel32.dll" "system" fn _lwrite(hfile : i32, lpbuffer : windows_sys::core::PCSTR, ubytes : u32) -> u32);
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 windows_link::link!("kernel32.dll" "system" fn uaw_lstrcmpW(string1 : *const u16, string2 : *const u16) -> i32);
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 windows_link::link!("kernel32.dll" "system" fn uaw_lstrcmpiW(string1 : *const u16, string2 : *const u16) -> i32);
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 windows_link::link!("kernel32.dll" "system" fn uaw_lstrlenW(string : *const u16) -> i32);
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 windows_link::link!("kernel32.dll" "system" fn uaw_wcschr(string : *const u16, character : u16) -> *mut u16);
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 windows_link::link!("kernel32.dll" "system" fn uaw_wcscpy(destination : *mut u16, source : *const u16) -> *mut u16);
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 windows_link::link!("kernel32.dll" "system" fn uaw_wcsicmp(string1 : *const u16, string2 : *const u16) -> i32);
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 windows_link::link!("kernel32.dll" "system" fn uaw_wcslen(string : *const u16) -> usize);
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 windows_link::link!("kernel32.dll" "system" fn uaw_wcsrchr(string : *const u16, character : u16) -> *mut u16);
 pub const AADBE_ADD_ENTRY: u32 = 1u32;
 pub const AADBE_DEL_ENTRY: u32 = 2u32;
@@ -705,7 +705,7 @@ impl Default for DELAYLOAD_INFO {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct DELAYLOAD_INFO {
     pub Size: u32,
@@ -717,7 +717,7 @@ pub struct DELAYLOAD_INFO {
     pub Unused: *mut core::ffi::c_void,
     pub LastError: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for DELAYLOAD_INFO {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -1636,13 +1636,13 @@ pub const S_WHITEVOICE: u32 = 7u32;
 pub const SetSockOptIoControlType: TDI_TL_IO_CONTROL_TYPE = 1i32;
 pub const SocketIoControlType: TDI_TL_IO_CONTROL_TYPE = 3i32;
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct TCP_REQUEST_QUERY_INFORMATION_EX32_XP {
     pub ID: TDIObjectID,
     pub Context: [u32; 4],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for TCP_REQUEST_QUERY_INFORMATION_EX32_XP {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }

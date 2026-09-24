@@ -4577,7 +4577,7 @@ pub struct SPLCLIENT_INFO_2_WINXP {
     pub hSplPrinter: u32,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct SPLCLIENT_INFO_2_WINXP {
     pub hSplPrinter: u64,

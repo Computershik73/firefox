@@ -1548,7 +1548,7 @@ impl Default for DUPLICATE_EXTENTS_DATA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct DUPLICATE_EXTENTS_DATA32 {
     pub FileHandle: u32,
@@ -1572,7 +1572,7 @@ impl Default for DUPLICATE_EXTENTS_DATA_EX {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct DUPLICATE_EXTENTS_DATA_EX32 {
     pub Size: u32,
@@ -3238,27 +3238,27 @@ impl Default for MARK_HANDLE_INFO_0 {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct MARK_HANDLE_INFO32 {
     pub Anonymous: MARK_HANDLE_INFO32_0,
     pub VolumeHandle: u32,
     pub HandleInfo: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for MARK_HANDLE_INFO32 {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub union MARK_HANDLE_INFO32_0 {
     pub UsnSourceInfo: u32,
     pub CopyNumber: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for MARK_HANDLE_INFO32_0 {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3322,7 +3322,7 @@ impl Default for MOVE_FILE_DATA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct MOVE_FILE_DATA32 {
     pub FileHandle: u32,

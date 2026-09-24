@@ -687,7 +687,7 @@ impl Default for CABINET_INFO_A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct CABINET_INFO_A {
     pub CabinetPath: windows_sys::core::PCSTR,
@@ -696,7 +696,7 @@ pub struct CABINET_INFO_A {
     pub SetId: u16,
     pub CabinetNumber: u16,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for CABINET_INFO_A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -719,7 +719,7 @@ impl Default for CABINET_INFO_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct CABINET_INFO_W {
     pub CabinetPath: windows_sys::core::PCWSTR,
@@ -728,7 +728,7 @@ pub struct CABINET_INFO_W {
     pub SetId: u16,
     pub CabinetNumber: u16,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for CABINET_INFO_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -1170,14 +1170,14 @@ impl Default for COINSTALLER_CONTEXT_DATA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct COINSTALLER_CONTEXT_DATA {
     pub PostProcessing: windows_sys::core::BOOL,
     pub InstallResult: u32,
     pub PrivateData: *mut core::ffi::c_void,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for COINSTALLER_CONTEXT_DATA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -1730,7 +1730,7 @@ impl Default for FILEPATHS_A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct FILEPATHS_A {
     pub Target: windows_sys::core::PCSTR,
@@ -1738,7 +1738,7 @@ pub struct FILEPATHS_A {
     pub Win32Error: u32,
     pub Flags: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for FILEPATHS_A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -1763,7 +1763,7 @@ impl Default for FILEPATHS_SIGNERINFO_A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct FILEPATHS_SIGNERINFO_A {
     pub Target: windows_sys::core::PCSTR,
@@ -1774,7 +1774,7 @@ pub struct FILEPATHS_SIGNERINFO_A {
     pub Version: windows_sys::core::PCSTR,
     pub CatalogFile: windows_sys::core::PCSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for FILEPATHS_SIGNERINFO_A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -1799,7 +1799,7 @@ impl Default for FILEPATHS_SIGNERINFO_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct FILEPATHS_SIGNERINFO_W {
     pub Target: windows_sys::core::PCWSTR,
@@ -1810,7 +1810,7 @@ pub struct FILEPATHS_SIGNERINFO_W {
     pub Version: windows_sys::core::PCWSTR,
     pub CatalogFile: windows_sys::core::PCWSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for FILEPATHS_SIGNERINFO_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -1832,7 +1832,7 @@ impl Default for FILEPATHS_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct FILEPATHS_W {
     pub Target: windows_sys::core::PCWSTR,
@@ -1840,7 +1840,7 @@ pub struct FILEPATHS_W {
     pub Win32Error: u32,
     pub Flags: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for FILEPATHS_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -1870,7 +1870,7 @@ impl Default for FILE_IN_CABINET_INFO_A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct FILE_IN_CABINET_INFO_A {
     pub NameInCabinet: windows_sys::core::PCSTR,
@@ -1881,7 +1881,7 @@ pub struct FILE_IN_CABINET_INFO_A {
     pub DosAttribs: u16,
     pub FullTargetName: [i8; 260],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for FILE_IN_CABINET_INFO_A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -1906,7 +1906,7 @@ impl Default for FILE_IN_CABINET_INFO_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct FILE_IN_CABINET_INFO_W {
     pub NameInCabinet: windows_sys::core::PCWSTR,
@@ -1917,7 +1917,7 @@ pub struct FILE_IN_CABINET_INFO_W {
     pub DosAttribs: u16,
     pub FullTargetName: [u16; 260],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for FILE_IN_CABINET_INFO_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -2226,7 +2226,7 @@ impl Default for INFCONTEXT {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct INFCONTEXT {
     pub Inf: *mut core::ffi::c_void,
@@ -2234,7 +2234,7 @@ pub struct INFCONTEXT {
     pub Section: u32,
     pub Line: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for INFCONTEXT {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -2800,7 +2800,7 @@ impl Default for SOURCE_MEDIA_A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SOURCE_MEDIA_A {
     pub Reserved: windows_sys::core::PCSTR,
@@ -2810,7 +2810,7 @@ pub struct SOURCE_MEDIA_A {
     pub SourceFile: windows_sys::core::PCSTR,
     pub Flags: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SOURCE_MEDIA_A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -2834,7 +2834,7 @@ impl Default for SOURCE_MEDIA_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SOURCE_MEDIA_W {
     pub Reserved: windows_sys::core::PCWSTR,
@@ -2844,7 +2844,7 @@ pub struct SOURCE_MEDIA_W {
     pub SourceFile: windows_sys::core::PCWSTR,
     pub Flags: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SOURCE_MEDIA_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3029,7 +3029,7 @@ pub struct SP_ALTPLATFORM_INFO_V1 {
     pub Reserved: u16,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_Diagnostics_Debug")]
 #[derive(Clone, Copy, Default)]
 pub struct SP_ALTPLATFORM_INFO_V1 {
@@ -3077,7 +3077,7 @@ impl Default for SP_ALTPLATFORM_INFO_V2_0 {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(all(feature = "Win32_System_Diagnostics_Debug", feature = "Win32_System_SystemInformation"))]
 #[derive(Clone, Copy)]
 pub struct SP_ALTPLATFORM_INFO_V2 {
@@ -3090,7 +3090,7 @@ pub struct SP_ALTPLATFORM_INFO_V2 {
     pub FirstValidatedMajorVersion: u32,
     pub FirstValidatedMinorVersion: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(all(feature = "Win32_System_Diagnostics_Debug", feature = "Win32_System_SystemInformation"))]
 impl Default for SP_ALTPLATFORM_INFO_V2 {
     fn default() -> Self {
@@ -3098,14 +3098,14 @@ impl Default for SP_ALTPLATFORM_INFO_V2 {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(all(feature = "Win32_System_Diagnostics_Debug", feature = "Win32_System_SystemInformation"))]
 #[derive(Clone, Copy)]
 pub union SP_ALTPLATFORM_INFO_V2_0 {
     pub Reserved: u16,
     pub Flags: u16,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(all(feature = "Win32_System_Diagnostics_Debug", feature = "Win32_System_SystemInformation"))]
 impl Default for SP_ALTPLATFORM_INFO_V2_0 {
     fn default() -> Self {
@@ -3148,7 +3148,7 @@ impl Default for SP_ALTPLATFORM_INFO_V3_0 {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_ALTPLATFORM_INFO_V3 {
     pub cbSize: u32,
@@ -3163,20 +3163,20 @@ pub struct SP_ALTPLATFORM_INFO_V3 {
     pub SuiteMask: u16,
     pub BuildNumber: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_ALTPLATFORM_INFO_V3 {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub union SP_ALTPLATFORM_INFO_V3_0 {
     pub Reserved: u16,
     pub Flags: u16,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_ALTPLATFORM_INFO_V3_0 {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3200,14 +3200,14 @@ impl Default for SP_BACKUP_QUEUE_PARAMS_V1_A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_BACKUP_QUEUE_PARAMS_V1_A {
     pub cbSize: u32,
     pub FullInfPath: [i8; 260],
     pub FilenameOffset: i32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_BACKUP_QUEUE_PARAMS_V1_A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3228,14 +3228,14 @@ impl Default for SP_BACKUP_QUEUE_PARAMS_V1_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_BACKUP_QUEUE_PARAMS_V1_W {
     pub cbSize: u32,
     pub FullInfPath: [u16; 260],
     pub FilenameOffset: i32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_BACKUP_QUEUE_PARAMS_V1_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3257,7 +3257,7 @@ impl Default for SP_BACKUP_QUEUE_PARAMS_V2_A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_BACKUP_QUEUE_PARAMS_V2_A {
     pub cbSize: u32,
@@ -3265,7 +3265,7 @@ pub struct SP_BACKUP_QUEUE_PARAMS_V2_A {
     pub FilenameOffset: i32,
     pub ReinstallInstance: [i8; 260],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_BACKUP_QUEUE_PARAMS_V2_A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3287,7 +3287,7 @@ impl Default for SP_BACKUP_QUEUE_PARAMS_V2_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_BACKUP_QUEUE_PARAMS_V2_W {
     pub cbSize: u32,
@@ -3295,7 +3295,7 @@ pub struct SP_BACKUP_QUEUE_PARAMS_V2_W {
     pub FilenameOffset: i32,
     pub ReinstallInstance: [u16; 260],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_BACKUP_QUEUE_PARAMS_V2_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3312,7 +3312,7 @@ pub struct SP_CLASSIMAGELIST_DATA {
     pub Reserved: usize,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_Controls")]
 #[derive(Clone, Copy, Default)]
 pub struct SP_CLASSIMAGELIST_DATA {
@@ -3328,7 +3328,7 @@ pub struct SP_CLASSINSTALL_HEADER {
     pub InstallFunction: DI_FUNCTION,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct SP_CLASSINSTALL_HEADER {
     pub cbSize: u32,
@@ -3378,14 +3378,14 @@ impl Default for SP_DETECTDEVICE_PARAMS {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_DETECTDEVICE_PARAMS {
     pub ClassInstallHeader: SP_CLASSINSTALL_HEADER,
     pub DetectProgressNotify: PDETECT_PROGRESS_NOTIFY,
     pub ProgressNotifyParam: *mut core::ffi::c_void,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_DETECTDEVICE_PARAMS {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3401,7 +3401,7 @@ pub struct SP_DEVICE_INTERFACE_DATA {
     pub Reserved: usize,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct SP_DEVICE_INTERFACE_DATA {
     pub cbSize: u32,
@@ -3423,13 +3423,13 @@ impl Default for SP_DEVICE_INTERFACE_DETAIL_DATA_A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_DEVICE_INTERFACE_DETAIL_DATA_A {
     pub cbSize: u32,
     pub DevicePath: [i8; 1],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_DEVICE_INTERFACE_DETAIL_DATA_A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3449,13 +3449,13 @@ impl Default for SP_DEVICE_INTERFACE_DETAIL_DATA_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_DEVICE_INTERFACE_DETAIL_DATA_W {
     pub cbSize: u32,
     pub DevicePath: [u16; 1],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_DEVICE_INTERFACE_DETAIL_DATA_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3471,7 +3471,7 @@ pub struct SP_DEVINFO_DATA {
     pub Reserved: usize,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct SP_DEVINFO_DATA {
     pub cbSize: u32,
@@ -3495,7 +3495,7 @@ impl Default for SP_DEVINFO_LIST_DETAIL_DATA_A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_DEVINFO_LIST_DETAIL_DATA_A {
     pub cbSize: u32,
@@ -3503,7 +3503,7 @@ pub struct SP_DEVINFO_LIST_DETAIL_DATA_A {
     pub RemoteMachineHandle: super::super::Foundation::HANDLE,
     pub RemoteMachineName: [i8; 263],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_DEVINFO_LIST_DETAIL_DATA_A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3525,7 +3525,7 @@ impl Default for SP_DEVINFO_LIST_DETAIL_DATA_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_DEVINFO_LIST_DETAIL_DATA_W {
     pub cbSize: u32,
@@ -3533,7 +3533,7 @@ pub struct SP_DEVINFO_LIST_DETAIL_DATA_W {
     pub RemoteMachineHandle: super::super::Foundation::HANDLE,
     pub RemoteMachineName: [u16; 263],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_DEVINFO_LIST_DETAIL_DATA_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3561,7 +3561,7 @@ impl Default for SP_DEVINSTALL_PARAMS_A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_DEVINSTALL_PARAMS_A {
     pub cbSize: u32,
@@ -3575,7 +3575,7 @@ pub struct SP_DEVINSTALL_PARAMS_A {
     pub Reserved: u32,
     pub DriverPath: [i8; 260],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_DEVINSTALL_PARAMS_A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3603,7 +3603,7 @@ impl Default for SP_DEVINSTALL_PARAMS_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_DEVINSTALL_PARAMS_W {
     pub cbSize: u32,
@@ -3617,7 +3617,7 @@ pub struct SP_DEVINSTALL_PARAMS_W {
     pub Reserved: u32,
     pub DriverPath: [u16; 260],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_DEVINSTALL_PARAMS_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3641,7 +3641,7 @@ impl Default for SP_DRVINFO_DATA_V1_A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_DRVINFO_DATA_V1_A {
     pub cbSize: u32,
@@ -3651,7 +3651,7 @@ pub struct SP_DRVINFO_DATA_V1_A {
     pub MfgName: [i8; 256],
     pub ProviderName: [i8; 256],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_DRVINFO_DATA_V1_A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3675,7 +3675,7 @@ impl Default for SP_DRVINFO_DATA_V1_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_DRVINFO_DATA_V1_W {
     pub cbSize: u32,
@@ -3685,7 +3685,7 @@ pub struct SP_DRVINFO_DATA_V1_W {
     pub MfgName: [u16; 256],
     pub ProviderName: [u16; 256],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_DRVINFO_DATA_V1_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3711,7 +3711,7 @@ impl Default for SP_DRVINFO_DATA_V2_A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_DRVINFO_DATA_V2_A {
     pub cbSize: u32,
@@ -3723,7 +3723,7 @@ pub struct SP_DRVINFO_DATA_V2_A {
     pub DriverDate: super::super::Foundation::FILETIME,
     pub DriverVersion: u64,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_DRVINFO_DATA_V2_A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3749,7 +3749,7 @@ impl Default for SP_DRVINFO_DATA_V2_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_DRVINFO_DATA_V2_W {
     pub cbSize: u32,
@@ -3761,7 +3761,7 @@ pub struct SP_DRVINFO_DATA_V2_W {
     pub DriverDate: super::super::Foundation::FILETIME,
     pub DriverVersion: u64,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_DRVINFO_DATA_V2_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3788,7 +3788,7 @@ impl Default for SP_DRVINFO_DETAIL_DATA_A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_DRVINFO_DETAIL_DATA_A {
     pub cbSize: u32,
@@ -3801,7 +3801,7 @@ pub struct SP_DRVINFO_DETAIL_DATA_A {
     pub DrvDescription: [i8; 256],
     pub HardwareID: [i8; 1],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_DRVINFO_DETAIL_DATA_A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3828,7 +3828,7 @@ impl Default for SP_DRVINFO_DETAIL_DATA_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_DRVINFO_DETAIL_DATA_W {
     pub cbSize: u32,
@@ -3841,7 +3841,7 @@ pub struct SP_DRVINFO_DETAIL_DATA_W {
     pub DrvDescription: [u16; 256],
     pub HardwareID: [u16; 1],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_DRVINFO_DETAIL_DATA_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3858,7 +3858,7 @@ pub struct SP_DRVINSTALL_PARAMS {
     pub Reserved: u32,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct SP_DRVINSTALL_PARAMS {
     pub cbSize: u32,
@@ -3876,7 +3876,7 @@ pub struct SP_ENABLECLASS_PARAMS {
     pub EnableMessage: u32,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct SP_ENABLECLASS_PARAMS {
     pub ClassInstallHeader: SP_CLASSINSTALL_HEADER,
@@ -3907,7 +3907,7 @@ impl Default for SP_FILE_COPY_PARAMS_A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_FILE_COPY_PARAMS_A {
     pub cbSize: u32,
@@ -3923,7 +3923,7 @@ pub struct SP_FILE_COPY_PARAMS_A {
     pub LayoutInf: *mut core::ffi::c_void,
     pub SecurityDescriptor: windows_sys::core::PCSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_FILE_COPY_PARAMS_A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3953,7 +3953,7 @@ impl Default for SP_FILE_COPY_PARAMS_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_FILE_COPY_PARAMS_W {
     pub cbSize: u32,
@@ -3969,7 +3969,7 @@ pub struct SP_FILE_COPY_PARAMS_W {
     pub LayoutInf: *mut core::ffi::c_void,
     pub SecurityDescriptor: windows_sys::core::PCWSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_FILE_COPY_PARAMS_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3991,14 +3991,14 @@ impl Default for SP_INF_INFORMATION {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_INF_INFORMATION {
     pub InfStyle: INF_STYLE,
     pub InfCount: u32,
     pub VersionData: [u8; 1],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_INF_INFORMATION {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4020,7 +4020,7 @@ impl Default for SP_INF_SIGNER_INFO_V1_A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_INF_SIGNER_INFO_V1_A {
     pub cbSize: u32,
@@ -4028,7 +4028,7 @@ pub struct SP_INF_SIGNER_INFO_V1_A {
     pub DigitalSigner: [i8; 260],
     pub DigitalSignerVersion: [i8; 260],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_INF_SIGNER_INFO_V1_A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4050,7 +4050,7 @@ impl Default for SP_INF_SIGNER_INFO_V1_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_INF_SIGNER_INFO_V1_W {
     pub cbSize: u32,
@@ -4058,7 +4058,7 @@ pub struct SP_INF_SIGNER_INFO_V1_W {
     pub DigitalSigner: [u16; 260],
     pub DigitalSignerVersion: [u16; 260],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_INF_SIGNER_INFO_V1_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4081,7 +4081,7 @@ impl Default for SP_INF_SIGNER_INFO_V2_A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_INF_SIGNER_INFO_V2_A {
     pub cbSize: u32,
@@ -4090,7 +4090,7 @@ pub struct SP_INF_SIGNER_INFO_V2_A {
     pub DigitalSignerVersion: [i8; 260],
     pub SignerScore: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_INF_SIGNER_INFO_V2_A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4113,7 +4113,7 @@ impl Default for SP_INF_SIGNER_INFO_V2_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_INF_SIGNER_INFO_V2_W {
     pub cbSize: u32,
@@ -4122,7 +4122,7 @@ pub struct SP_INF_SIGNER_INFO_V2_W {
     pub DigitalSignerVersion: [u16; 260],
     pub SignerScore: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_INF_SIGNER_INFO_V2_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4150,7 +4150,7 @@ impl Default for SP_INSTALLWIZARD_DATA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_Controls")]
 #[derive(Clone, Copy)]
 pub struct SP_INSTALLWIZARD_DATA {
@@ -4163,7 +4163,7 @@ pub struct SP_INSTALLWIZARD_DATA {
     pub PrivateData: super::super::Foundation::LPARAM,
     pub hwndWizardDlg: super::super::Foundation::HWND,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_Controls")]
 impl Default for SP_INSTALLWIZARD_DATA {
     fn default() -> Self {
@@ -4190,7 +4190,7 @@ impl Default for SP_NEWDEVICEWIZARD_DATA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_Controls")]
 #[derive(Clone, Copy)]
 pub struct SP_NEWDEVICEWIZARD_DATA {
@@ -4200,7 +4200,7 @@ pub struct SP_NEWDEVICEWIZARD_DATA {
     pub NumDynamicPages: u32,
     pub hwndWizardDlg: super::super::Foundation::HWND,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_Controls")]
 impl Default for SP_NEWDEVICEWIZARD_DATA {
     fn default() -> Self {
@@ -4222,14 +4222,14 @@ impl Default for SP_ORIGINAL_FILE_INFO_A {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_ORIGINAL_FILE_INFO_A {
     pub cbSize: u32,
     pub OriginalInfName: [i8; 260],
     pub OriginalCatalogName: [i8; 260],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_ORIGINAL_FILE_INFO_A {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4250,14 +4250,14 @@ impl Default for SP_ORIGINAL_FILE_INFO_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_ORIGINAL_FILE_INFO_W {
     pub cbSize: u32,
     pub OriginalInfName: [u16; 260],
     pub OriginalCatalogName: [u16; 260],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_ORIGINAL_FILE_INFO_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4288,13 +4288,13 @@ impl Default for SP_POWERMESSAGEWAKE_PARAMS_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_POWERMESSAGEWAKE_PARAMS_W {
     pub ClassInstallHeader: SP_CLASSINSTALL_HEADER,
     pub PowerMessageWake: [u16; 512],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_POWERMESSAGEWAKE_PARAMS_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4310,7 +4310,7 @@ pub struct SP_PROPCHANGE_PARAMS {
     pub HwProfile: u32,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct SP_PROPCHANGE_PARAMS {
     pub ClassInstallHeader: SP_CLASSINSTALL_HEADER,
@@ -4334,7 +4334,7 @@ impl Default for SP_PROPSHEETPAGE_REQUEST {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_PROPSHEETPAGE_REQUEST {
     pub cbSize: u32,
@@ -4342,7 +4342,7 @@ pub struct SP_PROPSHEETPAGE_REQUEST {
     pub DeviceInfoSet: HDEVINFO,
     pub DeviceInfoData: *mut SP_DEVINFO_DATA,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_PROPSHEETPAGE_REQUEST {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4364,7 +4364,7 @@ impl Default for SP_REGISTER_CONTROL_STATUSA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_REGISTER_CONTROL_STATUSA {
     pub cbSize: u32,
@@ -4372,7 +4372,7 @@ pub struct SP_REGISTER_CONTROL_STATUSA {
     pub Win32Error: u32,
     pub FailureCode: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_REGISTER_CONTROL_STATUSA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4394,7 +4394,7 @@ impl Default for SP_REGISTER_CONTROL_STATUSW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_REGISTER_CONTROL_STATUSW {
     pub cbSize: u32,
@@ -4402,7 +4402,7 @@ pub struct SP_REGISTER_CONTROL_STATUSW {
     pub Win32Error: u32,
     pub FailureCode: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_REGISTER_CONTROL_STATUSW {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4417,7 +4417,7 @@ pub struct SP_REMOVEDEVICE_PARAMS {
     pub HwProfile: u32,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct SP_REMOVEDEVICE_PARAMS {
     pub ClassInstallHeader: SP_CLASSINSTALL_HEADER,
@@ -4456,7 +4456,7 @@ impl Default for SP_SELECTDEVICE_PARAMS_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_SELECTDEVICE_PARAMS_W {
     pub ClassInstallHeader: SP_CLASSINSTALL_HEADER,
@@ -4465,7 +4465,7 @@ pub struct SP_SELECTDEVICE_PARAMS_W {
     pub ListLabel: [u16; 30],
     pub SubTitle: [u16; 256],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_SELECTDEVICE_PARAMS_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4498,14 +4498,14 @@ impl Default for SP_TROUBLESHOOTER_PARAMS_W {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SP_TROUBLESHOOTER_PARAMS_W {
     pub ClassInstallHeader: SP_CLASSINSTALL_HEADER,
     pub ChmFile: [u16; 260],
     pub HtmlTroubleShooter: [u16; 260],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SP_TROUBLESHOOTER_PARAMS_W {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4520,7 +4520,7 @@ pub struct SP_UNREMOVEDEVICE_PARAMS {
     pub HwProfile: u32,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct SP_UNREMOVEDEVICE_PARAMS {
     pub ClassInstallHeader: SP_CLASSINSTALL_HEADER,

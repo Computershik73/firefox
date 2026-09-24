@@ -854,7 +854,7 @@ impl Default for PERF_COUNTER_DEFINITION {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct PERF_COUNTER_DEFINITION {
     pub ByteLength: u32,
@@ -1051,7 +1051,7 @@ impl Default for PERF_OBJECT_TYPE {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct PERF_OBJECT_TYPE {
     pub TotalByteLength: u32,

@@ -1797,7 +1797,7 @@ impl Default for RASCONNA {
     }
 }
 #[repr(C, packed(4))]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct RASCONNA {
     pub dwSize: u32,
@@ -1812,7 +1812,7 @@ pub struct RASCONNA {
     pub luid: super::super::Foundation::LUID,
     pub guidCorrelationId: windows_sys::core::GUID,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for RASCONNA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -1883,7 +1883,7 @@ impl Default for RASCONNW {
     }
 }
 #[repr(C, packed(4))]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct RASCONNW {
     pub dwSize: u32,
@@ -1898,7 +1898,7 @@ pub struct RASCONNW {
     pub luid: super::super::Foundation::LUID,
     pub guidCorrelationId: windows_sys::core::GUID,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for RASCONNW {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -2028,13 +2028,13 @@ impl Default for RASDEVSPECIFICINFO {
     }
 }
 #[repr(C, packed(4))]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct RASDEVSPECIFICINFO {
     pub dwSize: u32,
     pub pbDevSpecificInfo: *mut u8,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for RASDEVSPECIFICINFO {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -2102,7 +2102,7 @@ impl Default for RASDIALPARAMSA {
     }
 }
 #[repr(C, packed(4))]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct RASDIALPARAMSA {
     pub dwSize: u32,
@@ -2117,7 +2117,7 @@ pub struct RASDIALPARAMSA {
     pub dwIfIndex: u32,
     pub szEncPassword: windows_sys::core::PSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for RASDIALPARAMSA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -2146,7 +2146,7 @@ impl Default for RASDIALPARAMSW {
     }
 }
 #[repr(C, packed(4))]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct RASDIALPARAMSW {
     pub dwSize: u32,
@@ -2161,7 +2161,7 @@ pub struct RASDIALPARAMSW {
     pub dwIfIndex: u32,
     pub szEncPassword: windows_sys::core::PWSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for RASDIALPARAMSW {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -2326,7 +2326,7 @@ impl Default for RASENTRYDLGA {
     }
 }
 #[repr(C, packed(4))]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct RASENTRYDLGA {
     pub dwSize: u32,
@@ -2339,7 +2339,7 @@ pub struct RASENTRYDLGA {
     pub reserved: usize,
     pub reserved2: usize,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for RASENTRYDLGA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -2366,7 +2366,7 @@ impl Default for RASENTRYDLGW {
     }
 }
 #[repr(C, packed(4))]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct RASENTRYDLGW {
     pub dwSize: u32,
@@ -2379,7 +2379,7 @@ pub struct RASENTRYDLGW {
     pub reserved: usize,
     pub reserved2: usize,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for RASENTRYDLGW {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -2586,7 +2586,7 @@ impl Default for RASIKEV2_PROJECTION_INFO {
     }
 }
 #[repr(C, packed(4))]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_Networking_WinSock")]
 #[derive(Clone, Copy)]
 pub struct RASIKEV2_PROJECTION_INFO {
@@ -2606,7 +2606,7 @@ pub struct RASIKEV2_PROJECTION_INFO {
     pub numIPv6ServerAddresses: u32,
     pub ipv6ServerAddresses: *mut super::super::Networking::WinSock::IN6_ADDR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_Networking_WinSock")]
 impl Default for RASIKEV2_PROJECTION_INFO {
     fn default() -> Self {
@@ -2728,7 +2728,7 @@ impl Default for RASPBDLGA {
     }
 }
 #[repr(C, packed(4))]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct RASPBDLGA {
     pub dwSize: u32,
@@ -2742,7 +2742,7 @@ pub struct RASPBDLGA {
     pub reserved: usize,
     pub reserved2: usize,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for RASPBDLGA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -2772,7 +2772,7 @@ impl Default for RASPBDLGW {
     }
 }
 #[repr(C, packed(4))]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct RASPBDLGW {
     pub dwSize: u32,
@@ -2786,7 +2786,7 @@ pub struct RASPBDLGW {
     pub reserved: usize,
     pub reserved2: usize,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for RASPBDLGW {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }

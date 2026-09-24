@@ -6049,7 +6049,7 @@ impl Default for TBBUTTON {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct TBBUTTON {
     pub iBitmap: i32,
@@ -6060,7 +6060,7 @@ pub struct TBBUTTON {
     pub dwData: usize,
     pub iString: isize,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for TBBUTTON {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }

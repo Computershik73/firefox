@@ -536,7 +536,22 @@ D3D11TextureData* D3D11TextureData::Create(IntSize aSize, SurfaceFormat aFormat,
       D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED;
   bool useFence = false;
   bool useKeyedMutex = false;
-  if (!NS_IsMainThread()) {
+#if defined(GECKO_W10M)
+  // Feature level 9_3: nothing can be shared, and in this one-process port
+  // nothing needs to be when the texture is on the compositor's own device --
+  // it goes to the compositor by id through GpuProcessD3D11TextureMap, with
+  // no handle, fence or keyed mutex.
+  const bool unshared =
+      GpuProcessD3D11TextureMap::Get() &&
+      !DeviceManagerDx::Get()->TextureSharingWorks() &&
+      device == DeviceManagerDx::Get()->GetCompositorDevice();
+  if (unshared) {
+    newDesc.MiscFlags = 0;
+  }
+#else
+  const bool unshared = false;
+#endif
+  if (!NS_IsMainThread() && !unshared) {
     // On the main thread we use the syncobject to handle synchronization.
     if (!(aFlags & ALLOC_MANUAL_SYNCHRONIZATION)) {
       if (!(aFlags & USE_D3D11_KEYED_MUTEX)) {
@@ -628,29 +643,30 @@ D3D11TextureData* D3D11TextureData::Create(IntSize aSize, SurfaceFormat aFormat,
     UnlockD3DTexture(texture11.get());
   }
 
-  RefPtr<IDXGIResource1> resource;
-  texture11->QueryInterface((IDXGIResource1**)getter_AddRefs(resource));
-  if (!resource) {
-    gfxCriticalNoteOnce << "Failed to get IDXGIResource";
-    return nullptr;
-  }
+  RefPtr<gfx::FileHandleWrapper> handle;
+  if (!unshared) {
+    RefPtr<IDXGIResource1> resource;
+    texture11->QueryInterface((IDXGIResource1**)getter_AddRefs(resource));
+    if (!resource) {
+      gfxCriticalNoteOnce << "Failed to get IDXGIResource";
+      return nullptr;
+    }
 
-  HANDLE sharedHandle;
-  HRESULT hr = resource->GetSharedHandle(&sharedHandle);
-  hr = resource->CreateSharedHandle(
-      nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr,
-      &sharedHandle);
-  if (FAILED(hr)) {
-    gfxCriticalNoteOnce << "GetSharedHandle failed: " << gfx::hexa(hr);
-    return nullptr;
+    HANDLE sharedHandle;
+    HRESULT hr = resource->GetSharedHandle(&sharedHandle);
+    hr = resource->CreateSharedHandle(
+        nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+        nullptr, &sharedHandle);
+    if (FAILED(hr)) {
+      gfxCriticalNoteOnce << "GetSharedHandle failed: " << gfx::hexa(hr);
+      return nullptr;
+    }
+    handle = MakeRefPtr<gfx::FileHandleWrapper>(UniqueFileHandle(sharedHandle));
   }
 
   texture11->SetPrivateDataInterface(
       sD3D11TextureUsage,
       new TextureMemoryMeasurer(newDesc.Width * newDesc.Height * 4));
-
-  RefPtr handle =
-      MakeRefPtr<gfx::FileHandleWrapper>(UniqueFileHandle(sharedHandle));
 
   if (useFence) {
     auto* fencesHolderMap = CompositeProcessD3D11FencesHolderMap::Get();
@@ -662,7 +678,7 @@ D3D11TextureData* D3D11TextureData::Create(IntSize aSize, SurfaceFormat aFormat,
                            fencesHolderId, fence, aFlags);
 
   texture11->GetDevice(getter_AddRefs(device));
-  if (XRE_IsGPUProcess() &&
+  if ((XRE_IsGPUProcess() || unshared) &&
       device == gfx::DeviceManagerDx::Get()->GetCompositorDevice()) {
     const auto textureId = GpuProcessD3D11TextureMap::GetNextTextureId();
     data->SetGpuProcessTextureId(textureId);
@@ -1152,7 +1168,13 @@ uint32_t DXGITextureHostD3D11::NumSubTextures() {
 void DXGITextureHostD3D11::PushResourceUpdates(
     wr::TransactionBuilder& aResources, ResourceUpdateOp aOp,
     const Range<wr::ImageKey>& aImageKeys, const wr::ExternalImageId& aExtID) {
-  if (!gfx::gfxVars::UseWebRenderANGLE()) {
+  if (!gfx::gfxVars::UseWebRenderANGLE()
+#if defined(GECKO_W10M)
+      // Software WebRender with the D3D11 compositor: the frame is a native
+      // compositor surface (RenderCompositorD3D11SWGL::HandleExternalImage).
+      && !gfx::gfxVars::AllowSoftwareWebRenderD3D11()
+#endif
+  ) {
     MOZ_ASSERT_UNREACHABLE("unexpected to be called without ANGLE");
     return;
   }
@@ -1238,7 +1260,11 @@ void DXGITextureHostD3D11::PushDisplayItems(
     const Range<wr::ImageKey>& aImageKeys, PushDisplayItemFlagSet aFlags) {
   bool preferCompositorSurface =
       aFlags.contains(PushDisplayItemFlag::PREFER_COMPOSITOR_SURFACE);
-  if (!gfx::gfxVars::UseWebRenderANGLE()) {
+  if (!gfx::gfxVars::UseWebRenderANGLE()
+#if defined(GECKO_W10M)
+      && !gfx::gfxVars::AllowSoftwareWebRenderD3D11()
+#endif
+  ) {
     MOZ_ASSERT_UNREACHABLE("unexpected to be called without ANGLE");
     return;
   }
@@ -1444,7 +1470,13 @@ uint32_t DXGIYCbCrTextureHostD3D11::NumSubTextures() {
 void DXGIYCbCrTextureHostD3D11::PushResourceUpdates(
     wr::TransactionBuilder& aResources, ResourceUpdateOp aOp,
     const Range<wr::ImageKey>& aImageKeys, const wr::ExternalImageId& aExtID) {
-  if (!gfx::gfxVars::UseWebRenderANGLE()) {
+  if (!gfx::gfxVars::UseWebRenderANGLE()
+#if defined(GECKO_W10M)
+      // Software WebRender with the D3D11 compositor: the frame is a native
+      // compositor surface (RenderCompositorD3D11SWGL::HandleExternalImage).
+      && !gfx::gfxVars::AllowSoftwareWebRenderD3D11()
+#endif
+  ) {
     MOZ_ASSERT_UNREACHABLE("unexpected to be called without ANGLE");
     return;
   }

@@ -303,7 +303,13 @@ MediaResult WMFVideoMFTManager::InitInternal() {
       if (SUCCEEDED(hr)) {
         mUseHwAccel = true;
 #if defined(GECKO_W10M)
-        mDXVAReadback = !gfx::DeviceManagerDx::Get()->TextureSharingWorks();
+        // No texture sharing: frames stay on the GPU only if the decoder
+        // works on the compositor's own device; otherwise they are read back.
+        mDXVAReadback =
+            !gfx::DeviceManagerDx::Get()->TextureSharingWorks() &&
+            (!mDXVA2Manager || mDXVA2Manager->GetD3D11Device() !=
+                                   gfx::DeviceManagerDx::Get()
+                                       ->GetCompositorDevice());
 #endif
       } else {
         mDXVAFailureReason = nsPrintfCString(
@@ -402,7 +408,7 @@ MediaResult WMFVideoMFTManager::InitInternal() {
                          mUseHwAccel || mDXVAFailureReason.IsEmpty() ? "" : " -- ",
                          mUseHwAccel ? (mDXVAReadback
                                             ? " (frames read back to memory)"
-                                            : "")
+                                            : " (frames stay on the GPU)")
                                      : mDXVAFailureReason.get());
     GeckoW10mNote(note.get());
   }
@@ -411,18 +417,26 @@ MediaResult WMFVideoMFTManager::InitInternal() {
   // Now we need to convert the video decode output to a display format --
   // unless the frames are read back to memory, which needs no conversion.
   if (mUseHwAccel && !mDXVAReadback) {
+    HRESULT configured = mDXVA2Manager->ConfigureForSize(
+        outputType,
+        mColorSpace.refOr(
+            DefaultColorSpace({mImageSize.width, mImageSize.height})),
+        mColorRange, mColorDepth,
+        mVideoInfo.mTransferFunction.refOr(gfx::TransferFunction::BT709),
+        mVideoInfo.mHDRMetadata, mVideoInfo.ImageRect().width,
+        mVideoInfo.ImageRect().height);
+#if defined(GECKO_W10M)
+    if (FAILED(configured)) {
+      LOG("ConfigureForSize failed ({:x}): frames read back to memory",
+          unsigned(configured));
+      mDXVAReadback = true;
+    }
+#else
     RETURN_PARAM_IF_FAILED(
-        mDXVA2Manager->ConfigureForSize(
-            outputType,
-            mColorSpace.refOr(
-                DefaultColorSpace({mImageSize.width, mImageSize.height})),
-            mColorRange, mColorDepth,
-            mVideoInfo.mTransferFunction.refOr(gfx::TransferFunction::BT709),
-            mVideoInfo.mHDRMetadata, mVideoInfo.ImageRect().width,
-            mVideoInfo.ImageRect().height),
-        MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
-                    RESULT_DETAIL("Fail to configure image size for "
-                                  "DXVA2Manager.")));
+        configured, MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                                RESULT_DETAIL("Fail to configure image size "
+                                              "for DXVA2Manager.")));
+#endif
   }
   if (!mUseHwAccel || mDXVAReadback) {
     GetDefaultStride(outputType, mVideoInfo.ImageRect().width, &mVideoStride);
@@ -1058,6 +1072,36 @@ WMFVideoMFTManager::Output(int64_t aStreamOffset, RefPtr<MediaData>& aOutData) {
   RefPtr<VideoData> frame;
   if (mUseHwAccel && !mDXVAReadback) {
     hr = CreateD3DVideoFrame(sample, aStreamOffset, getter_AddRefs(frame));
+#if defined(GECKO_W10M)
+    if (FAILED(hr)) {
+      // The GPU path failed on this device: read this frame and the rest
+      // back to memory rather than lose the video.
+      LOG("CreateD3DVideoFrame failed ({:x}): frames read back to memory",
+          unsigned(hr));
+      nsPrintfCString note(
+          "media: frames that stayed on the GPU fail (%lx) -- reading them "
+          "back to memory",
+          hr);
+      GeckoW10mNote(note.get());
+      mDXVAReadback = true;
+      RefPtr<IMFMediaType> outputType;
+      if (SUCCEEDED(mDecoder->GetOutputMediaType(outputType))) {
+        GetDefaultStride(outputType, mVideoInfo.ImageRect().width,
+                         &mVideoStride);
+        UINT32 width = 0, height = 0;
+        if (SUCCEEDED(MFGetAttributeSize(outputType, MF_MT_FRAME_SIZE, &width,
+                                         &height))) {
+          mSoftwareImageSize = gfx::IntSize(width, height);
+        }
+        gfx::IntRect picture;
+        if (SUCCEEDED(GetPictureRegion(outputType, picture))) {
+          mSoftwarePictureSize = gfx::IntSize(picture.width, picture.height);
+        }
+      }
+      frame = nullptr;
+      hr = CreateBasicVideoFrame(sample, aStreamOffset, getter_AddRefs(frame));
+    }
+#endif
   } else {
     hr = CreateBasicVideoFrame(sample, aStreamOffset, getter_AddRefs(frame));
   }

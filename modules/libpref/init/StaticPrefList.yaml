@@ -8712,6 +8712,16 @@
   type: RelaxedAtomicInt32
   value: 4
   mirror: always
+
+# Software WebRender with D3D11 compositing: shade the pixels on the GPU.
+# SWGL still runs WebRender's vertex shaders on the CPU, but hands the quads
+# to the compositor's Direct3D 11 device -- feature level 9_3 is enough --
+# and draws straight into the compositor's tiles. For GPUs that cannot run
+# hardware WebRender (no vertex texture fetch below feature level 10).
+- name: gfx.webrender.software.d3d11.gpu-shading
+  type: bool
+  value: false
+  mirror: once
 #endif
 
 #if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GTK)

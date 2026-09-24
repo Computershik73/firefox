@@ -564,6 +564,13 @@ bool CompositorD3D11::BlitRenderTarget(CompositingRenderTarget* aSource,
   return true;
 }
 
+void CompositorD3D11::ForgetDeviceState() {
+  mCurrentRT = nullptr;
+  if (mContext) {
+    mContext->OMSetDepthStencilState(nullptr, 0);
+  }
+}
+
 void CompositorD3D11::SetRenderTarget(CompositingRenderTarget* aRenderTarget) {
   MOZ_ASSERT(aRenderTarget);
   CompositingRenderTargetD3D11* newRT =

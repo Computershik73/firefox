@@ -84,6 +84,19 @@ I32 make_int(T v) {
   return CONVERT(v, I32);
 }
 
+bool make_bool(int32_t n) { return n != 0; }
+
+bool make_bool(uint32_t n) { return n != 0; }
+
+bool make_bool(float n) { return n != 0.0f; }
+
+bool make_bool(bool n) { return n; }
+
+template <typename T>
+Bool make_bool(T v) {
+  return bit_cast<Bool>(v != T(0));
+}
+
 uint32_t make_uint(uint32_t n) { return n; }
 
 uint32_t make_uint(int32_t n) { return n; }
@@ -2181,6 +2194,12 @@ ivec4_scalar make_ivec4(const vec4_scalar& v) {
 template <typename N>
 vec4 make_vec4(const N& n) {
   return vec4(n);
+}
+
+// ivec4 to vec4, which WebRender's GPU paths use and SWGL's did not.
+vec4 make_vec4(const ivec4& v) {
+  return vec4(CONVERT(v.x, Float), CONVERT(v.y, Float), CONVERT(v.z, Float),
+              CONVERT(v.w, Float));
 }
 
 template <typename X, typename Y>

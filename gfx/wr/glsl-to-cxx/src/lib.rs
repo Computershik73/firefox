@@ -288,8 +288,8 @@ fn translate_shader(
             write!(state, " return this;\n}}\n");
             write!(state, "const char* get_name() const override {{ return \"{}\"; }}\n", name);
             write!(state, "static ProgramImpl* loader() {{ return new {}_program; }}\n", name);
-            write!(state, "const GpuProgramInfo* gpu_info() const override {{ return {}_gpu_info(); }}\n", name);
             if let Some(glue) = gpu_glue {
+                write!(state, "const GpuProgramInfo* gpu_info() const override {{ return {}_gpu_info(); }}\n", name);
                 state.write(glue);
             }
             write!(state, "}};\n\n");

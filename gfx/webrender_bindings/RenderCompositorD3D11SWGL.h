@@ -40,6 +40,11 @@ class RenderCompositorD3D11SWGL : public RenderCompositorLayersSWGL {
   }
 
   bool BeginFrame() override;
+  void StartCompositing(wr::ColorF aClearColor,
+                        const wr::DeviceIntRect* aDirtyRects,
+                        size_t aNumDirtyRects,
+                        const wr::DeviceIntRect* aOpaqueRects,
+                        size_t aNumOpaqueRects) override;
 
   bool MaybeReadback(const gfx::IntSize& aReadbackSize,
                      const wr::ImageFormat& aReadbackFormat,
@@ -98,6 +103,12 @@ class RenderCompositorD3D11SWGL : public RenderCompositorLayersSWGL {
 
   RefPtr<ID3D11Texture2D> mCurrentStagingTexture;
   bool mCurrentStagingTextureIsTemp = false;
+
+  // SWGL shades pixels on the compositor's device and draws straight into the
+  // tiles (gfx.webrender.software.d3d11.gpu-shading): tiles are render
+  // targets and there are no staging textures.
+  bool mGpuShading = false;
+  uint32_t mGpuStatsFrames = 0;
 };
 
 class SurfaceD3D11SWGL : public RenderCompositorLayersSWGL::Surface {

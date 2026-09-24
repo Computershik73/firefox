@@ -325,6 +325,14 @@ extern "C" {
     fn SwglGpuAttach(device: *mut c_void) -> bool;
     fn SwglGpuAttachNewDevice(max_level: i32, warp: bool) -> bool;
     fn SwglGpuStats(out8: *mut u32);
+    fn SwglGpuSetTextureTarget(
+        tex: GLuint,
+        d3d_texture: *mut c_void,
+        width: GLsizei,
+        height: GLsizei,
+        x: GLint,
+        y: GLint,
+    ) -> bool;
     fn ReportMemory(ctx: *mut c_void, size_of_op: unsafe extern "C" fn(ptr: *const c_void) -> usize) -> usize;
 }
 
@@ -372,6 +380,22 @@ impl Context {
     /// Counters since the last call: GPU draws, CPU draws, GPU quads,
     /// uploads, readbacks, GPU clears, draws refused for their program, and
     /// for their state.
+    /// Makes `tex` the `width` x `height` rectangle at (x, y) of a Direct3D
+    /// texture (an ID3D11Texture2D* with render target binding) that belongs
+    /// to the caller, typically a compositor tile: GPU draws go straight into
+    /// it. Returns false if no device is attached.
+    pub fn set_texture_gpu_target(
+        &self,
+        tex: GLuint,
+        d3d_texture: *mut c_void,
+        width: GLsizei,
+        height: GLsizei,
+        x: GLint,
+        y: GLint,
+    ) -> bool {
+        unsafe { SwglGpuSetTextureTarget(tex, d3d_texture, width, height, x, y) }
+    }
+
     pub fn gpu_stats(&self) -> [u32; 8] {
         let mut out = [0u32; 8];
         unsafe { SwglGpuStats(out.as_mut_ptr()) };

@@ -14,6 +14,16 @@
 #include "mozilla/layers/TextureD3D11.h"
 #include "mozilla/webrender/RenderD3D11TextureHost.h"
 #include "mozilla/widget/CompositorWidget.h"
+#if defined(GECKO_W10M)
+#  include "mozilla/Sprintf.h"
+#endif
+
+// swgl (gpu_d3d11.h): pixel shading on a Direct3D 11 device.
+extern "C" bool SwglGpuAttach(void* aDevice);
+extern "C" void SwglGpuStats(uint32_t* aOut8);
+#if defined(GECKO_W10M)
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
 
 namespace mozilla {
 using namespace layers;
@@ -60,7 +70,23 @@ UniquePtr<RenderCompositor> RenderCompositorD3D11SWGL::Create(
                     << log.get();
     return nullptr;
   }
-  return MakeUnique<RenderCompositorD3D11SWGL>(compositor, aWidget, ctx);
+  auto result = MakeUnique<RenderCompositorD3D11SWGL>(compositor, aWidget, ctx);
+  if (StaticPrefs::gfx_webrender_software_d3d11_gpu_shading_AtStartup()) {
+    wr_swgl_make_current(ctx);
+    result->mGpuShading = SwglGpuAttach(compositor->GetDevice());
+#if defined(GECKO_W10M)
+    GeckoW10mNote(result->mGpuShading
+                    ? "gfx: SWGL shades pixels on the GPU, tiles are render "
+                      "targets"
+                    : "gfx: SWGL could not take the device -- pixels stay on "
+                      "the CPU");
+#endif
+    if (result->mGpuShading) {
+      // Tiles are drawn on the GPU; the staging paths never run.
+      result->mUploadMode = Upload_Staging;
+    }
+  }
+  return result;
 }
 
 RenderCompositorD3D11SWGL::RenderCompositorD3D11SWGL(
@@ -74,6 +100,32 @@ RenderCompositorD3D11SWGL::RenderCompositorD3D11SWGL(
 
 RenderCompositorD3D11SWGL::~RenderCompositorD3D11SWGL() {
   LOG("RenderCompositorD3D11SWGL::~RenderCompositorD3D11SWGL()");
+}
+
+void RenderCompositorD3D11SWGL::StartCompositing(
+    wr::ColorF aClearColor, const wr::DeviceIntRect* aDirtyRects,
+    size_t aNumDirtyRects, const wr::DeviceIntRect* aOpaqueRects,
+    size_t aNumOpaqueRects) {
+  if (mGpuShading) {
+    // SWGL has just drawn the tiles with the same immediate context.
+    GetCompositorD3D11()->ForgetDeviceState();
+#if defined(GECKO_W10M)
+    if (++mGpuStatsFrames % 300 == 1) {
+      uint32_t s[8];
+      SwglGpuStats(s);
+      char note[256];
+      SprintfLiteral(note,
+                     "gfx: GPU shading -- %u GPU draws, %u CPU draws, %u quads, "
+                     "%u uploads, %u readbacks, %u clears, refused %u program "
+                     "%u state",
+                     s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]);
+      GeckoW10mNote(note);
+    }
+#endif
+  }
+  RenderCompositorLayersSWGL::StartCompositing(aClearColor, aDirtyRects,
+                                               aNumDirtyRects, aOpaqueRects,
+                                               aNumOpaqueRects);
 }
 
 bool RenderCompositorD3D11SWGL::BeginFrame() {
@@ -189,6 +241,16 @@ bool RenderCompositorD3D11SWGL::TileD3D11::Map(wr::DeviceIntRect aDirtyRect,
 
   if (!IsValid()) {
     return false;
+  }
+
+  if (mRenderCompositor->mGpuShading) {
+    // SWGL draws into the tile texture itself, on the GPU: the texture goes
+    // over instead of memory, flagged by a negative stride (sw_compositor.rs).
+    *aData = mTexture->GetD3D11Texture();
+    *aStride = -1;
+    mValidRect = gfx::Rect(aValidRect.min.x, aValidRect.min.y,
+                           aValidRect.width(), aValidRect.height());
+    return true;
   }
 
   // Check if this tile's upload method matches what we're using for this frame,
@@ -333,6 +395,11 @@ void RenderCompositorD3D11SWGL::TileD3D11::Unmap(
     return;
   }
 
+  if (mRenderCompositor->mGpuShading) {
+    // Already there: nothing to upload.
+    return;
+  }
+
   if (mSurface) {
     MOZ_ASSERT(uploadMode == Upload_Immediate);
     mSurface->Unmap();
@@ -430,6 +497,10 @@ RenderCompositorD3D11SWGL::DoCreateTile(Surface* aSurface) {
 
   CD3D11_TEXTURE2D_DESC desc(DXGI_FORMAT_B8G8R8A8_UNORM, tileSize.width,
                              tileSize.height, 1, 1);
+  if (mGpuShading) {
+    // SWGL renders into it.
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+  }
 
   RefPtr<ID3D11Texture2D> texture;
   DebugOnly<HRESULT> hr =
@@ -444,7 +515,9 @@ RenderCompositorD3D11SWGL::DoCreateTile(Surface* aSurface) {
   RefPtr<DataTextureSourceD3D11> source = new DataTextureSourceD3D11(
       GetDevice(), gfx::SurfaceFormat::B8G8R8A8, texture);
 
-  RefPtr<ID3D11Texture2D> cpuTexture = CreateStagingTexture(tileSize);
+  // No staging texture when the GPU draws the tile: a megabyte a tile saved.
+  RefPtr<ID3D11Texture2D> cpuTexture =
+      mGpuShading ? nullptr : CreateStagingTexture(tileSize);
   return MakeUnique<TileD3D11>(source, cpuTexture, nullptr, aSurface, this);
 }
 

@@ -16,11 +16,14 @@ fn shader_file(shader_key: &str) -> String {
     shader_key.replace([' ', ','], "_")
 }
 
-fn write_load_shader(shader_keys: &[String]) {
+fn write_load_shader(shader_keys: &[String], gpu_variants: &[bool]) {
     let mut load_shader = String::new();
-    for s in shader_keys {
-        let _ = writeln!(load_shader, "#include \"{}_gpu.h\"", shader_file(s));
+    for (s, &gpu) in shader_keys.iter().zip(gpu_variants) {
         let _ = writeln!(load_shader, "#include \"{}.h\"", shader_file(s));
+        if gpu {
+            let _ = writeln!(load_shader, "#include \"{}_gpuv_gpu.h\"", shader_file(s));
+            let _ = writeln!(load_shader, "#include \"{}_gpuv.h\"", shader_file(s));
+        }
     }
     load_shader.push_str("ProgramLoader load_shader(const char* name) {\n");
     for s in shader_keys {
@@ -30,6 +33,20 @@ fn write_load_shader(shader_keys: &[String]) {
             s,
             shader_file(s)
         );
+    }
+    load_shader.push_str("  return nullptr;\n}\n");
+    // The GPU variants: the same shaders built as for a GPU, without SWGL's
+    // rasterizer extensions, whose fragment half has a 9_3 pixel shader.
+    load_shader.push_str("ProgramLoader load_gpu_shader(const char* name) {\n");
+    for (s, &gpu) in shader_keys.iter().zip(gpu_variants) {
+        if gpu {
+            let _ = writeln!(
+                load_shader,
+                "  if (!strcmp(name, \"{}\")) {{ return {}_gpuv_program::loader; }}",
+                s,
+                shader_file(s)
+            );
+        }
     }
     load_shader.push_str("  return nullptr;\n}\n");
     std::fs::write(
@@ -69,12 +86,22 @@ fn process_imports(
     }
 }
 
+/// Translates one shader for SWGL. With `gpu_variant`, the shader is built
+/// without SWGL -- as it would be for a GPU, without SWGL's rasterizer
+/// extensions (clip masks, antialiasing and blending done by the rasterizer)
+/// -- under the name <shader>_gpuv, and its fragment half also goes to HLSL
+/// for feature level 9_3. Returns whether that variant can be used.
 fn translate_shader(
     shader_key: &str,
     shader_dir: &str,
     suppressed_env_vars: &mut Option<Vec<EnvVarGuard>>,
-) {
-    let mut imported = String::from("#define SWGL 1\n#define __SWGL_GLSL_VERSION__ 150\n");
+    gpu_variant: bool,
+) -> bool {
+    let mut imported = String::from(if gpu_variant {
+        "#define __SWGL_GLSL_VERSION__ 150\n"
+    } else {
+        "#define SWGL 1\n#define __SWGL_GLSL_VERSION__ 150\n"
+    });
     let _ = writeln!(
         imported,
         "#define WR_MAX_VERTEX_TEXTURE_WIDTH {}U",
@@ -91,7 +118,7 @@ fn translate_shader(
 
     process_imports(shader_dir, basename, &mut HashSet::new(), &mut imported);
 
-    let shader = shader_file(shader_key);
+    let shader = shader_file(shader_key) + if gpu_variant { "_gpuv" } else { "" };
 
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let imp_name = format!("{out_dir}/{shader}.c");
@@ -137,11 +164,34 @@ fn translate_shader(
     std::fs::write(&fs_name, fs).unwrap();
 
     let args = vec!["glsl_to_cxx".to_string(), vs_name, fs_name];
-    let fxc = gpu_compiler();
-    let (result, gpu, gpu_errors) =
-        glsl_to_cxx::translate_with_gpu(&mut args.into_iter(), fxc.is_some());
+    if !gpu_variant {
+        let result = glsl_to_cxx::translate(&mut args.into_iter());
+        std::fs::write(format!("{out_dir}/{shader}.h"), result).unwrap();
+        return false;
+    }
+    let fxc = match gpu_compiler() {
+        Some(f) => f,
+        None => return false,
+    };
+    // YUV: the GPU dialect's colour-matrix code needs matrix operations SWGL's
+    // C++ runtime lacks. Video reaches the compositor as its own surfaces.
+    if shader_key.contains("YUV") || shader_key.contains("yuv") {
+        return false;
+    }
+    // Shaders glsl-to-cxx cannot take outside SWGL's dialect just have no GPU
+    // variant.
+    let translated = std::panic::catch_unwind(|| {
+        glsl_to_cxx::translate_with_gpu(&mut args.into_iter(), true)
+    });
+    let (result, gpu, gpu_errors) = match translated {
+        Ok(r) => r,
+        Err(_) => {
+            println!("cargo:warning=swgl: {shader} stays on the CPU: glsl-to-cxx failed");
+            return false;
+        }
+    };
     std::fs::write(format!("{out_dir}/{shader}.h"), result).unwrap();
-    write_gpu_header(&out_dir, &shader, fxc.as_deref(), gpu, &gpu_errors);
+    write_gpu_header(&out_dir, &shader, Some(&fxc), gpu, &gpu_errors)
 }
 
 /// fxc, when building for Windows: the fragment shaders are also compiled for
@@ -206,7 +256,7 @@ fn write_gpu_header(
     fxc: Option<&str>,
     gpu: Option<(Vec<String>, glsl_to_cxx::hlsl::Layout)>,
     errors: &[String],
-) {
+) -> bool {
     let path = format!("{out_dir}/{shader}_gpu.h");
     let stub = format!("static const GpuProgramInfo* {shader}_gpu_info() {{ return nullptr; }}\n");
     let (fxc, (sources, layout)) = match (fxc, gpu) {
@@ -214,11 +264,11 @@ fn write_gpu_header(
         (Some(_), None) => {
             println!("cargo:warning=swgl: {shader} stays on the CPU: {}", errors.join(" | "));
             std::fs::write(path, stub).unwrap();
-            return;
+            return false;
         }
         _ => {
             std::fs::write(path, stub).unwrap();
-            return;
+            return false;
         }
     };
     // Loops are unrolled; the first limit that fits in 512 instructions wins.
@@ -260,10 +310,12 @@ fn write_gpu_header(
                 "static const GpuProgramInfo* {shader}_gpu_info() {{ return &{shader}_gpu_info_data; }}"
             );
             std::fs::write(path, h).unwrap();
+            true
         }
         Err(e) => {
             println!("cargo:warning=swgl: {shader} stays on the CPU: fxc: {e}");
             std::fs::write(path, stub).unwrap();
+            false
         }
     }
 }
@@ -340,12 +392,14 @@ fn main() {
     shaders.sort();
 
     let mut suppressed_env_vars = None;
+    let mut gpu_variants = Vec::new();
     for shader in &shaders {
-        translate_shader(shader, &shader_dir, &mut suppressed_env_vars);
+        translate_shader(shader, &shader_dir, &mut suppressed_env_vars, false);
+        gpu_variants.push(translate_shader(shader, &shader_dir, &mut suppressed_env_vars, true));
     }
     drop(suppressed_env_vars); // Restore env. vars. for further compilation.
 
-    write_load_shader(&shaders);
+    write_load_shader(&shaders, &gpu_variants);
     write_gpu_common(&std::env::var("OUT_DIR").unwrap());
 
     println!("cargo:rerun-if-changed=src/blend.h");

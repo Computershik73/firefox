@@ -99,6 +99,11 @@ class CompositorD3D11 : public Compositor {
 
   ID3D11Device* GetDevice() { return mDevice; }
 
+  // Someone else -- SWGL shading pixels on this device -- has drawn with the
+  // immediate context since the last frame: forget which render target is
+  // bound, so that the next one is bound again, and leave no depth state.
+  void ForgetDeviceState();
+
   ID3D11DeviceContext* GetDC() { return mContext; }
 
   virtual void RequestAllowFrameRecording(bool aWillRecord) override {

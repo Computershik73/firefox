@@ -653,15 +653,34 @@ struct VertexArray {
 struct Shader {
   GLenum type = 0;
   ProgramLoader loader = nullptr;
+  // The same shader built as for a GPU, when it has a 9_3 pixel shader.
+  ProgramLoader gpu_loader = nullptr;
 };
+
+// Uniform locations WebRender is given are the CPU program's; a location at
+// or above this is a uniform only the GPU variant has.
+const GLint GPU_ONLY_UNIFORM = 64;
+const int MAX_UNIFORMS = 64;
 
 struct Program {
   ProgramImpl* impl = nullptr;
   VertexShaderImpl* vert_impl = nullptr;
   FragmentShaderImpl* frag_impl = nullptr;
+  // The GPU variant (see gpu_d3d11.h): built without SWGL's rasterizer
+  // extensions, its vertex half runs on the CPU for draws the GPU shades.
+  ProgramImpl* gpu_impl = nullptr;
+  VertexShaderImpl* gpu_vert = nullptr;
+  // CPU uniform location -> the GPU variant's, and the GPU-only ones.
+  int8_t gpu_uniform[MAX_UNIFORMS];
   bool deleted = false;
 
-  ~Program() { delete impl; }
+  Program() {
+    for (auto& u : gpu_uniform) u = -1;
+  }
+  ~Program() {
+    delete impl;
+    delete gpu_impl;
+  }
 };
 
 // clang-format off
@@ -938,6 +957,8 @@ struct Context {
 static Context* ctx = nullptr;
 static VertexShaderImpl* vertex_shader = nullptr;
 static FragmentShaderImpl* fragment_shader = nullptr;
+// The current program's GPU variant's vertex half, if it has one.
+static VertexShaderImpl* gpu_vertex_shader = nullptr;
 static BlendKey blend_key = BLEND_KEY_NONE;
 
 static void prepare_texture(Texture& t, const IntRect* skip = nullptr);
@@ -950,6 +971,8 @@ static bool gpu_clear(Texture& t, const IntRect& rect, uint32_t color,
                       bool is_depth, float depth);
 static bool gpu_copy(Texture& src, const IntRect& src_rect, Texture& dst,
                      const IntRect& dst_rect);
+static bool gpu_resolve_external(Texture& t);
+static bool gpu_resolve_external_pending(Texture& t);
 
 template <typename S>
 static inline void init_filter(S* s, Texture& t) {
@@ -1147,6 +1170,7 @@ void setup_program(GLuint program) {
   if (!program) {
     vertex_shader = nullptr;
     fragment_shader = nullptr;
+    gpu_vertex_shader = nullptr;
     return;
   }
   Program& p = ctx->programs[program];
@@ -1155,9 +1179,11 @@ void setup_program(GLuint program) {
   assert(p.frag_impl);
   vertex_shader = p.vert_impl;
   fragment_shader = p.frag_impl;
+  gpu_vertex_shader = p.gpu_vert;
 }
 
 extern ProgramLoader load_shader(const char* name);
+extern ProgramLoader load_gpu_shader(const char* name);
 
 extern "C" {
 
@@ -1230,6 +1256,28 @@ static const char* const extensions[] = {
     "GL_APPLE_rgb_422",
 };
 
+static int gpu_max_texture_size();
+
+// With pixel shading on a Direct3D 9_3 device, WebRender must not reach for
+// what that device cannot blend: dual-source (subpixel text) and the KHR
+// advanced equations (mix-blend-mode, which WebRender then does in its own
+// shader). Neither is announced.
+static bool extension_hidden(const char* e) {
+  return ctx && ctx->gpu &&
+         (!strcmp(e, "GL_ARB_blend_func_extended") ||
+          !strcmp(e, "GL_KHR_blend_equation_advanced") ||
+          !strcmp(e, "GL_KHR_blend_equation_advanced_coherent"));
+}
+
+static const char* visible_extension(GLuint index) {
+  for (const char* e : extensions) {
+    if (extension_hidden(e)) continue;
+    if (index == 0) return e;
+    index--;
+  }
+  return nullptr;
+}
+
 void GetIntegerv(GLenum pname, GLint* params) {
   assert(params);
   switch (pname) {
@@ -1238,7 +1286,8 @@ void GetIntegerv(GLenum pname, GLint* params) {
       params[0] = MAX_TEXTURE_UNITS;
       break;
     case GL_MAX_TEXTURE_SIZE:
-      params[0] = 1 << 15;
+      // What the GPU can hold, when one shades the pixels.
+      params[0] = gpu_max_texture_size() ? gpu_max_texture_size() : 1 << 15;
       break;
     case GL_MAX_ARRAY_TEXTURE_LAYERS:
       params[0] = 0;
@@ -1255,9 +1304,12 @@ void GetIntegerv(GLenum pname, GLint* params) {
     case GL_PIXEL_UNPACK_BUFFER_BINDING:
       params[0] = ctx->pixel_unpack_buffer_binding;
       break;
-    case GL_NUM_EXTENSIONS:
-      params[0] = sizeof(extensions) / sizeof(extensions[0]);
+    case GL_NUM_EXTENSIONS: {
+      int n = 0;
+      while (visible_extension(n)) n++;
+      params[0] = n;
       break;
+    }
     case GL_MAJOR_VERSION:
       params[0] = 3;
       break;
@@ -1308,10 +1360,7 @@ const char* GetString(GLenum name) {
 const char* GetStringi(GLenum name, GLuint index) {
   switch (name) {
     case GL_EXTENSIONS:
-      if (index >= sizeof(extensions) / sizeof(extensions[0])) {
-        return nullptr;
-      }
-      return extensions[index];
+      return visible_extension(index);
     default:
       debugf("unhandled glGetStringi parameter %x\n", name);
       assert(false);
@@ -1513,6 +1562,7 @@ GLuint CreateShader(GLenum type) {
 void ShaderSourceByName(GLuint shader, char* name) {
   Shader& s = ctx->shaders[shader];
   s.loader = load_shader(name);
+  s.gpu_loader = load_gpu_shader(name);
   if (!s.loader) {
     debugf("unknown shader %s\n", name);
   }
@@ -1521,10 +1571,9 @@ void ShaderSourceByName(GLuint shader, char* name) {
 void AttachShader(GLuint program, GLuint shader) {
   Program& p = ctx->programs[program];
   Shader& s = ctx->shaders[shader];
-  if (s.type == GL_VERTEX_SHADER) {
+  if (s.type == GL_VERTEX_SHADER || s.type == GL_FRAGMENT_SHADER) {
     if (!p.impl && s.loader) p.impl = s.loader();
-  } else if (s.type == GL_FRAGMENT_SHADER) {
-    if (!p.impl && s.loader) p.impl = s.loader();
+    if (!p.gpu_impl && s.gpu_loader) p.gpu_impl = s.gpu_loader();
   } else {
     assert(0);
   }
@@ -1559,6 +1608,7 @@ void LinkProgram(GLuint program) {
   assert(p.impl->interpolants_size() <= sizeof(Interpolants));
   if (!p.vert_impl) p.vert_impl = p.impl->get_vertex_shader();
   if (!p.frag_impl) p.frag_impl = p.impl->get_fragment_shader();
+  if (p.gpu_impl && !p.gpu_vert) p.gpu_vert = p.gpu_impl->get_vertex_shader();
 }
 
 GLint GetLinkStatus(GLuint program) {
@@ -1575,6 +1625,7 @@ void BindAttribLocation(GLuint program, GLuint index, char* name) {
     return;
   }
   p.impl->bind_attrib(name, index);
+  if (p.gpu_impl) p.gpu_impl->bind_attrib(name, index);
 }
 
 GLint GetAttribLocation(GLuint program, char* name) {
@@ -1593,6 +1644,17 @@ GLint GetUniformLocation(GLuint program, char* name) {
     return -1;
   }
   GLint loc = p.impl->get_uniform(name);
+  if (p.gpu_impl) {
+    GLint gpu_loc = p.gpu_impl->get_uniform(name);
+    if (gpu_loc >= 0 && gpu_loc < MAX_UNIFORMS) {
+      if (loc >= 0 && loc < MAX_UNIFORMS) {
+        p.gpu_uniform[loc] = int8_t(gpu_loc);
+      } else if (loc < 0) {
+        // Only the GPU variant has it: WebRender gets a location of its own.
+        loc = GPU_ONLY_UNIFORM + gpu_loc;
+      }
+    }
+  }
   // debugf("location: %d\n", loc);
   return loc;
 }
@@ -2351,25 +2413,39 @@ GLboolean UnmapBuffer(GLenum target) {
   return b.buf != nullptr;
 }
 
+// The GPU variant's location for a location WebRender was given, or -1.
+static inline GLint gpu_uniform_location(GLint location) {
+  if (!gpu_vertex_shader || location < 0) return -1;
+  if (location >= GPU_ONLY_UNIFORM) return location - GPU_ONLY_UNIFORM;
+  if (location >= MAX_UNIFORMS) return -1;
+  return ctx->programs[ctx->current_program].gpu_uniform[location];
+}
+
 void Uniform1i(GLint location, GLint V0) {
   // debugf("tex: %d\n", (int)ctx->textures.size);
-  if (vertex_shader) {
+  if (vertex_shader && location < GPU_ONLY_UNIFORM) {
     vertex_shader->set_uniform_1i(location, V0);
   }
+  GLint g = gpu_uniform_location(location);
+  if (g >= 0) gpu_vertex_shader->set_uniform_1i(g, V0);
 }
 void Uniform4fv(GLint location, GLsizei count, const GLfloat* v) {
   assert(count == 1);
-  if (vertex_shader) {
+  if (vertex_shader && location < GPU_ONLY_UNIFORM) {
     vertex_shader->set_uniform_4fv(location, v);
   }
+  GLint g = gpu_uniform_location(location);
+  if (g >= 0) gpu_vertex_shader->set_uniform_4fv(g, v);
 }
 void UniformMatrix4fv(GLint location, GLsizei count, GLboolean transpose,
                       const GLfloat* value) {
   assert(count == 1);
   assert(!transpose);
-  if (vertex_shader) {
+  if (vertex_shader && location < GPU_ONLY_UNIFORM) {
     vertex_shader->set_uniform_matrix4fv(location, value);
   }
+  GLint g = gpu_uniform_location(location);
+  if (g >= 0) gpu_vertex_shader->set_uniform_matrix4fv(g, value);
 }
 
 void FramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget,
@@ -2654,6 +2730,10 @@ void ResolveFramebuffer(GLuint fbo) {
     return;
   }
   Texture& colortex = ctx->textures[fb->color_attachment];
+  // A compositor tile on the GPU is resolved where it lives.
+  if (gpu_resolve_external(colortex)) {
+    return;
+  }
   prepare_texture(colortex);
 }
 
@@ -3056,7 +3136,9 @@ void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
     return;
   }
   Texture& colortex = ctx->textures[fb.color_attachment];
-  if (!colortex.buf) {
+  // A compositor tile on the GPU has a CPU buffer only once a CPU draw has
+  // needed one; the GPU path below does not.
+  if (!colortex.buf && !(ctx->gpu && gpu_resolve_external_pending(colortex))) {
     return;
   }
   assert(!colortex.locked);
@@ -3092,7 +3174,7 @@ void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
       (type == GL_UNSIGNED_SHORT || type == GL_UNSIGNED_INT) &&
       gpu_can_draw(colortex)) {
     ctx->gpu_defer_sync = true;
-    vertex_shader->init_batch();
+    gpu_vertex_shader->init_batch();
     ctx->gpu_defer_sync = false;
     bool drawn =
         type == GL_UNSIGNED_SHORT
@@ -3107,6 +3189,7 @@ void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
 
   // On the CPU: whatever the GPU drew into these first comes back.
   gpu_sync_to_cpu(colortex);
+  if (!colortex.buf) return;
   if (depthtex.buf) gpu_sync_to_cpu(depthtex);
   vertex_shader->init_batch();
   gpu_count_cpu_draw();

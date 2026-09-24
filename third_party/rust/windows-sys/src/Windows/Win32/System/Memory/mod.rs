@@ -196,7 +196,7 @@ impl Default for MEMORY_BASIC_INFORMATION {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct MEMORY_BASIC_INFORMATION {
     pub BaseAddress: *mut core::ffi::c_void,
@@ -208,7 +208,7 @@ pub struct MEMORY_BASIC_INFORMATION {
     pub Protect: PAGE_PROTECTION_FLAGS,
     pub Type: PAGE_TYPE,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for MEMORY_BASIC_INFORMATION {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }

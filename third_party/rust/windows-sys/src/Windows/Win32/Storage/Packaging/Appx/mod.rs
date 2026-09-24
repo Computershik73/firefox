@@ -307,7 +307,7 @@ impl Default for PACKAGE_ID {
     }
 }
 #[repr(C, packed(4))]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct PACKAGE_ID {
     pub reserved: u32,
@@ -318,7 +318,7 @@ pub struct PACKAGE_ID {
     pub resourceId: windows_sys::core::PWSTR,
     pub publisherId: windows_sys::core::PWSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for PACKAGE_ID {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -342,7 +342,7 @@ impl Default for PACKAGE_INFO {
     }
 }
 #[repr(C, packed(4))]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct PACKAGE_INFO {
     pub reserved: u32,
@@ -352,7 +352,7 @@ pub struct PACKAGE_INFO {
     pub packageFamilyName: windows_sys::core::PWSTR,
     pub packageId: PACKAGE_ID,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for PACKAGE_INFO {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }

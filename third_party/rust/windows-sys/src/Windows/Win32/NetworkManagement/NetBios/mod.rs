@@ -127,7 +127,7 @@ impl Default for NCB {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct NCB {
     pub ncb_command: u8,
@@ -146,7 +146,7 @@ pub struct NCB {
     pub ncb_reserve: [u8; 18],
     pub ncb_event: super::super::Foundation::HANDLE,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for NCB {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }

@@ -45,6 +45,13 @@
                              // compiler errors when poco/win32_mutex.h is included
 #endif
 
+// nrappkit uses UINT8/INT8 for 8-byte types while Windows uses them for
+// 1-byte ones, so the Windows ones are renamed out of the way for the duration
+// of this include. The sentinel names have to be real types: since Windows SDK
+// 10.0.22621 winsock2.h uses UINT8 as a struct field type, not just in a
+// typedef. transport_addr.h does the same thing for the same reason.
+typedef unsigned char UBLAH_IGNORE_ME_PLEASE;
+typedef signed char BLAH_IGNORE_ME_PLEASE;
 #define UINT8 UBLAH_IGNORE_ME_PLEASE
 #define INT8 BLAH_IGNORE_ME_PLEASE
 #include <winsock2.h>

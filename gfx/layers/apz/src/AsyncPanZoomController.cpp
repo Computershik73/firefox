@@ -118,6 +118,11 @@ static mozilla::LazyLogModule sApzCtlLog("apz.controller");
 #define APZC_LOGV_FM(fm, prefix, ...) \
   APZC_LOG_FM_COMMON(fm, prefix, LogLevel::Verbose, __VA_ARGS__)
 
+#if defined(GECKO_W10M)
+#  include "nsPrintfCString.h"
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 namespace mozilla {
 namespace layers {
 
@@ -2032,6 +2037,21 @@ Maybe<LayoutDevicePoint> AsyncPanZoomController::ConvertToGecko(
           *layoutPoint,
           PixelCastJustification::LayoutDeviceIsScreenForUntransformedEvent)));
     }
+#if defined(GECKO_W10M)
+    // The transform would not invert. Every caller treats that as "drop the
+    // gesture", and says nothing -- OnSingleTapUp has a comment admitting it.
+    // It is the last silent exit on the path a tap takes, and it is where a
+    // tap in fullscreen ends: the hit test finds a target, the page lets the
+    // block through, and then nothing at all.
+    //
+    // Take the point as it stands. It is wrong by whatever async transform was
+    // in play, which in fullscreen is nothing -- the page reports its viewport
+    // at scale 1, offset 0,0, and the fullscreen element covering all of it --
+    // and a tap in nearly the right place beats no tap.
+    return Some(LayoutDevicePoint(ViewAs<LayoutDevicePixel>(
+        aPoint,
+        PixelCastJustification::LayoutDeviceIsScreenForUntransformedEvent)));
+#endif
   }
   return Nothing();
 }

@@ -346,6 +346,20 @@ static bool InitialLoadIsRemote(Element* aOwner) {
     return false;
   }
 
+#if defined(GECKO_W10M)
+  // Nothing is remote when there are no content processes. Chrome code sets
+  // remote="true" in a dozen places without asking whether e10s is on --
+  // BackgroundPageThumbs and the printing preview among them -- and a frame
+  // loader that believes it is remote here ends up with a null remoteTab,
+  // which is how a restored tab came back dead: RemoteWebNavigation.loadURI
+  // threw on the first line and nothing was ever loaded into it. Closing that
+  // tab got a live one because the replacement was built without the
+  // attribute.
+  if (!mozilla::BrowserTabsRemoteAutostart()) {
+    return false;
+  }
+#endif
+
   // Otherwise, we're remote if we have "remote=true" and we're a XUL element.
   return aOwner->IsXULElement() && aOwner->GetBoolAttr(nsGkAtoms::remote);
 }

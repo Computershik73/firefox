@@ -49,6 +49,8 @@ static const size_t kExceptionAppMemoryRegions = 33;
 using RegisterValueType = DWORD;
 #elif defined(_M_AMD64) || defined(_M_ARM64)
 using RegisterValueType = DWORD64;
+#elif defined(_M_ARM)
+using RegisterValueType = DWORD;
 #else
 #error Unsupported platform
 #endif

@@ -59,6 +59,7 @@ if not CONFIG["JS_STANDALONE"]:
         ]
     elif CONFIG["OS_TARGET"] == "WINNT" and CONFIG["TARGET_CPU"] in (
         "aarch64",
+        "arm",
         "x86",
         "x86_64",
     ):

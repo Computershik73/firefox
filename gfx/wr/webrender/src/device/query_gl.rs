@@ -277,6 +277,13 @@ pub struct GpuMarker {
 
 impl GpuMarker {
     fn new(gl: &Rc<dyn gl::Gl>, message: &str, debug_method: GpuDebugMethod) -> Self {
+        {
+            static MARKERS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let n = MARKERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if n <= 30 {
+                crate::device::gecko_w10m_note(&format!("wr: marker {} -- {} via {:?}", n, message, debug_method));
+            }
+        }
         let gl = match debug_method {
             GpuDebugMethod::KHR => {
               gl.push_debug_group_khr(gl::DEBUG_SOURCE_APPLICATION, 0, message);

@@ -97,7 +97,7 @@ if CONFIG["OS_TARGET"] == "WINNT":
 
 
     DEFINES["ANGLE_ENABLE_D3D11"] = True
-    DEFINES["ANGLE_ENABLE_D3D9"] = True
+    DEFINES["ANGLE_ENABLE_D3D9"] = False
     DEFINES["ANGLE_IS_WIN"] = True
     DEFINES["ANGLE_PRELOADED_D3DCOMPILER_MODULE_NAMES"] = "{ \"d3dcompiler_47.dll\", \"d3dcompiler_46.dll\", \"d3dcompiler_43.dll\" }"
     DEFINES["CERT_CHAIN_PARA_HAS_EXTRA_FIELDS"] = True
@@ -129,7 +129,6 @@ if CONFIG["OS_TARGET"] == "WINNT":
     OS_LIBS += [
         "advapi32",
         "comdlg32",
-        "d3d9",
         "dbghelp",
         "delayimp",
         "dnsapi",
@@ -179,3 +178,28 @@ if CONFIG["MOZ_DEBUG"] == "1" and CONFIG["OS_TARGET"] == "WINNT":
     DEFINES["_HAS_ITERATOR_DEBUGGING"] = "0"
 
 GeckoSharedLibrary("GLESv2_gn")
+
+# GeckoW10m: clang's 32-bit ARM virtual-call thunks destroy r1 (see
+# tools/patch-vcall-thunks.py); the patcher finds them through the linker map,
+# and without one this DLL went unpatched. ANGLE dispatches every uniform set
+# through a pointer-to-member virtual call, so the uniform location arrived as
+# the thunk's own address and the STL bounds check ended the renderer thread
+# with a fast fail. Same map as xul.dll gets.
+if CONFIG["MOZ_UWP"]:
+    LDFLAGS += ["-MAP:libGLESv2.map"]
+
+# GeckoW10m: with the UWP paths on, ANGLE calls D3D11CreateDevice and the shader
+# compiler directly rather than reaching for them with LoadLibrary, so the
+# import libraries have to be named. Both exist on the phone -- the whole system
+# UI is D3D11, and d3dcompiler_47.dll is already loaded at runtime today.
+OS_LIBS += [
+    "d3d11",
+    "d3dcompiler"
+]
+
+# GeckoW10m: this build claims the desktop API family so that the rest of
+# Gecko keeps its Win32 APIs, so ANGLE cannot derive this for itself --
+# but the process really is an app container, and these are the paths
+# that work in one: emulated thread-local storage, no file writing, and
+# the SwapChainPanel window instead of the HWND one.
+DEFINES["ANGLE_ENABLE_WINDOWS_UWP"] = True

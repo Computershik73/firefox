@@ -2835,7 +2835,7 @@ pub const PERFSTATE_POLICY_CHANGE_IDEAL_AGGRESSIVE: u32 = 3u32;
 pub const PERFSTATE_POLICY_CHANGE_INCREASE_MAX: u32 = 3u32;
 pub const PERFSTATE_POLICY_CHANGE_ROCKET: u32 = 2u32;
 pub const PERFSTATE_POLICY_CHANGE_SINGLE: u32 = 1u32;
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(all(feature = "Win32_System_Diagnostics_Debug", feature = "Win32_System_Kernel"))]
 pub type PEXCEPTION_FILTER = Option<unsafe extern "system" fn(exceptionpointers: *mut super::Diagnostics::Debug::EXCEPTION_POINTERS, establisherframe: *const core::ffi::c_void) -> i32>;
 pub const PF_NON_TEMPORAL_LEVEL_ALL: u32 = 0u32;
@@ -3677,7 +3677,7 @@ impl Default for REARRANGE_FILE_DATA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct REARRANGE_FILE_DATA32 {
     pub SourceStartingOffset: u64,

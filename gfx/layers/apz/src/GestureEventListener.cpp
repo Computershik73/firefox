@@ -23,6 +23,11 @@
 static mozilla::LazyLogModule sApzGelLog("apz.gesture");
 #define GEL_LOG(...) MOZ_LOG(sApzGelLog, LogLevel::Debug, (__VA_ARGS__))
 
+#if defined(GECKO_W10M)
+#  include "nsPrintfCString.h"
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 namespace mozilla {
 namespace layers {
 
@@ -308,6 +313,15 @@ nsEventStatus GestureEventListener::HandleInputTouchMove() {
     case GESTURE_FIRST_SINGLE_TOUCH_MAX_TAP_DOWN: {
       // If we move too much, bail out of the tap.
       if (MoveDistanceIsLarge()) {
+#if defined(GECKO_W10M)
+        {
+          nsPrintfCString note(
+              "tap: given up -- the finger moved past the %d px a tap is "
+              "allowed",
+              int(mAsyncPanZoomController->GetTouchStartTolerance()));
+          GeckoW10mNote(note.get());
+        }
+#endif
         CancelLongTapTimeoutTask();
         CancelMaxTapTimeoutTask();
         mSingleTapSent = Nothing();

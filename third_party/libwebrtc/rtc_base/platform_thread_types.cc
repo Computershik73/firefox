@@ -114,11 +114,19 @@ void SetCurrentThreadName(const char* name) {
 
 #pragma warning(push)
 #pragma warning(disable : 6320 6322)
+#if defined(_M_ARM) && defined(__clang__)
+  // clang implements no structured exception handling on 32-bit ARM
+  // Windows. Raising the exception without a handler would terminate the
+  // process when no debugger is attached, and the thread name is only a
+  // debugger convenience, so skip it.
+  (void)threadname_info;
+#else
   __try {
     ::RaiseException(0x406D1388, 0, sizeof(threadname_info) / sizeof(ULONG_PTR),
                      reinterpret_cast<ULONG_PTR*>(&threadname_info));
   } __except (EXCEPTION_EXECUTE_HANDLER) {  // NOLINT
   }
+#endif
 #pragma warning(pop)
 #elif defined(WEBRTC_LINUX) || defined(WEBRTC_ANDROID)
   prctl(PR_SET_NAME, reinterpret_cast<unsigned long>(name));  // NOLINT

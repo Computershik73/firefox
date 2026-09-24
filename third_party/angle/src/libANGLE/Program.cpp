@@ -44,6 +44,11 @@
 #include "platform/PlatformMethods.h"
 #include "platform/autogen/FrontendFeatures_autogen.h"
 
+namespace rx
+{
+void AngleUwpNote(const char *text);
+}
+
 namespace gl
 {
 
@@ -986,6 +991,14 @@ angle::Result Program::link(const Context *context, angle::JobResultExpectancy r
         egl::CacheGetResult result = egl::CacheGetResult::NotFound;
         ANGLE_TRY(cache->getProgram(context, this, &mProgramHash, &result));
 
+        {
+            char note[128];
+            snprintf(note, sizeof(note), "angle: program %p link: cache %s", this,
+                     result == egl::CacheGetResult::Success    ? "HIT"
+                     : result == egl::CacheGetResult::Rejected ? "REJECTED"
+                                                               : "miss");
+            rx::AngleUwpNote(note);
+        }
         switch (result)
         {
             case egl::CacheGetResult::Success:
@@ -1242,6 +1255,13 @@ void Program::resolveLinkImpl(const Context *context)
 
     angle::Result result                       = mLinkingState->linkEvent->wait(context);
     mLinked                                    = result == angle::Result::Continue;
+    {
+        char note[160];
+        snprintf(note, sizeof(note), "angle: program %p link resolved: %s, from binary %d, executable %p",
+                 this, mLinked ? "linked" : "FAILED", mLinkingState->linkingFromBinary ? 1 : 0,
+                 mState.mExecutable.get());
+        rx::AngleUwpNote(note);
+    }
     std::unique_ptr<LinkingState> linkingState = std::move(mLinkingState);
     if (!mLinked)
     {

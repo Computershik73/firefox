@@ -51,7 +51,12 @@ def generate_res():
             command = buildconfig.substs["CXXCPP"] + CPPFlag.all_flags
             command.extend(("-DRC_INVOKED", args.input))
 
-            cpu_arch_dict = {"x86_64": "_AMD64_", "x86": "_X86_", "aarch64": "_ARM64_"}
+            cpu_arch_dict = {
+                "x86_64": "_AMD64_",
+                "x86": "_X86_",
+                "aarch64": "_ARM64_",
+                "arm": "_ARM_",
+            }
 
             # add a preprocessor #define that specifies the CPU architecture
             cpu_arch_ppd = cpu_arch_dict[buildconfig.substs["TARGET_CPU"]]

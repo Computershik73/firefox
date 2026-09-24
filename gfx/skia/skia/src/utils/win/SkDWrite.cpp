@@ -49,7 +49,15 @@ static void create_dwrite_factory(IDWriteFactory** factory) {
         HRVM(hr, "Could not get DWriteCreateFactory proc.");
     }
 
-    HRVM(dWriteCreateFactoryProc(DWRITE_FACTORY_TYPE_SHARED,
+    HRVM(dWriteCreateFactoryProc(
+#if defined(GECKO_W10M)
+                    // Isolated, not shared: see gfx/2d/Factory.cpp. The host
+                    // app owns the shared factory and lays out its own text
+                    // with it.
+                    DWRITE_FACTORY_TYPE_ISOLATED,
+#else
+                    DWRITE_FACTORY_TYPE_SHARED,
+#endif
                                  __uuidof(IDWriteFactory),
                                  reinterpret_cast<IUnknown**>(factory)),
          "Could not create DirectWrite factory.");

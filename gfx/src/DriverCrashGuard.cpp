@@ -60,6 +60,24 @@ void DriverCrashGuard::InitializeIfNeeded() {
 }
 
 static inline bool AreCrashGuardsEnabled(CrashGuardType aType) {
+#if defined(GECKO_W10M)
+  // A guard tells "crashed while initialising graphics" from "was killed
+  // while initialising graphics" by asking the crash reporter, and there is
+  // none here. On a phone the second is what a user does to a slow launch,
+  // and one device log shows it twice, followed by hardware compositing off
+  // for good on every launch after. The environment switch below never
+  // reaches this process from the shell, so the answer is given here.
+  return false;
+#endif
+#if defined(GECKO_W10M)
+  // A guard tells "crashed while initialising graphics" from "was killed
+  // while initialising graphics" by asking the crash reporter, and there is
+  // none here. On a phone the second is what a user does to a slow launch,
+  // and one device log shows it twice, followed by hardware compositing off
+  // for good on every launch after. The environment switch below never
+  // reaches this process from the shell, so the answer is given here.
+  return false;
+#endif
   // Crash guard isn't supported in the GPU or RDD process since the entire
   // process is basically a crash guard.
   if (XRE_IsGPUProcess() || XRE_IsRDDProcess()) {

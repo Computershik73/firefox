@@ -547,7 +547,14 @@ export class MozBrowser extends MozElements.MozElementMixin(XULFrameElement) {
   }
 
   get isRemoteBrowser() {
-    return this.hasAttribute("remote");
+    // The attribute alone is not enough. Chrome code sets remote="true" in a
+    // dozen places without asking whether e10s is on, and when it is off the
+    // frame loader stays in-process -- so a browser that answered yes here got
+    // a RemoteWebNavigation whose every method dereferences a remoteTab that
+    // does not exist. Ask the runtime as well, and the two sides agree.
+    return (
+      this.hasAttribute("remote") && Services.appinfo.browserTabsRemoteAutostart
+    );
   }
 
   get remoteType() {

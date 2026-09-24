@@ -44,6 +44,11 @@
 static mozilla::LazyLogModule sApzEvtLog("apz.eventstate");
 #define APZES_LOG(...) MOZ_LOG(sApzEvtLog, LogLevel::Debug, (__VA_ARGS__))
 
+#if defined(GECKO_W10M)
+#  include "nsPrintfCString.h"
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 namespace mozilla {
 namespace layers {
 
@@ -78,6 +83,7 @@ void APZEventState::ProcessSingleTap(const CSSPoint& aPoint,
   if (!widget) {
     return;
   }
+
 
   if (mTouchEndCancelled) {
     return;

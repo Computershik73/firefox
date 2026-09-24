@@ -29,6 +29,7 @@
 
 #include "mozilla/Services.h"
 #include "nsCRT.h"
+#include "nsPrintfCString.h"
 #include "nsConsoleMessage.h"
 #include "nsIConsoleService.h"
 #include "nsIScriptError.h"
@@ -368,6 +369,12 @@ struct CachedDirective {
 };
 
 }  // namespace
+
+#if defined(GECKO_W10M)
+// Defined in toolkit/xre/Bootstrap.cpp: one line to a file the shell names,
+// for when there is no debugger, no console and no MOZ_LOG yet.
+extern "C" void GeckoW10mNote(const char* text);
+#endif
 
 void ParseManifest(NSLocationType aType, FileLocation& aFile, char* aBuf,
                    bool aChromeOnly) {

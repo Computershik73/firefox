@@ -107,7 +107,7 @@ impl Default for ATA_PASS_THROUGH_DIRECT {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct ATA_PASS_THROUGH_DIRECT32 {
     pub Length: u16,
@@ -123,7 +123,7 @@ pub struct ATA_PASS_THROUGH_DIRECT32 {
     pub PreviousTaskFile: [u8; 8],
     pub CurrentTaskFile: [u8; 8],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for ATA_PASS_THROUGH_DIRECT32 {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -151,7 +151,7 @@ impl Default for ATA_PASS_THROUGH_EX {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct ATA_PASS_THROUGH_EX32 {
     pub Length: u16,
@@ -167,7 +167,7 @@ pub struct ATA_PASS_THROUGH_EX32 {
     pub PreviousTaskFile: [u8; 8],
     pub CurrentTaskFile: [u8; 8],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for ATA_PASS_THROUGH_EX32 {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -877,7 +877,7 @@ pub struct MPIO_PASS_THROUGH_PATH {
     pub MpioPathId: u64,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct MPIO_PASS_THROUGH_PATH32 {
     pub PassThrough: SCSI_PASS_THROUGH32,
@@ -888,7 +888,7 @@ pub struct MPIO_PASS_THROUGH_PATH32 {
     pub MpioPathId: u64,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct MPIO_PASS_THROUGH_PATH32_EX {
     pub PassThroughOffset: u32,
@@ -909,7 +909,7 @@ pub struct MPIO_PASS_THROUGH_PATH_DIRECT {
     pub MpioPathId: u64,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct MPIO_PASS_THROUGH_PATH_DIRECT32 {
     pub PassThrough: SCSI_PASS_THROUGH_DIRECT32,
@@ -920,7 +920,7 @@ pub struct MPIO_PASS_THROUGH_PATH_DIRECT32 {
     pub MpioPathId: u64,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct MPIO_PASS_THROUGH_PATH_DIRECT32_EX {
     pub PassThroughOffset: u32,
@@ -1226,7 +1226,7 @@ impl Default for SCSI_PASS_THROUGH {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SCSI_PASS_THROUGH32 {
     pub Length: u16,
@@ -1243,14 +1243,14 @@ pub struct SCSI_PASS_THROUGH32 {
     pub SenseInfoOffset: u32,
     pub Cdb: [u8; 16],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SCSI_PASS_THROUGH32 {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SCSI_PASS_THROUGH32_EX {
     pub Version: u32,
@@ -1270,7 +1270,7 @@ pub struct SCSI_PASS_THROUGH32_EX {
     pub DataInBufferOffset: u32,
     pub Cdb: [u8; 1],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SCSI_PASS_THROUGH32_EX {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -1299,7 +1299,7 @@ impl Default for SCSI_PASS_THROUGH_DIRECT {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SCSI_PASS_THROUGH_DIRECT32 {
     pub Length: u16,
@@ -1316,14 +1316,14 @@ pub struct SCSI_PASS_THROUGH_DIRECT32 {
     pub SenseInfoOffset: u32,
     pub Cdb: [u8; 16],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SCSI_PASS_THROUGH_DIRECT32 {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SCSI_PASS_THROUGH_DIRECT32_EX {
     pub Version: u32,
@@ -1343,7 +1343,7 @@ pub struct SCSI_PASS_THROUGH_DIRECT32_EX {
     pub DataInBuffer: *mut core::ffi::c_void,
     pub Cdb: [u8; 1],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SCSI_PASS_THROUGH_DIRECT32_EX {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }

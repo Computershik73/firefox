@@ -17,7 +17,12 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/Sprintf.h"
 
+#include "GeckoW10mNote.h"
+
 void mozalloc_abort(const char* const msg) {
+#if defined(GECKO_W10M)
+  gecko_w10m::Note(msg);
+#endif
 #ifndef ANDROID
   fputs(msg, stderr);
   fputs("\n", stderr);

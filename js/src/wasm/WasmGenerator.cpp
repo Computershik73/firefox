@@ -915,12 +915,12 @@ bool ModuleGenerator::finishCodeBlock(CodeBlockResult* result) {
     return false;
   }
 
-  for (CallFarJump far : callFarJumps_) {
-    if (funcIsCompiledInBlock(far.targetFuncIndex)) {
+  for (CallFarJump farJump : callFarJumps_) {
+    if (funcIsCompiledInBlock(farJump.targetFuncIndex)) {
       masm_->patchFarJump(
-          jit::CodeOffset(far.jumpOffset),
-          funcCodeRangeInBlock(far.targetFuncIndex).funcUncheckedCallEntry());
-    } else if (!linkData_->callFarJumps.append(far)) {
+          jit::CodeOffset(farJump.jumpOffset),
+          funcCodeRangeInBlock(farJump.targetFuncIndex).funcUncheckedCallEntry());
+    } else if (!linkData_->callFarJumps.append(farJump)) {
       return false;
     }
   }

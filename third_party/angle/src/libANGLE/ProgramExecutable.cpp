@@ -22,6 +22,12 @@
 #include "libANGLE/renderer/ProgramExecutableImpl.h"
 #include "libANGLE/renderer/ProgramImpl.h"
 
+#include <cstdio>
+namespace rx
+{
+void AngleUwpNote(const char *text);
+}
+
 namespace gl
 {
 namespace
@@ -2756,6 +2762,22 @@ void ProgramExecutable::setUniformMatrixGeneric(UniformLocation location,
         return;
     }
 
+    {
+        static int geckoW10mNotes = 0;
+        if (geckoW10mNotes++ < 8)
+        {
+            char note[240];
+            snprintf(note, sizeof(note),
+                     "angle-gl: exec %p, locations at %p size %u, uniforms %u, sizeof exec %u, sizeof vector %u, impl %p, location %d",
+                     this, static_cast<const void *>(&mUniformLocations),
+                     static_cast<unsigned>(mUniformLocations.size()),
+                     static_cast<unsigned>(mUniforms.size()),
+                     static_cast<unsigned>(sizeof(ProgramExecutable)),
+                     static_cast<unsigned>(sizeof(std::vector<VariableLocation>)), mImplementation,
+                     location.value);
+            rx::AngleUwpNote(note);
+        }
+    }
     GLsizei clampedCount = clampMatrixUniformCount<MatrixC, MatrixR>(location, count, transpose, v);
     (mImplementation->*SetUniformMatrixFunc)(location.value, clampedCount, transpose, v);
 }

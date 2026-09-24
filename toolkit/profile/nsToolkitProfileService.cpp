@@ -3,6 +3,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/glean/GleanPings.h"
+#if defined(GECKO_W10M)
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+#if defined(GECKO_W10M)
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
 #include "mozilla/ErrorResult.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/HelperMacros.h"
@@ -610,6 +616,10 @@ nsresult nsToolkitProfileLock::Init(nsIFile* aDirectory,
   nsresult rv;
 
   rv = mLock.Lock(aDirectory, aUnlocker);
+#if defined(GECKO_W10M)
+  GeckoW10mNote(NS_SUCCEEDED(rv) ? "startup: profile lock taken"
+                               : "startup: profile lock REFUSED");
+#endif
 
   if (NS_SUCCEEDED(rv)) {
     mDirectory = aDirectory;
@@ -1041,6 +1051,9 @@ nsresult nsToolkitProfileService::Init() {
   nsresult rv;
 
   rv = nsXREDirProvider::GetUserAppDataDirectory(getter_AddRefs(mAppData));
+#if defined(GECKO_W10M)
+  GeckoW10mNote("startup: profile service -- app data directory resolved");
+#endif
   NS_ENSURE_SUCCESS(rv, rv);
 
   rv = nsXREDirProvider::GetUserLocalDataDirectory(getter_AddRefs(mTempData));
@@ -1065,6 +1078,9 @@ nsresult nsToolkitProfileService::Init() {
   if (NS_SUCCEEDED(rv) && mProfileDBExists) {
     bool iniContainedErrors = false;
     rv = mProfileDB.Init(mProfileDBFile, &iniContainedErrors);
+#if defined(GECKO_W10M)
+    GeckoW10mNote("startup: profile service -- profiles.ini parsed");
+#endif
     // Init does not fail on parsing errors, only on OOM/really unexpected
     // conditions.
     if (NS_FAILED(rv)) {
@@ -1127,6 +1143,9 @@ nsresult nsToolkitProfileService::Init() {
   if (mUseDedicatedProfile) {
     nsString installHash;
     rv = gDirServiceProvider->GetInstallHash(installHash);
+#if defined(GECKO_W10M)
+    GeckoW10mNote("startup: profile service -- install hash computed");
+#endif
     NS_ENSURE_SUCCESS(rv, rv);
     CopyUTF16toUTF8(installHash, mInstallSection);
     mInstallSection.Insert(INSTALL_PREFIX, 0);
@@ -1169,6 +1188,9 @@ nsresult nsToolkitProfileService::Init() {
   bool shouldIgnoreSeparateProfile;
   rv = ignoreDevEditionProfile->Exists(&shouldIgnoreSeparateProfile);
   if (NS_FAILED(rv)) return rv;
+#if defined(GECKO_W10M)
+  GeckoW10mNote("startup: profile service -- reading the profile list");
+#endif
 
   mUseDevEditionProfile = !shouldIgnoreSeparateProfile;
 #endif

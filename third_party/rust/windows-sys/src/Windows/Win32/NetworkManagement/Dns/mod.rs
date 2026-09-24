@@ -1976,7 +1976,7 @@ impl Default for IP6_ADDRESS {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub union IP6_ADDRESS {
     pub IP6Qword: [u64; 2],
@@ -1984,7 +1984,7 @@ pub union IP6_ADDRESS {
     pub IP6Word: [u16; 8],
     pub IP6Byte: [u8; 16],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for IP6_ADDRESS {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }

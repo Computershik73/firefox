@@ -7,7 +7,9 @@
 #include "mozilla/arm.h"
 
 // It's currently only worth including this if we have NEON support.
-#if defined(__arm__) && defined(MOZILLA_MAY_SUPPORT_NEON)
+// The row converters behind this are NEON assembly in A32 (ARM mode);
+// Windows on ARM32 is Thumb-2 only and cannot assemble them.
+#if defined(__arm__) && defined(MOZILLA_MAY_SUPPORT_NEON) && !defined(_M_ARM)
 #define HAVE_YCBCR_TO_RGB565 1
 #endif
 

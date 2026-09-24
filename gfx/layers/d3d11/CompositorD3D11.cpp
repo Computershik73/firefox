@@ -27,6 +27,13 @@
 #include "nsIWidget.h"
 #include "nsWindowsHelpers.h"
 
+#if defined(GECKO_W10M)
+#  include <algorithm>
+#  include "GeckoW10mPanelSwapChain.h"
+#  include "mozilla/Sprintf.h"
+extern "C" void GeckoW10mNote(const char* text);
+#endif
+
 namespace mozilla {
 
 using namespace gfx;
@@ -133,6 +140,83 @@ bool CompositorD3D11::Initialize(nsCString* const out_failureReason) {
   }
 
   mFeatureLevel = mDevice->GetFeatureLevel();
+
+#if defined(GECKO_W10M)
+  // An app container is handed no HWND and the widget is headless, so there
+  // is no window to make a swap chain for. The chain is made for composition
+  // instead and given to the shell's XAML SwapChainPanel -- the same panel
+  // ANGLE presents to on phones whose GPU can run hardware WebRender. This is
+  // the path for the ones that cannot: feature level 9_3, software WebRender
+  // drawing the tiles, this compositor putting them on the screen.
+  if (!mWidget->AsWindows()) {
+    memset(&mVSConstants, 0, sizeof(VertexShaderConstants));
+
+    RefPtr<IDXGIDevice> dxgiDevice;
+    RefPtr<IDXGIAdapter> dxgiAdapter;
+    RefPtr<IDXGIFactory2> dxgiFactory2;
+    mDevice->QueryInterface(dxgiDevice.StartAssignment());
+    if (dxgiDevice) {
+      dxgiDevice->GetAdapter(getter_AddRefs(dxgiAdapter));
+    }
+    if (dxgiAdapter) {
+      dxgiAdapter->GetParent(IID_PPV_ARGS(dxgiFactory2.StartAssignment()));
+    }
+    if (!dxgiFactory2 || !GeckoW10mHasPanel()) {
+      GeckoW10mNote("d3d11: no DXGI 1.2 factory or no panel -- not compositing");
+      *out_failureReason = "FEATURE_FAILURE_D3D11_NO_PANEL";
+      return false;
+    }
+
+    LayoutDeviceIntSize size = mWidget->GetClientSize();
+    DXGI_SWAP_CHAIN_DESC1 swapDesc = {};
+    swapDesc.Width = std::max(size.width, 1);
+    swapDesc.Height = std::max(size.height, 1);
+    swapDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    swapDesc.SampleDesc.Count = 1;
+    swapDesc.SampleDesc.Quality = 0;
+    swapDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    swapDesc.BufferCount = 2;
+    swapDesc.Scaling = DXGI_SCALING_STRETCH;
+    swapDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    swapDesc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+    swapDesc.Flags = 0;
+
+    RefPtr<IDXGISwapChain1> swapChain;
+    hr = dxgiFactory2->CreateSwapChainForComposition(
+        mDevice, &swapDesc, nullptr, getter_AddRefs(swapChain));
+    {
+      char note[192];
+      SprintfLiteral(note,
+                     "d3d11: feature level 0x%04x, %ux%u composition swap "
+                     "chain -> 0x%08lx",
+                     unsigned(mFeatureLevel), swapDesc.Width, swapDesc.Height,
+                     static_cast<unsigned long>(hr));
+      GeckoW10mNote(note);
+    }
+    if (FAILED(hr) || !swapChain) {
+      *out_failureReason = "FEATURE_FAILURE_D3D11_SWAP_CHAIN";
+      return false;
+    }
+    if (FAILED(GeckoW10mAttachSwapChainToPanel(swapChain))) {
+      *out_failureReason = "FEATURE_FAILURE_D3D11_PANEL";
+      return false;
+    }
+    mSwapChain = swapChain;
+    mIsDoubleBuffered = true;
+
+    if (!mWidget->InitCompositor(this)) {
+      *out_failureReason = "FEATURE_FAILURE_D3D11_INIT_COMPOSITOR";
+      return false;
+    }
+    // Partial presents are Present1 with dirty rects: worth having, but they
+    // are one more thing an old Adreno driver can get wrong, and the first
+    // job is a picture at all.
+    mAllowPartialPresents = false;
+
+    reporter.SetSuccessful();
+    return true;
+  }
+#endif
 
   mHwnd = mWidget->AsWindows()->GetHwnd();
 
@@ -1084,12 +1168,29 @@ void CompositorD3D11::PrepareViewport(const gfx::IntSize& aSize,
 void CompositorD3D11::EnsureSize() { mSize = mWidget->GetClientSize(); }
 
 bool CompositorD3D11::VerifyBufferSize() {
-  mWidget->AsWindows()->UpdateCompositorWndSizeIfNecessary();
+#if defined(GECKO_W10M)
+  if (mWidget->AsWindows())
+#endif
+    mWidget->AsWindows()->UpdateCompositorWndSizeIfNecessary();
 
   DXGI_SWAP_CHAIN_DESC swapDesc;
   HRESULT hr;
 
   hr = mSwapChain->GetDesc(&swapDesc);
+#if defined(GECKO_W10M)
+  // A chain made for composition is described by GetDesc1; only the fields
+  // read below are needed.
+  if (FAILED(hr) && !mWidget->AsWindows()) {
+    RefPtr<IDXGISwapChain1> chain1;
+    DXGI_SWAP_CHAIN_DESC1 desc1 = {};
+    if (SUCCEEDED(mSwapChain->QueryInterface(
+            IID_PPV_ARGS(chain1.StartAssignment()))) &&
+        SUCCEEDED(hr = chain1->GetDesc1(&desc1))) {
+      swapDesc.BufferDesc.Width = desc1.Width;
+      swapDesc.BufferDesc.Height = desc1.Height;
+    }
+  }
+#endif
   if (FAILED(hr)) {
     gfxCriticalError() << "Failed to get the description " << hexa(hr) << ", "
                        << mSize << ", " << (int)mVerifyBuffersFailed;

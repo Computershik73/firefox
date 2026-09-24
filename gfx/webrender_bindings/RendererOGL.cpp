@@ -19,6 +19,18 @@
 #include "mozilla/webrender/RenderCompositor.h"
 #include "mozilla/webrender/RenderTextureHost.h"
 #include "mozilla/widget/CompositorWidget.h"
+#if defined(GECKO_W10M)
+#  include "mozilla/Sprintf.h"
+extern "C" void GeckoW10mNote(const char* text);
+// The window is hidden a few hundred milliseconds after hardware WebRender
+// starts drawing. Note the stages of the first frames so the hide can be
+// placed against them.
+static uint32_t gGeckoW10mFrame = 0;
+static bool GeckoW10mFrameNoted(uint32_t frame) {
+  return frame <= 8 || frame == 10 || frame == 30 || frame == 60 ||
+         frame == 120 || frame == 300;
+}
+#endif
 
 #ifdef MOZ_WIDGET_ANDROID
 #  include "GLContextEGL.h"
@@ -203,6 +215,15 @@ RenderedFrameId RendererOGL::UpdateAndRender(
     if (!mCompositor->BeginFrame()) {
       beginFrame = false;
     }
+#if defined(GECKO_W10M)
+    ++gGeckoW10mFrame;
+    if (GeckoW10mFrameNoted(gGeckoW10mFrame)) {
+      char note[128];
+      SprintfLiteral(note, "frame %u: begin -- %s", gGeckoW10mFrame,
+                     beginFrame ? "current" : "BeginFrame refused");
+      GeckoW10mNote(note);
+    }
+#endif
 
     fullRender = mCompositor->RequestFullRender();
     // When we're rendering to an external target, we want to render everything.
@@ -240,6 +261,15 @@ RenderedFrameId RendererOGL::UpdateAndRender(
       wr_renderer_render(mRenderer, size.width, size.height, bufferAge,
                          aOutStats, &dirtyRects, &didRasterize);
   FlushPipelineInfo();
+#if defined(GECKO_W10M)
+  if (GeckoW10mFrameNoted(gGeckoW10mFrame)) {
+    char note[160];
+    SprintfLiteral(note, "frame %u: rendered %dx%d -- %s, %zu dirty rects",
+                   gGeckoW10mFrame, size.width, size.height,
+                   rendered ? "ok" : "FAILED", dirtyRects.Length());
+    GeckoW10mNote(note);
+  }
+#endif
 
   // Track whether any tiles were rasterized for reftest support.
   // Use OR to accumulate - once rasterization is detected, keep it set
@@ -290,6 +320,13 @@ RenderedFrameId RendererOGL::UpdateAndRender(
     // might invalidate it.
     MaybeRecordFrame(mLastPipelineInfo);
     frameId = mCompositor->EndFrame(dirtyRects);
+#if defined(GECKO_W10M)
+    if (GeckoW10mFrameNoted(gGeckoW10mFrame)) {
+      char note[96];
+      SprintfLiteral(note, "frame %u: ended, buffers swapped", gGeckoW10mFrame);
+      GeckoW10mNote(note);
+    }
+#endif
     MOZ_ASSERT(needPostRenderCall);
     mCompositor->GetWidget()->PostRender(&widgetContext);
   }

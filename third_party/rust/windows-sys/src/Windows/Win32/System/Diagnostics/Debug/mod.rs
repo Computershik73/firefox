@@ -11,7 +11,7 @@ windows_link::link!("kernel32.dll" "system" fn CheckRemoteDebuggerPresent(hproce
 #[cfg(target_arch = "x86")]
 #[cfg(feature = "Win32_System_SystemInformation")]
 windows_link::link!("imagehlp.dll" "system" fn CheckSumMappedFile(baseaddress : *const core::ffi::c_void, filelength : u32, headersum : *mut u32, checksum : *mut u32) -> *mut IMAGE_NT_HEADERS32);
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_SystemInformation")]
 windows_link::link!("imagehlp.dll" "system" fn CheckSumMappedFile(baseaddress : *const core::ffi::c_void, filelength : u32, headersum : *mut u32, checksum : *mut u32) -> *mut IMAGE_NT_HEADERS64);
 windows_link::link!("advapi32.dll" "system" fn CloseThreadWaitChainSession(wcthandle : *const core::ffi::c_void));
@@ -59,7 +59,7 @@ windows_link::link!("kernel32.dll" "system" fn GetErrorMode() -> u32);
 #[cfg(target_arch = "x86")]
 #[cfg(all(feature = "Win32_System_Kernel", feature = "Win32_System_SystemInformation"))]
 windows_link::link!("imagehlp.dll" "system" fn GetImageConfigInformation(loadedimage : *const LOADED_IMAGE, imageconfiginformation : *mut IMAGE_LOAD_CONFIG_DIRECTORY32) -> windows_sys::core::BOOL);
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(all(feature = "Win32_System_Kernel", feature = "Win32_System_SystemInformation"))]
 windows_link::link!("imagehlp.dll" "system" fn GetImageConfigInformation(loadedimage : *const LOADED_IMAGE, imageconfiginformation : *mut IMAGE_LOAD_CONFIG_DIRECTORY64) -> windows_sys::core::BOOL);
 #[cfg(all(feature = "Win32_System_Kernel", feature = "Win32_System_SystemInformation"))]
@@ -89,20 +89,20 @@ windows_link::link!("imagehlp.dll" "system" fn ImageLoad(dllname : windows_sys::
 #[cfg(target_arch = "x86")]
 #[cfg(feature = "Win32_System_SystemInformation")]
 windows_link::link!("dbghelp.dll" "system" fn ImageNtHeader(base : *const core::ffi::c_void) -> *mut IMAGE_NT_HEADERS32);
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_SystemInformation")]
 windows_link::link!("dbghelp.dll" "system" fn ImageNtHeader(base : *const core::ffi::c_void) -> *mut IMAGE_NT_HEADERS64);
 windows_link::link!("imagehlp.dll" "system" fn ImageRemoveCertificate(filehandle : super::super::super::Foundation:: HANDLE, index : u32) -> windows_sys::core::BOOL);
 #[cfg(target_arch = "x86")]
 #[cfg(feature = "Win32_System_SystemInformation")]
 windows_link::link!("dbghelp.dll" "system" fn ImageRvaToSection(ntheaders : *const IMAGE_NT_HEADERS32, base : *const core::ffi::c_void, rva : u32) -> *mut IMAGE_SECTION_HEADER);
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_SystemInformation")]
 windows_link::link!("dbghelp.dll" "system" fn ImageRvaToSection(ntheaders : *const IMAGE_NT_HEADERS64, base : *const core::ffi::c_void, rva : u32) -> *mut IMAGE_SECTION_HEADER);
 #[cfg(target_arch = "x86")]
 #[cfg(feature = "Win32_System_SystemInformation")]
 windows_link::link!("dbghelp.dll" "system" fn ImageRvaToVa(ntheaders : *const IMAGE_NT_HEADERS32, base : *const core::ffi::c_void, rva : u32, lastrvasection : *const *const IMAGE_SECTION_HEADER) -> *mut core::ffi::c_void);
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_SystemInformation")]
 windows_link::link!("dbghelp.dll" "system" fn ImageRvaToVa(ntheaders : *const IMAGE_NT_HEADERS64, base : *const core::ffi::c_void, rva : u32, lastrvasection : *const *const IMAGE_SECTION_HEADER) -> *mut core::ffi::c_void);
 #[cfg(all(feature = "Win32_System_Kernel", feature = "Win32_System_SystemInformation"))]
@@ -165,9 +165,9 @@ windows_link::link!("kernel32.dll" "system" fn RtlCaptureStackBackTrace(framesto
 windows_link::link!("kernel32.dll" "system" fn RtlDeleteFunctionTable(functiontable : *const IMAGE_RUNTIME_FUNCTION_ENTRY) -> bool);
 #[cfg(target_arch = "aarch64")]
 windows_link::link!("kernel32.dll" "system" fn RtlDeleteFunctionTable(functiontable : *const IMAGE_ARM64_RUNTIME_FUNCTION_ENTRY) -> bool);
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 windows_link::link!("ntdll.dll" "system" fn RtlDeleteGrowableFunctionTable(dynamictable : *const core::ffi::c_void));
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 windows_link::link!("ntdll.dll" "system" fn RtlGrowFunctionTable(dynamictable : *mut core::ffi::c_void, newentrycount : u32));
 #[cfg(any(target_arch = "arm64ec", target_arch = "x86_64"))]
 windows_link::link!("kernel32.dll" "system" fn RtlInstallFunctionTableCallback(tableidentifier : u64, baseaddress : u64, length : u32, callback : PGET_RUNTIME_FUNCTION_CALLBACK, context : *const core::ffi::c_void, outofprocesscallbackdll : windows_sys::core::PCWSTR) -> bool);
@@ -182,7 +182,7 @@ windows_link::link!("kernel32.dll" "system" fn RtlRaiseException(exceptionrecord
 #[cfg(feature = "Win32_System_Kernel")]
 windows_link::link!("kernel32.dll" "C" fn RtlRestoreContext(contextrecord : *const CONTEXT, exceptionrecord : *const EXCEPTION_RECORD));
 windows_link::link!("kernel32.dll" "system" fn RtlUnwind(targetframe : *const core::ffi::c_void, targetip : *const core::ffi::c_void, exceptionrecord : *const EXCEPTION_RECORD, returnvalue : *const core::ffi::c_void));
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_Kernel")]
 windows_link::link!("kernel32.dll" "system" fn RtlUnwindEx(targetframe : *const core::ffi::c_void, targetip : *const core::ffi::c_void, exceptionrecord : *const EXCEPTION_RECORD, returnvalue : *const core::ffi::c_void, contextrecord : *const CONTEXT, historytable : *const UNWIND_HISTORY_TABLE));
 #[cfg(any(target_arch = "arm64ec", target_arch = "x86_64"))]
@@ -198,7 +198,7 @@ windows_link::link!("kernel32.dll" "system" fn SetErrorMode(umode : THREAD_ERROR
 #[cfg(target_arch = "x86")]
 #[cfg(all(feature = "Win32_System_Kernel", feature = "Win32_System_SystemInformation"))]
 windows_link::link!("imagehlp.dll" "system" fn SetImageConfigInformation(loadedimage : *mut LOADED_IMAGE, imageconfiginformation : *const IMAGE_LOAD_CONFIG_DIRECTORY32) -> windows_sys::core::BOOL);
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(all(feature = "Win32_System_Kernel", feature = "Win32_System_SystemInformation"))]
 windows_link::link!("imagehlp.dll" "system" fn SetImageConfigInformation(loadedimage : *mut LOADED_IMAGE, imageconfiginformation : *const IMAGE_LOAD_CONFIG_DIRECTORY64) -> windows_sys::core::BOOL);
 windows_link::link!("dbghelp.dll" "system" fn SetSymLoadError(error : u32));
@@ -3251,7 +3251,7 @@ impl Default for LOADED_IMAGE {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(all(feature = "Win32_System_Kernel", feature = "Win32_System_SystemInformation"))]
 #[derive(Clone, Copy)]
 pub struct LOADED_IMAGE {
@@ -3270,7 +3270,7 @@ pub struct LOADED_IMAGE {
     pub Links: super::super::Kernel::LIST_ENTRY,
     pub SizeOfImage: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(all(feature = "Win32_System_Kernel", feature = "Win32_System_SystemInformation"))]
 impl Default for LOADED_IMAGE {
     fn default() -> Self {
@@ -3338,14 +3338,14 @@ impl Default for MINIDUMP_CALLBACK_INFORMATION {
     }
 }
 #[repr(C, packed(4))]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(all(feature = "Win32_Storage_FileSystem", feature = "Win32_System_Kernel", feature = "Win32_System_Memory"))]
 #[derive(Clone, Copy)]
 pub struct MINIDUMP_CALLBACK_INFORMATION {
     pub CallbackRoutine: MINIDUMP_CALLBACK_ROUTINE,
     pub CallbackParam: *mut core::ffi::c_void,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(all(feature = "Win32_Storage_FileSystem", feature = "Win32_System_Kernel", feature = "Win32_System_Memory"))]
 impl Default for MINIDUMP_CALLBACK_INFORMATION {
     fn default() -> Self {
@@ -3500,7 +3500,7 @@ impl Default for MINIDUMP_EXCEPTION_INFORMATION {
     }
 }
 #[repr(C, packed(4))]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_Kernel")]
 #[derive(Clone, Copy)]
 pub struct MINIDUMP_EXCEPTION_INFORMATION {
@@ -3508,7 +3508,7 @@ pub struct MINIDUMP_EXCEPTION_INFORMATION {
     pub ExceptionPointers: *mut EXCEPTION_POINTERS,
     pub ClientPointers: windows_sys::core::BOOL,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_Kernel")]
 impl Default for MINIDUMP_EXCEPTION_INFORMATION {
     fn default() -> Self {
@@ -4364,14 +4364,14 @@ impl Default for MINIDUMP_USER_STREAM {
     }
 }
 #[repr(C, packed(4))]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct MINIDUMP_USER_STREAM {
     pub Type: u32,
     pub BufferSize: u32,
     pub Buffer: *mut core::ffi::c_void,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for MINIDUMP_USER_STREAM {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4391,13 +4391,13 @@ impl Default for MINIDUMP_USER_STREAM_INFORMATION {
     }
 }
 #[repr(C, packed(4))]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct MINIDUMP_USER_STREAM_INFORMATION {
     pub UserStreamCount: u32,
     pub UserStreamArray: *mut MINIDUMP_USER_STREAM,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for MINIDUMP_USER_STREAM_INFORMATION {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -5460,7 +5460,7 @@ pub const UNMOUNTABLE_BOOT_VOLUME: BUGCHECK_ERROR = 237u32;
 pub const UNSUPPORTED_INSTRUCTION_MODE: BUGCHECK_ERROR = 337u32;
 pub const UNSUPPORTED_PROCESSOR: BUGCHECK_ERROR = 93u32;
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct UNWIND_HISTORY_TABLE {
     pub Count: u32,
@@ -5472,7 +5472,7 @@ pub struct UNWIND_HISTORY_TABLE {
     pub HighAddress: usize,
     pub Entry: [UNWIND_HISTORY_TABLE_ENTRY; 12],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for UNWIND_HISTORY_TABLE {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -6412,7 +6412,7 @@ impl Default for XSAVE_FORMAT {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct XSAVE_FORMAT {
     pub ControlWord: u16,
@@ -6432,7 +6432,7 @@ pub struct XSAVE_FORMAT {
     pub XmmRegisters: [M128A; 16],
     pub Reserved4: [u8; 96],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for XSAVE_FORMAT {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -6508,7 +6508,7 @@ impl Default for XSTATE_CONTEXT {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct XSTATE_CONTEXT {
     pub Mask: u64,
@@ -6517,7 +6517,7 @@ pub struct XSTATE_CONTEXT {
     pub Area: *mut XSAVE_AREA,
     pub Buffer: *mut core::ffi::c_void,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for XSTATE_CONTEXT {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -6556,3 +6556,114 @@ pub const sfImage: IMAGEHLP_SF_TYPE = 0i32;
 pub const sfMax: IMAGEHLP_SF_TYPE = 4i32;
 pub const sfMpd: IMAGEHLP_SF_TYPE = 3i32;
 pub const sfPdb: IMAGEHLP_SF_TYPE = 2i32;
+
+// --- Windows on ARM32 (gecko_w10m) ---
+// winnt.h's ARM CONTEXT: 13 GPRs, 4 control registers, the VFP/NEON save area
+// as a union of 16 x 128-bit / 32 x 64-bit / 32 x 32-bit views, then the debug
+// registers (ARM_MAX_BREAKPOINTS = 8, ARM_MAX_WATCHPOINTS = 1).
+#[repr(C)]
+#[cfg(target_arch = "arm")]
+#[derive(Clone, Copy)]
+pub union CONTEXT_0 {
+    pub Q: [u64; 32],
+    pub D: [u64; 32],
+    pub S: [u32; 32],
+}
+#[cfg(target_arch = "arm")]
+impl Default for CONTEXT_0 {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+#[repr(C)]
+#[cfg(target_arch = "arm")]
+#[derive(Clone, Copy)]
+pub struct CONTEXT {
+    pub ContextFlags: CONTEXT_FLAGS,
+    pub R0: u32,
+    pub R1: u32,
+    pub R2: u32,
+    pub R3: u32,
+    pub R4: u32,
+    pub R5: u32,
+    pub R6: u32,
+    pub R7: u32,
+    pub R8: u32,
+    pub R9: u32,
+    pub R10: u32,
+    pub R11: u32,
+    pub R12: u32,
+    pub Sp: u32,
+    pub Lr: u32,
+    pub Pc: u32,
+    pub Cpsr: u32,
+    pub Fpscr: u32,
+    pub Padding: u32,
+    pub Anonymous: CONTEXT_0,
+    pub Bvr: [u32; 8],
+    pub Bcr: [u32; 8],
+    pub Wvr: [u32; 1],
+    pub Wcr: [u32; 1],
+    pub Padding2: [u32; 2],
+}
+#[cfg(target_arch = "arm")]
+impl Default for CONTEXT {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+#[repr(C)]
+#[cfg(target_arch = "arm")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UNWIND_HISTORY_TABLE_ENTRY {
+    pub ImageBase: usize,
+    // IMAGE_ARM_RUNTIME_FUNCTION_ENTRY sits behind a separate feature gate;
+    // the field is only ever an opaque pointer here.
+    pub FunctionEntry: *mut core::ffi::c_void,
+}
+#[cfg(target_arch = "arm")]
+impl Default for UNWIND_HISTORY_TABLE_ENTRY {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+#[repr(C, packed(4))]
+#[cfg(target_arch = "arm")]
+#[cfg(feature = "Win32_System_Kernel")]
+#[derive(Clone, Copy)]
+pub struct MINIDUMP_THREAD_CALLBACK {
+    pub ThreadId: u32,
+    pub ThreadHandle: super::super::super::Foundation::HANDLE,
+    pub Context: CONTEXT,
+    pub SizeOfContext: u32,
+    pub StackBase: u64,
+    pub StackEnd: u64,
+}
+#[cfg(target_arch = "arm")]
+#[cfg(feature = "Win32_System_Kernel")]
+impl Default for MINIDUMP_THREAD_CALLBACK {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+#[repr(C, packed(4))]
+#[cfg(target_arch = "arm")]
+#[cfg(feature = "Win32_System_Kernel")]
+#[derive(Clone, Copy)]
+pub struct MINIDUMP_THREAD_EX_CALLBACK {
+    pub ThreadId: u32,
+    pub ThreadHandle: super::super::super::Foundation::HANDLE,
+    pub Context: CONTEXT,
+    pub SizeOfContext: u32,
+    pub StackBase: u64,
+    pub StackEnd: u64,
+    pub BackingStoreBase: u64,
+    pub BackingStoreEnd: u64,
+}
+#[cfg(target_arch = "arm")]
+#[cfg(feature = "Win32_System_Kernel")]
+impl Default for MINIDUMP_THREAD_EX_CALLBACK {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}

@@ -62,7 +62,10 @@ else:
         'yuv_row_other.cpp',
     ]
 
-if CONFIG['TARGET_CPU'] == 'arm' and CONFIG['HAVE_ARM_NEON']:
+# yuv_row_arm.s is A32 (ARM mode) assembly; Windows on ARM32 is Thumb-2 only,
+# so the generic C row converters are used there instead.
+if (CONFIG['TARGET_CPU'] == 'arm' and CONFIG['HAVE_ARM_NEON']
+        and CONFIG['OS_TARGET'] != 'WINNT'):
     SOURCES += [
         'yuv_row_arm.s',
     ]

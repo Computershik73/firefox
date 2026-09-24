@@ -128,13 +128,13 @@ bool wasm::StaticallyLink(jit::AutoMarkJitCodeWritableForThread& writable,
     Assembler::Bind(base, label);
   }
 
-  for (CallFarJump far : linkData.callFarJumps) {
+  for (CallFarJump farJump : linkData.callFarJumps) {
     MOZ_ASSERT(maybeCode && maybeCode->mode() == CompileMode::LazyTiering);
-    const CodeBlock& bestBlock = maybeCode->funcCodeBlock(far.targetFuncIndex);
-    uint32_t stubRangeIndex = bestBlock.funcToCodeRange[far.targetFuncIndex];
+    const CodeBlock& bestBlock = maybeCode->funcCodeBlock(farJump.targetFuncIndex);
+    uint32_t stubRangeIndex = bestBlock.funcToCodeRange[farJump.targetFuncIndex];
     const CodeRange& stubRange = bestBlock.codeRanges[stubRangeIndex];
     uint8_t* stubBase = bestBlock.base();
-    MacroAssembler::patchFarJump(base + far.jumpOffset,
+    MacroAssembler::patchFarJump(base + farJump.jumpOffset,
                                  stubBase + stubRange.funcUncheckedCallEntry());
   }
 

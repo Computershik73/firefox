@@ -12,6 +12,12 @@
 
 #include "libANGLE/renderer/d3d/d3d11/SwapChain11.h"
 
+#include <cstdio>
+
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+#    include "libANGLE/renderer/d3d/d3d11/winrt/NativeWindow11WinRT.h"
+#endif
+
 #include <EGL/eglext.h>
 
 #include "libANGLE/features.h"
@@ -514,6 +520,12 @@ EGLint SwapChain11::resize(DisplayD3D *displayD3D, EGLint backbufferWidth, EGLin
 
     hr = mSwapChain->ResizeBuffers(desc.BufferCount, backbufferWidth, backbufferHeight,
                                    getSwapChainNativeFormat(), 0);
+    {
+        char note[128];
+        snprintf(note, sizeof(note), "angle: swap chain resized to %dx%d -> 0x%08lx", backbufferWidth,
+                 backbufferHeight, static_cast<unsigned long>(hr));
+        AngleUwpNote(note);
+    }
 
     if (FAILED(hr))
     {
@@ -907,6 +919,27 @@ EGLint SwapChain11::present(DisplayD3D *displayD3D, EGLint x, EGLint y, EGLint w
 
     HRESULT result = S_OK;
 
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    // Nobody has ever confirmed that a frame reaches this swap chain. The log
+    // says the chain was made and the panel took it, and then the window is
+    // hidden -- and whether a single Present happened in between has been
+    // assumed both ways. Said once, the first time, and every time it fails.
+    if (mFirstSwap)
+    {
+        AngleUwpNote("angle: first present");
+    }
+    if (AngleUwpMode() == 2)
+    {
+        if (mFirstSwap)
+        {
+            AngleUwpNote("angle: mode 2 -- NOT presenting, this frame or any other");
+        }
+        mFirstSwap = false;
+        mRenderer->getStateManager()->invalidateRenderTarget();
+        return EGL_SUCCESS;
+    }
+#endif
+
     // Use IDXGISwapChain1::Present1 with a dirty rect if DXGI 1.2 is available.
     // Dirty rect present is not supported with a multisampled swapchain.
     if (mSwapChain1 != nullptr && mEGLSamples <= 1)
@@ -951,6 +984,19 @@ EGLint SwapChain11::present(DisplayD3D *displayD3D, EGLint x, EGLint y, EGLint w
     {
         ERR() << "Present failed with " << gl::FmtHR(result);
     }
+
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    if (result != S_OK)
+    {
+        // Including the S_ statuses -- DXGI_STATUS_OCCLUDED is 0x087A0001 and
+        // would mean the compositor considers this chain hidden, which is the
+        // very thing being asked about.
+        char note[96];
+        snprintf(note, sizeof(note), "angle: present returned 0x%08lx",
+                 static_cast<unsigned long>(result));
+        AngleUwpNote(note);
+    }
+#endif
 
     mNativeWindow->commitChange();
 

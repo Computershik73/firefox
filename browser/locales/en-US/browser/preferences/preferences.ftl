@@ -813,6 +813,38 @@ update-in-progress-ok-button = &Discard
 # method of closing the UI will not discard the update.
 update-in-progress-cancel-button = &Continue
 
+## The port and its author
+
+gecko-port-heading =
+    .label = About the Windows 10 Mobile port
+    .description = Gecko is Firefox — the { -brand-short-name } engine — running on Windows 10 Mobile.
+
+# $version (string) - the port's own version, e.g. 155.1.0.42
+gecko-port-version =
+    .label = Port version: { $version }
+    .description = The first number is the Gecko engine version, the last is the build number.
+
+gecko-default-browser =
+    .label = Make this the default browser
+    .description = Opens the system settings: Default apps → Web browser.
+
+gecko-port-author =
+    .label = Ported by Computershik
+    .description = Porting, building and debugging on the device.
+
+gecko-port-4pda =
+    .label = Profile on 4pda
+
+gecko-port-telegram =
+    .label = Telegram channel @cmplog
+
+gecko-port-donate =
+    .label = Donate (within the CIS for now)
+
+gecko-port-donate-abroad =
+    .label = Outside the CIS and would like to help?
+    .description = Send a message to the Telegram channel.
+
 ## Firefox support
 
 support-application-heading =

@@ -44,6 +44,34 @@
 #include "mozJSModuleLoader.h"
 
 #include "nsAppRunner.h"
+#if defined(GECKO_W10M)
+// One line to the device log. Nine seconds pass between XRE_main and the
+// first chrome manifest with nothing in between to say where; these marks
+// split them by phase.
+extern "C" void GeckoW10mNote(const char* aText);
+#  include "nsPrintfCString.h"
+// A mark with the CPU time spent so far, by this thread and by the process.
+// The second launch of 155.12 took seventy seconds to restore its session
+// while the shell's UI thread drew sixty frames a second beside it, and the
+// marks alone could not say whether the engine thread was working slowly or
+// not working at all. With the CPU time beside the wall time they can: a
+// mark whose CPU barely moved since the last one was waiting.
+static void GeckoW10mStartupMark(const char* aWhat) {
+  FILETIME c, e, k, u;
+  uint64_t threadMs = 0, processMs = 0;
+  if (::GetThreadTimes(::GetCurrentThread(), &c, &e, &k, &u)) {
+    threadMs = ((uint64_t(k.dwHighDateTime) << 32 | k.dwLowDateTime) +
+                (uint64_t(u.dwHighDateTime) << 32 | u.dwLowDateTime)) / 10000;
+  }
+  if (::GetProcessTimes(::GetCurrentProcess(), &c, &e, &k, &u)) {
+    processMs = ((uint64_t(k.dwHighDateTime) << 32 | k.dwLowDateTime) +
+                 (uint64_t(u.dwHighDateTime) << 32 | u.dwLowDateTime)) / 10000;
+  }
+  nsPrintfCString note("%s -- cpu: this thread %u ms, process %u ms", aWhat,
+                       unsigned(threadMs), unsigned(processMs));
+  GeckoW10mNote(note.get());
+}
+#endif
 #include "mozilla/XREAppData.h"
 #include "mozilla/Bootstrap.h"
 #if defined(MOZ_UPDATER) && !defined(MOZ_WIDGET_ANDROID)
@@ -2338,7 +2366,23 @@ static void RegisterApplicationRestartChanged(const char* aPref, void* aData) {
                                    RESTART_NO_CRASH | RESTART_NO_HANG);
     }
   } else if (wasRegistered) {
+#  ifdef GECKO_W10M
+    // Windows 10 Mobile's kernel32 exports RegisterApplicationRestart and
+    // GetApplicationRestartSettings but not UnregisterApplicationRestart, and
+    // one unresolvable import is enough to stop the whole 132 MB xul.dll from
+    // loading -- the loader answers ERROR_PROC_NOT_FOUND and names nothing.
+    // Resolving it at run time costs nothing where it exists and lets the
+    // engine load where it does not.
+    if (HMODULE kernel32 = ::GetModuleHandleW(L"kernel32.dll")) {
+      using UnregisterFn = HRESULT(WINAPI*)();
+      if (auto unregister = reinterpret_cast<UnregisterFn>(::GetProcAddress(
+              kernel32, "UnregisterApplicationRestart"))) {
+        unregister();
+      }
+    }
+#  else
     ::UnregisterApplicationRestart();
+#  endif
   }
 }
 
@@ -4552,6 +4596,9 @@ int XREMain::XRE_mainInit(bool* aExitFlag,
   }
 
   rv = mDirProvider.Initialize(mAppData->directory, mAppData->xreDirectory);
+#if defined(GECKO_W10M)
+  GeckoW10mStartupMark("startup: directory provider up");
+#endif
   if (NS_FAILED(rv)) return 1;
 
   if (EnvHasValue("MOZ_CRASHREPORTER")) {
@@ -4829,6 +4876,9 @@ int XREMain::XRE_mainInit(bool* aExitFlag,
 #endif
 
   rv = XRE_InitCommandLine(gArgc, gArgv);
+#if defined(GECKO_W10M)
+  GeckoW10mStartupMark("startup: command line parsed");
+#endif
   NS_ENSURE_SUCCESS(rv, 1);
 
   return 0;
@@ -5327,6 +5377,12 @@ int XREMain::XRE_mainStartup(bool* aExitFlag,
     if (!gStartupLock) {
       NS_WARNING("Failed to lock for startup, continuing anyway.");
     }
+#if defined(GECKO_W10M)
+    // Waits up to five seconds for a lock file in the temp directory; if
+    // the previous instance still holds it, this is where those seconds go.
+    GeckoW10mStartupMark(gStartupLock ? "startup: startup lock taken"
+                                    : "startup: startup lock NOT taken after the wait");
+#endif
   }
 #endif
 #if defined(MOZ_WIDGET_GTK)
@@ -5340,6 +5396,12 @@ int XREMain::XRE_mainStartup(bool* aExitFlag,
 
   bool canRun = false;
   rv = mNativeApp->Start(&canRun);
+#if defined(GECKO_W10M)
+  GeckoW10mStartupMark("startup: native app support started");
+#endif
+#if defined(GECKO_W10M)
+  GeckoW10mStartupMark("startup: native app support started");
+#endif
   if (NS_FAILED(rv) || !canRun) {
     return 1;
   }
@@ -5370,12 +5432,18 @@ int XREMain::XRE_mainStartup(bool* aExitFlag,
     ProfileMissingDialog(mNativeApp);
     return 1;
   }
+#if defined(GECKO_W10M)
+  GeckoW10mStartupMark("startup: profile service up -- profiles.ini and installs.ini read");
+#endif
 
   bool wasDefaultSelection;
   nsCOMPtr<nsIToolkitProfile> profile;
   rv = SelectProfile(mProfileSvc, mNativeApp, getter_AddRefs(mProfD),
                      getter_AddRefs(mProfLD), getter_AddRefs(profile),
                      &wasDefaultSelection);
+#if defined(GECKO_W10M)
+  GeckoW10mStartupMark("startup: profile selected");
+#endif
   if (rv == NS_ERROR_LAUNCHED_CHILD_PROCESS || rv == NS_ERROR_ABORT) {
     *aExitFlag = true;
     return 0;
@@ -5673,6 +5741,14 @@ int XREMain::XRE_mainStartup(bool* aExitFlag,
 
   MOZ_RELEASE_ASSERT(!cachesOK || lastVersion.Equals(version),
                      "Caches cannot be good if the version has changed.");
+#if defined(GECKO_W10M)
+  {
+    nsPrintfCString note("startup: compatibility checked -- version %s, caches %s",
+                         versionOK ? "same" : "CHANGED",
+                         cachesOK ? "kept" : "PURGED");
+    GeckoW10mStartupMark(note.get());
+  }
+#endif
 
   // Refuse to launch if the profile's on-disk encryption state and the
   // launching build's pref disagree: silently opening encrypted DBs with
@@ -6563,6 +6639,9 @@ int XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig) {
   bool exit = false;
   int result = XRE_mainInit(&exit, appRunnerTelemFlags);
   if (result != 0 || exit) return result;
+#if defined(GECKO_W10M)
+  GeckoW10mStartupMark("startup: XRE_mainInit done");
+#endif
 
   // If we exit gracefully, remove the startup crash canary file.
   auto cleanup = MakeScopeExit([&]() -> nsresult {
@@ -6576,6 +6655,9 @@ int XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig) {
   // startup
   result = XRE_mainStartup(&exit, appRunnerTelemFlags);
   if (result != 0 || exit) return result;
+#if defined(GECKO_W10M)
+  GeckoW10mStartupMark("startup: XRE_mainStartup done -- profile chosen and locked");
+#endif
 
   // Start the real application. We use |aInitJSContext = false| because
   // XRE_mainRun wants to initialize the JSContext after reading user prefs.
@@ -6597,6 +6679,9 @@ int XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig) {
     MOZ_CRASH("NS_ERROR_OMNIJAR_CORRUPT");
   }
   NS_ENSURE_SUCCESS(rv, 1);
+#if defined(GECKO_W10M)
+  GeckoW10mStartupMark("startup: XPCOM up -- omni.ja opened, components registered");
+#endif
 
   // run!
   rv = XRE_mainRun();
@@ -6768,6 +6853,21 @@ bool XRE_IsE10sParentProcess() {
 #undef GECKO_PROCESS_TYPE
 
 bool XRE_UseNativeEventProcessing() {
+#if defined(GECKO_W10M)
+  // A packaged app has a CoreWindow, not a desktop window station. The Windows
+  // app shell builds its event loop around a message-only window, and neither
+  // RegisterClassW nor CreateWindowW exists on this device -- nsAppShell::Init
+  // reaches StaticCreateEventWindow and dies on the release assert that the
+  // window class registered.
+  //
+  // Gecko already supports running without any of that: it is the same path
+  // win32k lockdown takes. nsBaseAppShell then never installs itself as a
+  // thread observer, ScheduleNativeEventCallback is never reached, and the
+  // runtime drives its own event queue -- which is what an engine embedded in
+  // someone else's message loop should be doing regardless.
+  return false;
+#endif
+
 #if defined(XP_WIN)
   // If win32k is locked down we can't use native event processing.
   if (IsWin32kLockedDown()) {

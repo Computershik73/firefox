@@ -790,8 +790,21 @@ D3D11DXVA2Manager::InitInternal(layers::KnowsCompositor* aKnowsCompositor,
     }
   }
 
+  // Zero copy means the decoder's own NV12 texture goes to the compositor as
+  // it is, instead of being run through the video processor MFT into a fresh
+  // one for every frame. Upstream asks for the GPU process because that is
+  // where the texture has to end up; here the compositor is in this process
+  // and, with the decoder device reused, on the same D3D11 device the
+  // compositor draws with -- which is the condition that actually matters, and
+  // it is still checked. The copy costs a full frame of fill per frame, which
+  // 1080p30 has room for on this GPU and 1080p60 does not.
+#if defined(GECKO_W10M)
+  if (!IsD3D11() ||
+      (mDevice != DeviceManagerDx::Get()->GetCompositorDevice())) {
+#else
   if (!IsD3D11() || !XRE_IsGPUProcess() ||
       (mDevice != DeviceManagerDx::Get()->GetCompositorDevice())) {
+#endif
     mZeroCopyUsageInfo->DisableZeroCopyNV12Texture();
   }
 

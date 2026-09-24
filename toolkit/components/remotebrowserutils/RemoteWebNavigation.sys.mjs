@@ -38,7 +38,10 @@ export class RemoteWebNavigation {
 
   maybeCancelContentJSExecution(aNavigationType, aOptions = {}) {
     const epoch = this._cancelContentJSEpoch++;
-    this._browser.frameLoader.remoteTab.maybeCancelContentJSExecution(
+    // No remoteTab means the frame loader never went remote, which can happen
+    // whatever the element's attribute says. Nothing to cancel, and throwing
+    // here would abandon the navigation that asked.
+    this._browser.frameLoader.remoteTab?.maybeCancelContentJSExecution(
       aNavigationType,
       { ...aOptions, epoch }
     );

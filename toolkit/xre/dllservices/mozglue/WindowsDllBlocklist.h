@@ -6,7 +6,7 @@
 #define mozilla_windowsdllblocklist_h
 
 #if (defined(_MSC_VER) || defined(__MINGW32__)) && \
-    (defined(_M_IX86) || defined(_M_X64) || defined(_M_ARM64))
+    (defined(_M_IX86) || defined(_M_X64) || defined(_M_ARM64) || defined(_M_ARM))
 
 #  include <windows.h>
 #  include "mozilla/ProcessType.h"

@@ -3,6 +3,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "WebRenderAPI.h"
+#if defined(GECKO_W10M)
+extern "C" void GeckoW10mNote(const char* text);
+#endif
 
 #include "GLContext.h"
 #include "TextDrawTarget.h"
@@ -279,6 +282,9 @@ RefPtr<WebRenderAPI::CreatePromise> WebRenderAPI::Create(
               "Failed to make GL context current"_ns, __func__);
         }
 
+#if defined(GECKO_W10M)
+        GeckoW10mNote("gfx: making the WebRender renderer");
+#endif
         if (!wr_window_new(
                 aWindowId, aSize.width, aSize.height,
                 aWindowKind == WindowKind::MAIN, supportLowPriorityTransactions,
@@ -312,6 +318,9 @@ RefPtr<WebRenderAPI::CreatePromise> WebRenderAPI::Create(
         }
         MOZ_ASSERT(wrRenderer);
         MOZ_ASSERT(docHandle);
+#if defined(GECKO_W10M)
+        GeckoW10mNote("gfx: the WebRender renderer is up");
+#endif
 
         const WebRenderBackend backend = compositor->BackendType();
         const WebRenderCompositor compositorType = compositor->CompositorType();

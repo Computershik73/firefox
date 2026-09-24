@@ -584,7 +584,7 @@ impl Default for ICMP_ECHO_REPLY {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct ICMP_ECHO_REPLY32 {
     pub Address: u32,
@@ -595,7 +595,7 @@ pub struct ICMP_ECHO_REPLY32 {
     pub Data: *mut core::ffi::c_void,
     pub Options: IP_OPTION_INFORMATION32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for ICMP_ECHO_REPLY32 {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -1523,7 +1523,7 @@ impl Default for IP_OPTION_INFORMATION {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct IP_OPTION_INFORMATION32 {
     pub Ttl: u8,
@@ -1532,7 +1532,7 @@ pub struct IP_OPTION_INFORMATION32 {
     pub OptionsSize: u8,
     pub OptionsData: *mut u8,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for IP_OPTION_INFORMATION32 {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }

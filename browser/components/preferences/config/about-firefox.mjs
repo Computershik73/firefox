@@ -195,9 +195,7 @@ Preferences.addSetting(
   })
 );
 
-Preferences.addSetting({
-  id: "updateAppInfo",
-  getControlConfig(config) {
+function geckoVersionControlConfig(config) {
     let version = AppConstants.MOZ_APP_VERSION_DISPLAY;
     let distribution;
     let distributionId;
@@ -257,6 +255,41 @@ Preferences.addSetting({
       ".releaseNotesURL": releaseNotesURL,
     };
 
+    return config;
+}
+
+Preferences.addSetting({
+  id: "updateAppInfo",
+  getControlConfig: geckoVersionControlConfig,
+});
+
+// Port: the version used to live only inside the updates card, and that
+// card is hidden when updates are the operating system's business -- which
+// on a Store-style package they always are. So the page never said which
+// engine it was. The same widget, shown whenever the card is not.
+Preferences.addSetting({
+  id: "geckoVersionGroup",
+  visible: () => !UpdatesHelpers.showUpdatesSettings,
+});
+Preferences.addSetting({
+  id: "geckoVersionInfo",
+  getControlConfig: geckoVersionControlConfig,
+});
+
+// Port: who made the port, and where to find them.
+Preferences.addSetting({ id: "geckoPortGroup" });
+Preferences.addSetting({ id: "geckoPortAuthor" });
+Preferences.addSetting({ id: "geckoPort4pda" });
+Preferences.addSetting({ id: "geckoPortTelegram" });
+Preferences.addSetting({ id: "geckoPortDonate" });
+Preferences.addSetting({ id: "geckoPortDonateAbroad" });
+Preferences.addSetting({ id: "geckoDefaultBrowser" });
+Preferences.addSetting({
+  id: "geckoPortVersion",
+  getControlConfig(config) {
+    config.l10nArgs = {
+      version: Services.prefs.getStringPref("gecko.port.version", "?"),
+    };
     return config;
   },
 });
@@ -488,6 +521,16 @@ SettingGroupManager.registerGroups({
         },
       },
       {
+        id: "geckoVersionGroup",
+        control: "moz-box-group",
+        items: [
+          {
+            id: "geckoVersionInfo",
+            control: "update-information",
+          },
+        ],
+      },
+      {
         id: "updateApp",
         control: "moz-box-group",
         items: [
@@ -554,6 +597,66 @@ SettingGroupManager.registerGroups({
           {
             id: "showUpdatePrompts",
             l10nId: "update-application-suppress-prompts-2",
+          },
+        ],
+      },
+    ],
+  },
+  port: {
+    l10nId: "gecko-port-heading",
+    iconSrc: "chrome://browser/skin/preferences/category-general.svg",
+    headingLevel: 2,
+    items: [
+      {
+        id: "geckoPortGroup",
+        control: "moz-box-group",
+        items: [
+          {
+            id: "geckoPortVersion",
+            l10nId: "gecko-port-version",
+            control: "moz-box-item",
+          },
+          {
+            id: "geckoDefaultBrowser",
+            l10nId: "gecko-default-browser",
+            control: "moz-box-link",
+            controlAttrs: {
+              href: "ms-settings:defaultapps",
+            },
+          },
+          {
+            id: "geckoPortAuthor",
+            l10nId: "gecko-port-author",
+            control: "moz-box-item",
+          },
+          {
+            id: "geckoPort4pda",
+            l10nId: "gecko-port-4pda",
+            control: "moz-box-link",
+            controlAttrs: {
+              href: "https://4pda.to/forum/index.php?showuser=4458524",
+            },
+          },
+          {
+            id: "geckoPortTelegram",
+            l10nId: "gecko-port-telegram",
+            control: "moz-box-link",
+            controlAttrs: {
+              href: "https://t.me/cmplog",
+            },
+          },
+          {
+            id: "geckoPortDonate",
+            l10nId: "gecko-port-donate",
+            control: "moz-box-link",
+            controlAttrs: {
+              href: "https://pay.cloudtips.ru/p/83821e32",
+            },
+          },
+          {
+            id: "geckoPortDonateAbroad",
+            l10nId: "gecko-port-donate-abroad",
+            control: "moz-box-item",
           },
         ],
       },

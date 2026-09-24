@@ -231,6 +231,7 @@ set_config("ENABLE_UNIFIED_BUILD", True, when="--enable-unified-build")
 
 
 include("build/moz.configure/bootstrap.configure")
+include("build/moz.configure/uwp.configure")
 
 
 # The execution model of the configure sandbox doesn't allow for

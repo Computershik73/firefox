@@ -3713,6 +3713,7 @@ impl Renderer {
             frame.has_been_rendered = true;
             return;
         }
+        crate::device::gecko_w10m_note(&format!("wr: draw_frame -- {} passes, device size {:?}", frame.passes.len(), device_size));
 
         {
             let _gm = self.gpu_profiler.start_marker("gpu buffer update");
@@ -3731,11 +3732,13 @@ impl Renderer {
             );
         }
 
+        crate::device::gecko_w10m_note("wr: gpu buffers updated");
         self.device.disable_depth_write();
         self.set_blend(false, FramebufferKind::Other);
         self.device.disable_stencil();
 
         self.bind_frame_data(frame);
+        crate::device::gecko_w10m_note("wr: frame data bound");
 
         let bytes_to_mb = 1.0 / 1000000.0;
         let gpu_buffer_bytes_f = frame.gpu_buffer_f.size.to_f32().area() * 16.0;
@@ -3808,6 +3811,13 @@ impl Renderer {
         }
 
         for (_pass_index, pass) in frame.passes.iter_mut().enumerate() {
+            {
+                static PASSES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                let n = PASSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                if n <= 60 {
+                    crate::device::gecko_w10m_note(&format!("wr: pass {} (index {} of this frame) begins", n, _pass_index));
+                }
+            }
             #[cfg(not(target_os = "android"))]
             let _gm = self.gpu_profiler.start_marker(&format!("pass {}", _pass_index));
 
@@ -3939,6 +3949,7 @@ impl Renderer {
             present_mode,
         );
 
+        crate::device::gecko_w10m_note("wr: draw_frame done");
         frame.has_been_rendered = true;
 
         Self::maybe_evict_gpu_buffer_texture(

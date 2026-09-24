@@ -2,8 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/StaticPrefs_browser.h"
+// UNICODE has to be set before anything can pull in <windows.h>, otherwise
+// LPCTSTR is already typedefd to the narrow form while the A/W forwarders
+// below resolve to the wide entry points.
 #define UNICODE
+
+#include "mozilla/StaticPrefs_browser.h"
 
 #include "nsWindowsShellService.h"
 #include "nsWindowsShellServiceInternal.h"

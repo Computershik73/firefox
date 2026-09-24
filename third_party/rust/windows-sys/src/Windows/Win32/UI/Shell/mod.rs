@@ -1054,7 +1054,7 @@ impl Default for APPBARDATA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct APPBARDATA {
     pub cbSize: u32,
@@ -1064,7 +1064,7 @@ pub struct APPBARDATA {
     pub rc: super::super::Foundation::RECT,
     pub lParam: super::super::Foundation::LPARAM,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for APPBARDATA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -1213,7 +1213,7 @@ impl Default for ASSOCIATIONELEMENT {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_Registry")]
 #[derive(Clone, Copy)]
 pub struct ASSOCIATIONELEMENT {
@@ -1221,7 +1221,7 @@ pub struct ASSOCIATIONELEMENT {
     pub hkClass: super::super::System::Registry::HKEY,
     pub pszClass: windows_sys::core::PCWSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_Registry")]
 impl Default for ASSOCIATIONELEMENT {
     fn default() -> Self {
@@ -2530,7 +2530,7 @@ impl Default for DRAGINFOA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct DRAGINFOA {
     pub uSize: u32,
@@ -2539,7 +2539,7 @@ pub struct DRAGINFOA {
     pub lpFileList: windows_sys::core::PSTR,
     pub grfKeyState: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for DRAGINFOA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -2562,7 +2562,7 @@ impl Default for DRAGINFOW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct DRAGINFOW {
     pub uSize: u32,
@@ -2571,7 +2571,7 @@ pub struct DRAGINFOW {
     pub lpFileList: windows_sys::core::PWSTR,
     pub grfKeyState: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for DRAGINFOW {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -3982,7 +3982,7 @@ impl Default for NOTIFYICONDATAA_0 {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_WindowsAndMessaging")]
 #[derive(Clone, Copy)]
 pub struct NOTIFYICONDATAA {
@@ -4002,7 +4002,7 @@ pub struct NOTIFYICONDATAA {
     pub guidItem: windows_sys::core::GUID,
     pub hBalloonIcon: super::WindowsAndMessaging::HICON,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_WindowsAndMessaging")]
 impl Default for NOTIFYICONDATAA {
     fn default() -> Self {
@@ -4010,14 +4010,14 @@ impl Default for NOTIFYICONDATAA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_WindowsAndMessaging")]
 #[derive(Clone, Copy)]
 pub union NOTIFYICONDATAA_0 {
     pub uTimeout: u32,
     pub uVersion: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_WindowsAndMessaging")]
 impl Default for NOTIFYICONDATAA_0 {
     fn default() -> Self {
@@ -4068,7 +4068,7 @@ impl Default for NOTIFYICONDATAW_0 {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_WindowsAndMessaging")]
 #[derive(Clone, Copy)]
 pub struct NOTIFYICONDATAW {
@@ -4088,7 +4088,7 @@ pub struct NOTIFYICONDATAW {
     pub guidItem: windows_sys::core::GUID,
     pub hBalloonIcon: super::WindowsAndMessaging::HICON,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_WindowsAndMessaging")]
 impl Default for NOTIFYICONDATAW {
     fn default() -> Self {
@@ -4096,14 +4096,14 @@ impl Default for NOTIFYICONDATAW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_WindowsAndMessaging")]
 #[derive(Clone, Copy)]
 pub union NOTIFYICONDATAW_0 {
     pub uTimeout: u32,
     pub uVersion: u32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_WindowsAndMessaging")]
 impl Default for NOTIFYICONDATAW_0 {
     fn default() -> Self {
@@ -4126,7 +4126,7 @@ impl Default for NOTIFYICONIDENTIFIER {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct NOTIFYICONIDENTIFIER {
     pub cbSize: u32,
@@ -4134,7 +4134,7 @@ pub struct NOTIFYICONIDENTIFIER {
     pub uID: u32,
     pub guidItem: windows_sys::core::GUID,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for NOTIFYICONIDENTIFIER {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4386,7 +4386,7 @@ impl Default for OPEN_PRINTER_PROPS_INFOA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct OPEN_PRINTER_PROPS_INFOA {
     pub dwSize: u32,
@@ -4395,7 +4395,7 @@ pub struct OPEN_PRINTER_PROPS_INFOA {
     pub dwFlags: u32,
     pub bModal: windows_sys::core::BOOL,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for OPEN_PRINTER_PROPS_INFOA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -4418,7 +4418,7 @@ impl Default for OPEN_PRINTER_PROPS_INFOW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct OPEN_PRINTER_PROPS_INFOW {
     pub dwSize: u32,
@@ -4427,7 +4427,7 @@ pub struct OPEN_PRINTER_PROPS_INFOW {
     pub dwFlags: u32,
     pub bModal: windows_sys::core::BOOL,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for OPEN_PRINTER_PROPS_INFOW {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -5461,7 +5461,7 @@ impl Default for SHCREATEPROCESSINFOW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(all(feature = "Win32_Security", feature = "Win32_System_Threading"))]
 #[derive(Clone, Copy)]
 pub struct SHCREATEPROCESSINFOW {
@@ -5479,7 +5479,7 @@ pub struct SHCREATEPROCESSINFOW {
     pub lpStartupInfo: *mut super::super::System::Threading::STARTUPINFOW,
     pub lpProcessInformation: *mut super::super::System::Threading::PROCESS_INFORMATION,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(all(feature = "Win32_Security", feature = "Win32_System_Threading"))]
 impl Default for SHCREATEPROCESSINFOW {
     fn default() -> Self {
@@ -5625,7 +5625,7 @@ impl Default for SHELLEXECUTEINFOA_0 {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_Registry")]
 #[derive(Clone, Copy)]
 pub struct SHELLEXECUTEINFOA {
@@ -5645,7 +5645,7 @@ pub struct SHELLEXECUTEINFOA {
     pub Anonymous: SHELLEXECUTEINFOA_0,
     pub hProcess: super::super::Foundation::HANDLE,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_Registry")]
 impl Default for SHELLEXECUTEINFOA {
     fn default() -> Self {
@@ -5653,14 +5653,14 @@ impl Default for SHELLEXECUTEINFOA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_Registry")]
 #[derive(Clone, Copy)]
 pub union SHELLEXECUTEINFOA_0 {
     pub hIcon: super::super::Foundation::HANDLE,
     pub hMonitor: super::super::Foundation::HANDLE,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_Registry")]
 impl Default for SHELLEXECUTEINFOA_0 {
     fn default() -> Self {
@@ -5711,7 +5711,7 @@ impl Default for SHELLEXECUTEINFOW_0 {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_Registry")]
 #[derive(Clone, Copy)]
 pub struct SHELLEXECUTEINFOW {
@@ -5731,7 +5731,7 @@ pub struct SHELLEXECUTEINFOW {
     pub Anonymous: SHELLEXECUTEINFOW_0,
     pub hProcess: super::super::Foundation::HANDLE,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_Registry")]
 impl Default for SHELLEXECUTEINFOW {
     fn default() -> Self {
@@ -5739,14 +5739,14 @@ impl Default for SHELLEXECUTEINFOW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_Registry")]
 #[derive(Clone, Copy)]
 pub union SHELLEXECUTEINFOW_0 {
     pub hIcon: super::super::Foundation::HANDLE,
     pub hMonitor: super::super::Foundation::HANDLE,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_System_Registry")]
 impl Default for SHELLEXECUTEINFOW_0 {
     fn default() -> Self {
@@ -5824,7 +5824,7 @@ impl Default for SHFILEINFOA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_WindowsAndMessaging")]
 #[derive(Clone, Copy)]
 pub struct SHFILEINFOA {
@@ -5834,7 +5834,7 @@ pub struct SHFILEINFOA {
     pub szDisplayName: [i8; 260],
     pub szTypeName: [i8; 80],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_WindowsAndMessaging")]
 impl Default for SHFILEINFOA {
     fn default() -> Self {
@@ -5860,7 +5860,7 @@ impl Default for SHFILEINFOW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_WindowsAndMessaging")]
 #[derive(Clone, Copy)]
 pub struct SHFILEINFOW {
@@ -5870,7 +5870,7 @@ pub struct SHFILEINFOW {
     pub szDisplayName: [u16; 260],
     pub szTypeName: [u16; 80],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_WindowsAndMessaging")]
 impl Default for SHFILEINFOW {
     fn default() -> Self {
@@ -5897,7 +5897,7 @@ impl Default for SHFILEOPSTRUCTA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SHFILEOPSTRUCTA {
     pub hwnd: super::super::Foundation::HWND,
@@ -5909,7 +5909,7 @@ pub struct SHFILEOPSTRUCTA {
     pub hNameMappings: *mut core::ffi::c_void,
     pub lpszProgressTitle: windows_sys::core::PCSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SHFILEOPSTRUCTA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -5935,7 +5935,7 @@ impl Default for SHFILEOPSTRUCTW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SHFILEOPSTRUCTW {
     pub hwnd: super::super::Foundation::HWND,
@@ -5947,7 +5947,7 @@ pub struct SHFILEOPSTRUCTW {
     pub hNameMappings: *mut core::ffi::c_void,
     pub lpszProgressTitle: windows_sys::core::PCWSTR,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SHFILEOPSTRUCTW {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -6073,7 +6073,7 @@ impl Default for SHNAMEMAPPINGA {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SHNAMEMAPPINGA {
     pub pszOldPath: windows_sys::core::PSTR,
@@ -6081,7 +6081,7 @@ pub struct SHNAMEMAPPINGA {
     pub cchOldPath: i32,
     pub cchNewPath: i32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SHNAMEMAPPINGA {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -6103,7 +6103,7 @@ impl Default for SHNAMEMAPPINGW {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy)]
 pub struct SHNAMEMAPPINGW {
     pub pszOldPath: windows_sys::core::PWSTR,
@@ -6111,7 +6111,7 @@ pub struct SHNAMEMAPPINGW {
     pub cchOldPath: i32,
     pub cchNewPath: i32,
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 impl Default for SHNAMEMAPPINGW {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
@@ -6142,7 +6142,7 @@ pub struct SHQUERYRBINFO {
     pub i64NumItems: i64,
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Default)]
 pub struct SHQUERYRBINFO {
     pub cbSize: u32,
@@ -6183,7 +6183,7 @@ impl Default for SHSTOCKICONINFO {
     }
 }
 #[repr(C)]
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_WindowsAndMessaging")]
 #[derive(Clone, Copy)]
 pub struct SHSTOCKICONINFO {
@@ -6193,7 +6193,7 @@ pub struct SHSTOCKICONINFO {
     pub iIcon: i32,
     pub szPath: [u16; 260],
 }
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "arm64ec", target_arch = "x86_64"))]
 #[cfg(feature = "Win32_UI_WindowsAndMessaging")]
 impl Default for SHSTOCKICONINFO {
     fn default() -> Self {

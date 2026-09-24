@@ -242,6 +242,19 @@ pub enum TypeKind {
 }
 
 impl TypeKind {
+    pub fn is_matrix(&self) -> bool {
+        use TypeKind::*;
+        matches!(
+            self,
+            Mat2 | Mat3 | Mat4 | Mat23 | Mat24 | Mat32 | Mat34 | Mat42 | Mat43
+        )
+    }
+
+    pub fn is_scalar(&self) -> bool {
+        use TypeKind::*;
+        matches!(self, Bool | Int | UInt | Float | Double)
+    }
+
     pub fn is_sampler(&self) -> bool {
         use TypeKind::*;
         match self {

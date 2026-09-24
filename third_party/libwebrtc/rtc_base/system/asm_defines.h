@@ -38,6 +38,21 @@ bl _\name
 .global _\name
 .private_extern _\name
 .endm
+#elif defined(_WIN32)
+// COFF has neither .hidden nor .type: symbol visibility in a Windows
+// object file is decided by the linker, not the assembler.
+.macro GLOBAL_FUNCTION name
+.global \name
+.endm
+.macro DEFINE_FUNCTION name
+\name:
+.endm
+.macro CALL_FUNCTION name
+bl \name
+.endm
+.macro GLOBAL_LABEL name
+.global \name
+.endm
 #else
 .macro GLOBAL_FUNCTION name
 .global \name

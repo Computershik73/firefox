@@ -8,6 +8,13 @@
 #include "mozilla/gfx/Logging.h"
 #include "mozilla/layers/TextureHost.h"
 
+#if defined(GECKO_W10M)
+// swgl (gpu_d3d11.h): a Direct3D texture as a texture's pixels.
+extern "C" bool SwglGpuSetTextureSource(uint32_t aTexture, void* aD3DTexture,
+                                        int32_t aWidth, int32_t aHeight);
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 namespace mozilla {
 namespace wr {
 
@@ -24,6 +31,39 @@ bool RenderTextureHostSWGL::UpdatePlanes(RenderCompositor* aCompositor) {
   }
   gfx::SurfaceFormat format = GetFormat();
   gfx::ColorDepth colorDepth = GetColorDepth();
+#if defined(GECKO_W10M)
+  // A decoded video frame on the device SWGL shades with: SWGL samples it
+  // where it is, rather than it being read back and uploaded again for
+  // every frame (MapPlane).
+  if (planeCount == 1 && (format == gfx::SurfaceFormat::B8G8R8A8 ||
+                          format == gfx::SurfaceFormat::B8G8R8X8)) {
+    if (void* texture = GetD3D11TextureForSWGL(aCompositor)) {
+      gfx::IntSize size = GetSize(0);
+      if (SwglGpuSetTextureSource(mPlanes[0].mTexture, texture, size.width,
+                                  size.height)) {
+        mPlanes[0].mSize = size;
+        mPlanes[0].mData = nullptr;
+        mPlanes[0].mStride = 0;
+        static bool sNoted = false;
+        if (!sNoted) {
+          sNoted = true;
+          GeckoW10mNote(
+              "gfx: a video frame drawn in the page by SWGL, sampled on the "
+              "GPU where it was decoded");
+        }
+        if (texInit) {
+          wr_swgl_set_texture_parameter(mContext, mPlanes[0].mTexture,
+                                        LOCAL_GL_TEXTURE_MIN_FILTER,
+                                        LOCAL_GL_LINEAR);
+          wr_swgl_set_texture_parameter(mContext, mPlanes[0].mTexture,
+                                        LOCAL_GL_TEXTURE_MAG_FILTER,
+                                        LOCAL_GL_LINEAR);
+        }
+        return true;
+      }
+    }
+  }
+#endif
   for (size_t i = 0; i < planeCount; i++) {
     PlaneInfo& plane = mPlanes[i];
     if (!MapPlane(aCompositor, i, plane)) {

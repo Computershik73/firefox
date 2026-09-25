@@ -103,6 +103,9 @@ struct GpuTex {
   // this SWGL texture is the rectangle at (ox, oy). It is never recreated,
   // and SWGL keeps no CPU buffer for it unless a CPU draw needs one.
   bool external = false;
+  // ... and one that is only read, never drawn into: a video frame decoded
+  // on this device (SwglGpuSetTextureSource). Draws may sample it.
+  bool source = false;
   int ox = 0;
   int oy = 0;
   // A colour texture whose CPU buffer was freed once the GPU copy was
@@ -135,6 +138,7 @@ struct GpuTex {
     tex_w = tex_h = 0;
     format = DXGI_FORMAT_UNKNOWN;
     external = false;
+    source = false;
     resident = false;
     ox = oy = 0;
   }
@@ -1132,6 +1136,10 @@ static void gpu_cpu_wrote_rect(Texture& t, int x0, int y0, int x1, int y1) {
 
 // Storage was (re)specified: whatever the GPU had no longer applies.
 static void gpu_storage_changed(Texture& t) {
+  if (t.gpu && t.gpu->external) {
+    // It held someone else's Direct3D texture; that is over now.
+    t.gpu->release();
+  }
   if (t.gpu) {
     t.gpu->gpu_newer = false;
     t.gpu->cpu_newer = true;
@@ -1392,7 +1400,7 @@ static bool gpu_check(Texture& colortex, Texture** sampled,
     if ((!st.buf && !(st.gpu && st.gpu->resident)) ||
         !gl_format_on_gpu(g, st.internal_format, &f, &e) ||
         st.internal_format == GL_DEPTH_COMPONENT24 ||
-        (st.gpu && st.gpu->external)) {
+        (st.gpu && st.gpu->external && !st.gpu->source)) {
       return refuse(g, false, "sampled texture");
     }
     sampled[i] = &st;
@@ -1973,6 +1981,73 @@ bool SwglGpuSetTextureTarget(GLuint texid, void* d3d_texture, GLsizei width,
   return true;
 }
 
+// Makes texture `texid` a Direct3D texture on the attached device that
+// belongs to the caller -- a decoded video frame -- `width` by `height` BGRA,
+// which GPU draws sample where it is: no copy to memory and back. A CPU draw
+// that needs it reads it back. False if it is not on this device or not of
+// that size and format, and the caller hands over memory instead.
+bool SwglGpuSetTextureSource(GLuint texid, void* d3d_texture, GLsizei width,
+                             GLsizei height) {
+  using namespace swgl_gpu;
+  GpuBackend* g = ctx ? ctx->gpu : nullptr;
+  if (!g || g->broken || !d3d_texture || width <= 0 || height <= 0) {
+    return false;
+  }
+  ID3D11Texture2D* tex = (ID3D11Texture2D*)d3d_texture;
+  D3D11_TEXTURE2D_DESC td;
+  tex->GetDesc(&td);
+  if (td.Width != UINT(width) || td.Height != UINT(height) ||
+      td.ArraySize != 1 ||
+      (td.Format != DXGI_FORMAT_B8G8R8A8_UNORM &&
+       td.Format != DXGI_FORMAT_B8G8R8X8_UNORM) ||
+      !(td.BindFlags & D3D11_BIND_SHADER_RESOURCE)) {
+    return false;
+  }
+  ID3D11Device* dev = nullptr;
+  tex->GetDevice(&dev);
+  bool same = dev == g->dev;
+  if (dev) dev->Release();
+  if (!same) return false;
+  debug_check(g, "texture source");
+  Texture& t = ctx->textures[texid];
+  if (t.width != width || t.height != height ||
+      t.internal_format != GL_RGBA8 || !t.should_free()) {
+    t.cleanup();
+    t.set_should_free(true);
+    t.internal_format = GL_RGBA8;
+    t.width = width;
+    t.height = height;
+  } else if (t.buf) {
+    t.cleanup();
+  }
+  t.offset = IntPoint(0, 0);
+  t.disable_delayed_clear();
+  if (!t.gpu) t.gpu = new GpuTex;
+  GpuTex& gt = *t.gpu;
+  if (gt.tex != tex || !gt.source) {
+    gt.release();
+    tex->AddRef();
+    gt.tex = tex;
+    if (FAILED(g->dev->CreateShaderResourceView(tex, nullptr, &gt.srv))) {
+      gt.release();
+      return false;
+    }
+    gt.format = td.Format;
+    gt.tex_w = td.Width;
+    gt.tex_h = td.Height;
+  }
+  gt.external = true;
+  gt.source = true;
+  gt.internal_format = GL_RGBA8;
+  gt.width = width;
+  gt.height = height;
+  gt.ox = gt.oy = 0;
+  gt.expanded = false;
+  gt.gpu_newer = true;
+  gt.cpu_newer = false;
+  return true;
+}
+
 // Attaches a Direct3D 11 device to the current SWGL context; from then on
 // draws that can run on it do. The device must belong to the thread that
 // uses the context. Returns false, attaching nothing, if the device cannot
@@ -2186,6 +2261,9 @@ void SwglGpuDescribe(char* out, size_t size) {
   if (size) out[0] = 0;
 }
 bool SwglGpuSetTextureTarget(GLuint, void*, GLsizei, GLsizei, GLint, GLint) {
+  return false;
+}
+bool SwglGpuSetTextureSource(GLuint, void*, GLsizei, GLsizei) {
   return false;
 }
 bool SwglGpuAttachNewDevice(int, bool) { return false; }

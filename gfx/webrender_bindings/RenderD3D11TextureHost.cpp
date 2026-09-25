@@ -268,6 +268,17 @@ static bool MapTexture(T* aHost, RenderCompositor* aCompositor,
   return SUCCEEDED(hr);
 }
 
+void* RenderDXGITextureHost::GetD3D11TextureForSWGL(
+    RenderCompositor* aCompositor) {
+  RenderCompositorD3D11SWGL* compositor =
+      aCompositor ? aCompositor->AsRenderCompositorD3D11SWGL() : nullptr;
+  if (!compositor || mArrayIndex != 0 || mKeyedMutex ||
+      !EnsureD3D11Texture2D(compositor->GetDevice())) {
+    return nullptr;
+  }
+  return mTexture.get();
+}
+
 bool RenderDXGITextureHost::MapPlane(RenderCompositor* aCompositor,
                                      uint8_t aChannelIndex,
                                      PlaneInfo& aPlaneInfo) {

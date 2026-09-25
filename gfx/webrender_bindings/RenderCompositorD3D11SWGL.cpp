@@ -298,6 +298,15 @@ void RenderCompositorD3D11SWGL::HandleExternalImage(
 
   gfx::Rect drawRect(0, 0, size.width, size.height);
 
+#if defined(GECKO_W10M)
+  static bool sNoted = false;
+  if (!sNoted && texturedEffect) {
+    sNoted = true;
+    GeckoW10mNote("gfx: a video frame drawn by the D3D11 compositor as a surface "
+                "of its own");
+  }
+#endif
+
   EffectChain effect;
   effect.mPrimaryEffect = texturedEffect;
   mCompositor->DrawQuad(drawRect, aFrameSurface.mClipRect, effect, 1.0,

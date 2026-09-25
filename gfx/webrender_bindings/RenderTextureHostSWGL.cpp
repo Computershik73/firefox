@@ -37,8 +37,8 @@ bool RenderTextureHostSWGL::UpdatePlanes(RenderCompositor* aCompositor) {
   // every frame (MapPlane).
   if (planeCount == 1 && (format == gfx::SurfaceFormat::B8G8R8A8 ||
                           format == gfx::SurfaceFormat::B8G8R8X8)) {
-    if (void* texture = GetD3D11TextureForSWGL(aCompositor)) {
-      gfx::IntSize size = GetSize(0);
+    gfx::IntSize size;
+    if (void* texture = GetD3D11TextureForSWGL(aCompositor, &size)) {
       if (SwglGpuSetTextureSource(mPlanes[0].mTexture, texture, size.width,
                                   size.height)) {
         mPlanes[0].mSize = size;

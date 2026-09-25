@@ -48,8 +48,10 @@ class RenderTextureHostSWGL : public RenderTextureHost {
 
   // A Direct3D 11 texture holding the whole image, on the compositor's
   // device, that SWGL shading on that device can sample directly instead of
-  // mapping planes (Windows 10 Mobile). Null when there is none.
-  virtual void* GetD3D11TextureForSWGL(RenderCompositor* aCompositor) {
+  // mapping planes (Windows 10 Mobile), and the image's size. Null when
+  // there is none.
+  virtual void* GetD3D11TextureForSWGL(RenderCompositor* aCompositor,
+                                       gfx::IntSize* aSize) {
     return nullptr;
   }
 

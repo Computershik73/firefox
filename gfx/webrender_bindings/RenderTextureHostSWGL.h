@@ -46,6 +46,13 @@ class RenderTextureHostSWGL : public RenderTextureHost {
 
   virtual void UnmapPlanes() = 0;
 
+  // A Direct3D 11 texture holding the whole image, on the compositor's
+  // device, that SWGL shading on that device can sample directly instead of
+  // mapping planes (Windows 10 Mobile). Null when there is none.
+  virtual void* GetD3D11TextureForSWGL(RenderCompositor* aCompositor) {
+    return nullptr;
+  }
+
   // Lock this texture host as an attached external image for a SWGL compositor
   // surface. See swgl_bindings.rs for a description of the resulting
   // WrSWGLCompositeSurfaceInfo. This is paired with a call to UnlockSWGL when

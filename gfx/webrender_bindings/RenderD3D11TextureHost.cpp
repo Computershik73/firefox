@@ -269,13 +269,14 @@ static bool MapTexture(T* aHost, RenderCompositor* aCompositor,
 }
 
 void* RenderDXGITextureHost::GetD3D11TextureForSWGL(
-    RenderCompositor* aCompositor) {
+    RenderCompositor* aCompositor, gfx::IntSize* aSize) {
   RenderCompositorD3D11SWGL* compositor =
       aCompositor ? aCompositor->AsRenderCompositorD3D11SWGL() : nullptr;
   if (!compositor || mArrayIndex != 0 || mKeyedMutex ||
       !EnsureD3D11Texture2D(compositor->GetDevice())) {
     return nullptr;
   }
+  *aSize = GetSize(0);
   return mTexture.get();
 }
 

@@ -70,7 +70,8 @@ class RenderDXGITextureHost final : public RenderTextureHostSWGL {
   bool MapPlane(RenderCompositor* aCompositor, uint8_t aChannelIndex,
                 PlaneInfo& aPlaneInfo) override;
   void UnmapPlanes() override;
-  void* GetD3D11TextureForSWGL(RenderCompositor* aCompositor) override;
+  void* GetD3D11TextureForSWGL(RenderCompositor* aCompositor,
+                               gfx::IntSize* aSize) override;
   gfx::YUVRangedColorSpace GetYUVColorSpace() const override {
     return ToYUVRangedColorSpace(ToYUVColorSpace(mColorSpace), mColorRange,
                                  mTransferFunction);

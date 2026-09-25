@@ -152,6 +152,21 @@ void RenderCompositorD3D11SWGL::StartCompositing(
     }
 #endif
   }
+  if (mDrewExternalImage) {
+    // A video surface changes with every frame of its own, and WebRender
+    // does not count that in its dirty rects: composite the whole window,
+    // or the back buffer would show the video as it was two frames ago
+    // (flip model) where nothing else changed.
+    gfx::IntSize size = GetBufferSize().ToUnknownSize();
+    wr::DeviceIntRect whole;
+    whole.min.x = 0;
+    whole.min.y = 0;
+    whole.max.x = size.width;
+    whole.max.y = size.height;
+    RenderCompositorLayersSWGL::StartCompositing(aClearColor, &whole, 1,
+                                                 aOpaqueRects, aNumOpaqueRects);
+    return;
+  }
   RenderCompositorLayersSWGL::StartCompositing(aClearColor, aDirtyRects,
                                                aNumDirtyRects, aOpaqueRects,
                                                aNumOpaqueRects);
@@ -189,6 +204,7 @@ bool RenderCompositorD3D11SWGL::ProbePixel(ID3D11Texture2D* aTexture, int aX,
 }
 
 void RenderCompositorD3D11SWGL::CompositorEndFrame() {
+  mDrewExternalImage = false;
   if (mGpuShading) {
     // WebRender started compositing before it drew the tiles, and SWGL drew
     // them with this context: the composite needs its own state back.
@@ -297,6 +313,7 @@ void RenderCompositorD3D11SWGL::HandleExternalImage(
   }
 
   gfx::Rect drawRect(0, 0, size.width, size.height);
+  mDrewExternalImage = true;
 
 #if defined(GECKO_W10M)
   static bool sNoted = false;

@@ -116,6 +116,10 @@ class RenderCompositorD3D11SWGL : public RenderCompositorLayersSWGL {
   bool ProbePixel(ID3D11Texture2D* aTexture, int aX, int aY, uint32_t* aOut);
   uint32_t mTileProbes = 0;
   uint32_t mFrameProbes = 0;
+  // Whether the last composite drew an external image (video) as a surface
+  // of its own: its updates are not in WebRender's dirty rects, so the next
+  // frame is composited whole.
+  bool mDrewExternalImage = false;
 };
 
 class SurfaceD3D11SWGL : public RenderCompositorLayersSWGL::Surface {

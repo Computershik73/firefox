@@ -430,6 +430,14 @@ class D3D11DXVA2Manager : public DXVA2Manager {
   RefPtr<ID3D11VideoDecoder> mDecoder;
   RefPtr<layers::SyncObjectClient> mSyncObject;
   RefPtr<VideoProcessorD3D11> mProcessor;
+#if defined(GECKO_W10M)
+  // A 2x2 staging texture in the decoder's format, to wait for a decoded
+  // surface to be finished before the video processor reads it (see
+  // CopyTextureToImage).
+  RefPtr<ID3D11Texture2D> mDecodeFence;
+  DXGI_FORMAT mDecodeFenceFormat = DXGI_FORMAT_UNKNOWN;
+  bool mDecodeFenceFailed = false;
+#endif
   uint32_t mWidth = 0;
   uint32_t mHeight = 0;
   UINT mDeviceManagerToken = 0;
@@ -1337,6 +1345,40 @@ HRESULT D3D11DXVA2Manager::CopyTextureToImage(
     UINT height = std::min(inDesc.Height, outDesc.Height);
     PerformanceRecorder<PlaybackStage> perfRecorder(
         MediaStage::CopyDecodedVideo, height);
+#if defined(GECKO_W10M)
+    // Frames that stay on the GPU (feature level 9_3, nothing shared): the
+    // Adreno decodes on its own video engine, and the video processor read
+    // a surface before its new frame was in it -- the picture jumped back to
+    // the frame that surface held before. Copying two by two pixels of it
+    // and mapping them waits for the decode, as reading the frame back to
+    // memory did. The decoder's thread waits, not the compositor's.
+    if (!mutex && !mDecodeFenceFailed &&
+        mDevice == DeviceManagerDx::Get()->GetCompositorDevice()) {
+      if (!mDecodeFence || mDecodeFenceFormat != inDesc.Format) {
+        mDecodeFence = nullptr;
+        CD3D11_TEXTURE2D_DESC fenceDesc(inDesc.Format, 2, 2, 1, 1, 0,
+                                        D3D11_USAGE_STAGING,
+                                        D3D11_CPU_ACCESS_READ);
+        if (FAILED(mDevice->CreateTexture2D(&fenceDesc, nullptr,
+                                            getter_AddRefs(mDecodeFence)))) {
+          LOG("No staging texture to wait for decoding with");
+          mDecodeFenceFailed = true;
+        }
+        mDecodeFenceFormat = inDesc.Format;
+      }
+      if (mDecodeFence) {
+        D3D11_BOX corner = {0, 0, 0, 2, 2, 1};
+        mContext->CopySubresourceRegion(mDecodeFence, 0, 0, 0, 0,
+                                        aInTexture.mTexture, aInTexture.mIndex,
+                                        &corner);
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        if (SUCCEEDED(mContext->Map(mDecodeFence, 0, D3D11_MAP_READ, 0,
+                                    &mapped))) {
+          mContext->Unmap(mDecodeFence, 0);
+        }
+      }
+    }
+#endif
     // The D3D11TextureClientAllocator may return a different texture format
     // than preferred. In which case the destination texture will be BGRA32.
     // Eg. when NV12 is blocked by Gfx.

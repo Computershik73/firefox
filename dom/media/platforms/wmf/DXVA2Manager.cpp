@@ -1388,14 +1388,13 @@ HRESULT D3D11DXVA2Manager::CopyTextureToImage(
     // held before, several frames old. The decoder's thread waits here for
     // the conversion, not the compositor's.
     //
-    // Only there. Where textures are shared (feature level 11, hardware
-    // WebRender through ANGLE) the frame carries a D3D11 fence the compositor
-    // waits on, signalled below; waiting here as well only held the decoder
-    // behind the GPU on every frame.
-    auto* waitData = client->GetInternalData()->AsD3D11TextureData();
-    const bool fenced = waitData && waitData->mFencesHolderId.isSome() &&
-                        CompositeProcessD3D11FencesHolderMap::Get();
-    if (!mutex && !fenced &&
+    // Only there. Where textures can be shared (feature level 11, hardware
+    // WebRender through ANGLE) the same wait cost 10 to 16 ms a frame on an
+    // Adreno 530 -- most of the 16.7 ms a 60 fps frame has -- and the decoder
+    // fell to 45 frames a second whenever the GPU had anything else to do.
+    // Those frames carry no fence either; they need none, the compositor
+    // reads them through the same device and immediate context.
+    if (!mutex && !DeviceManagerDx::Get()->TextureSharingWorks() &&
         mDevice == DeviceManagerDx::Get()->GetCompositorDevice()) {
       WaitForConvertedFrame();
     }

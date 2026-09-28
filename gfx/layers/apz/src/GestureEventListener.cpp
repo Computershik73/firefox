@@ -224,6 +224,15 @@ nsEventStatus GestureEventListener::HandleInputTouchSingleStart() {
 
 nsEventStatus GestureEventListener::HandleInputTouchMultiStart() {
   nsEventStatus rv = nsEventStatus_eIgnore;
+#if defined(GECKO_W10M)
+  {
+    // Two fingers reached the gesture listener: from here APZ can make a
+    // pinch of them. If this never appears, the second finger is lost before.
+    nsPrintfCString note("pinch: %zu fingers down, gesture state %s",
+                         mTouches.Length(), ToString(mState).c_str());
+    GeckoW10mNote(note.get());
+  }
+#endif
 
   switch (mState) {
     case GESTURE_NONE:

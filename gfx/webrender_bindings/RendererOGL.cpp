@@ -196,6 +196,9 @@ RenderedFrameId RendererOGL::UpdateAndRender(
   bool needPostRenderCall = false;
   bool beginFrame = !mThread->IsHandlingDeviceReset();
 
+#if defined(GECKO_W10M)
+  const TimeStamp frameStart = TimeStamp::Now();
+#endif
   if (beginFrame && present) {
     if (!mCompositor->GetWidget()->PreRender(&widgetContext)) {
       // XXX This could cause oom in webrender since pending_texture_updates is
@@ -329,6 +332,44 @@ RenderedFrameId RendererOGL::UpdateAndRender(
 #endif
     MOZ_ASSERT(needPostRenderCall);
     mCompositor->GetWidget()->PostRender(&widgetContext);
+#if defined(GECKO_W10M)
+    // Every ten seconds of steady compositing: how many frames reached the
+    // screen and how long each took, render and present. A 60 fps video
+    // needs a composite every 16.7 ms; each one over that is a video frame
+    // the compositor never shows, which YouTube counts as dropped.
+    static TimeStamp sStatsStart;
+    static uint32_t sStatsFrames = 0;
+    static uint32_t sStatsSlow = 0;
+    static double sStatsTotalMs = 0;
+    static double sStatsMaxMs = 0;
+    const TimeStamp now = TimeStamp::Now();
+    const double ms = (now - frameStart).ToMilliseconds();
+    if (sStatsStart.IsNull()) {
+      sStatsStart = now;
+    }
+    ++sStatsFrames;
+    sStatsTotalMs += ms;
+    sStatsMaxMs = std::max(sStatsMaxMs, ms);
+    if (ms > 16.7) {
+      ++sStatsSlow;
+    }
+    const double span = (now - sStatsStart).ToSeconds();
+    if (span >= 10) {
+      if (sStatsFrames >= 100) {
+        char note[200];
+        SprintfLiteral(note,
+                       "compositor: %u frames in %.1f s (%.1f a second), "
+                       "each %.1f ms on average, %.1f ms at most, over 16.7 "
+                       "ms %u times",
+                       sStatsFrames, span, sStatsFrames / span,
+                       sStatsTotalMs / sStatsFrames, sStatsMaxMs, sStatsSlow);
+        GeckoW10mNote(note);
+      }
+      sStatsStart = now;
+      sStatsFrames = sStatsSlow = 0;
+      sStatsTotalMs = sStatsMaxMs = 0;
+    }
+#endif
   }
 
 #if defined(ENABLE_FRAME_LATENCY_LOG)

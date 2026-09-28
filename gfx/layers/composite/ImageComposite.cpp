@@ -4,6 +4,11 @@
 
 #include "ImageComposite.h"
 
+#if defined(GECKO_W10M)
+#  include "nsPrintfCString.h"
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 #include <inttypes.h>
 
 #include "gfxPlatform.h"
@@ -249,6 +254,34 @@ bool ImageComposite::UpdateCompositedFrame(
     dropped = 0;
   }
 
+#if defined(GECKO_W10M)
+  {
+    // Every ten seconds of video: frames the compositor showed and frames it
+    // skipped because a newer one was already due -- what YouTube's "dropped
+    // frames" counts.
+    static TimeStamp sVideoStart;
+    static uint32_t sVideoShown = 0;
+    static uint32_t sVideoDropped = 0;
+    const TimeStamp now = TimeStamp::Now();
+    if (sVideoStart.IsNull()) {
+      sVideoStart = now;
+    }
+    ++sVideoShown;
+    sVideoDropped += std::max(dropped, 0);
+    const double span = (now - sVideoStart).ToSeconds();
+    if (span >= 10) {
+      if (sVideoShown >= 50) {
+        nsPrintfCString note(
+            "video: %u frames shown in %.1f s (%.1f a second), %u dropped by "
+            "the compositor",
+            sVideoShown, span, sVideoShown / span, sVideoDropped);
+        GeckoW10mNote(note.get());
+      }
+      sVideoStart = now;
+      sVideoShown = sVideoDropped = 0;
+    }
+  }
+#endif
   if (dropped > 0) {
     mDroppedFrames += dropped;
     if (profiler_thread_is_being_profiled_for_markers()) {

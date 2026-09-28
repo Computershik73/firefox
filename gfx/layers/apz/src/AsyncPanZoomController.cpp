@@ -1662,6 +1662,25 @@ nsEventStatus AsyncPanZoomController::OnScaleBegin(
 
   mPinchLocked = false;
   mPinchPaintTimerSet = false;
+#if defined(GECKO_W10M)
+  {
+    // Whether the pinch can zoom: which frame took it, and what the page
+    // allows there (its viewport meta tag decides mAllowZoom and the range).
+    RecursiveMutexAutoLock lock(mRecursiveMutex);
+    nsPrintfCString note(
+        "pinch: began on %s scroll frame; zoom %s, %.2f to %.2f, now %.2f; "
+        "touch-action %s",
+        IsRootContent() ? "the page's root" : "an inner",
+        mZoomConstraints.mAllowZoom ? "allowed" : "NOT allowed by the page",
+        mZoomConstraints.mMinZoom.scale, mZoomConstraints.mMaxZoom.scale,
+        Metrics().GetZoom().scale,
+        !HasReadyTouchBlock() ? "unknown"
+        : GetCurrentTouchBlock()->TouchActionAllowsPinchZoom()
+            ? "allows it"
+            : "FORBIDS it");
+    GeckoW10mNote(note.get());
+  }
+#endif
   // Note that there may not be a touch block at this point, if we received the
   // PinchGestureEvent directly from widget code without any touch events.
   if (HasReadyTouchBlock() &&

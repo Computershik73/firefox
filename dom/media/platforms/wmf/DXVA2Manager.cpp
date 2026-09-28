@@ -1387,7 +1387,16 @@ HRESULT D3D11DXVA2Manager::CopyTextureToImage(
     // finished converting yet -- what it showed was the frame that texture
     // held before, several frames old. The decoder's thread waits here for
     // the conversion, not the compositor's.
-    if (!mutex && mDevice == DeviceManagerDx::Get()->GetCompositorDevice()) {
+    //
+    // Only there. Where textures are shared (feature level 11, hardware
+    // WebRender through ANGLE) the frame carries a D3D11 fence the compositor
+    // waits on, signalled below; waiting here as well only held the decoder
+    // behind the GPU on every frame.
+    auto* waitData = client->GetInternalData()->AsD3D11TextureData();
+    const bool fenced = waitData && waitData->mFencesHolderId.isSome() &&
+                        CompositeProcessD3D11FencesHolderMap::Get();
+    if (!mutex && !fenced &&
+        mDevice == DeviceManagerDx::Get()->GetCompositorDevice()) {
       WaitForConvertedFrame();
     }
 #endif

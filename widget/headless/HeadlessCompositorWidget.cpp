@@ -910,6 +910,14 @@ extern "C" __declspec(dllexport) int32_t gecko_w10m_text_input_wanted() {
   return mozilla::widget::HeadlessWidget::TextInputWanted() ? 1 : 0;
 }
 
+// The focused field's kind (see HeadlessWidget::TextInputKind) in the low
+// byte, and the focus serial above it, so one call tells the shell both which
+// keyboard to raise and whether a field has just been focused or tapped.
+extern "C" __declspec(dllexport) uint32_t gecko_w10m_text_input_state() {
+  return (mozilla::widget::HeadlessWidget::TextInputSerial() << 8) |
+         (uint32_t(mozilla::widget::HeadlessWidget::TextInputKind()) & 0xff);
+}
+
 extern "C" __declspec(dllexport) void gecko_w10m_input_text(
     const uint16_t* aText, int32_t aLength) {
   if (!aText || aLength <= 0) {

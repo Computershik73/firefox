@@ -34,6 +34,11 @@
 #include "nsLayoutUtils.h"
 #include "nsPresContext.h"
 #include "nsPrintfCString.h"
+
+#if defined(GECKO_W10M)
+#  include "mozilla/ScrollContainerFrame.h"
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
 #include "nsRect.h"
 #include "nsRegion.h"
 
@@ -740,9 +745,88 @@ static const nsIFrame* FindZIndexAncestor(const nsIFrame* aTarget,
   return aRoot;
 }
 
+#if defined(GECKO_W10M)
+// Where a tap lands: the note below wraps the real function, which is this.
+static nsIFrame* FindFrameTargetedByInputEventUnnoted(
+    WidgetGUIEvent* aEvent, RelativeTo aRootFrame,
+    const nsPoint& aPointRelativeToRootFrame, uint32_t aFlags);
+
+static nsCString GeckoW10mDescribe(nsIFrame* aFrame) {
+  if (!aFrame) {
+    return "nothing"_ns;
+  }
+  nsIContent* content = aFrame->GetContent();
+  while (content && !content->IsElement()) {
+    content = content->GetParent();
+  }
+  if (!content) {
+    return "a frame with no element"_ns;
+  }
+  dom::Element* element = content->AsElement();
+  nsAutoCString out;
+  out.Append('<');
+  AppendUTF16toUTF8(element->LocalName(), out);
+  nsAutoString value;
+  if (element->GetAttr(nsGkAtoms::id, value) && !value.IsEmpty()) {
+    out.Append('#');
+    AppendUTF16toUTF8(Substring(value, 0, 40), out);
+  }
+  if (element->GetAttr(nsGkAtoms::_class, value) && !value.IsEmpty()) {
+    int32_t space = value.FindChar(' ');
+    out.Append('.');
+    AppendUTF16toUTF8(Substring(value, 0, space < 0 ? 40 : std::min(space, 40)),
+                      out);
+  }
+  out.Append('>');
+  return std::move(out);
+}
+
+// Every tap, once, at its mousedown: where in the page it landed, what was
+// under the finger and what got the click after the tap radius had its say.
+// Taps were reported landing well above the finger; this says whether the
+// point is already wrong when it gets here or the radius moved it.
 nsIFrame* FindFrameTargetedByInputEvent(
     WidgetGUIEvent* aEvent, RelativeTo aRootFrame,
     const nsPoint& aPointRelativeToRootFrame, uint32_t aFlags) {
+  nsIFrame* result = FindFrameTargetedByInputEventUnnoted(
+      aEvent, aRootFrame, aPointRelativeToRootFrame, aFlags);
+  if (aEvent->mMessage == eMouseDown && aEvent->mClass == eMouseEventClass &&
+      aEvent->AsMouseEvent()->mInputSource ==
+          dom::MouseEvent_Binding::MOZ_SOURCE_TOUCH) {
+    nsIFrame* exact =
+        nsLayoutUtils::GetFrameForPoint(aRootFrame, aPointRelativeToRootFrame);
+    const CSSPoint css = CSSPoint::FromAppUnits(aPointRelativeToRootFrame);
+    nsPresContext* pc = aRootFrame.mFrame->PresContext();
+    PresShell* shell = pc->PresShell();
+    const nsPoint scroll =
+        shell->GetRootScrollContainerFrame()
+            ? shell->GetRootScrollContainerFrame()->GetScrollPosition()
+            : nsPoint();
+    nsPrintfCString note(
+        "tap: at %.0f,%.0f CSS px from the %s's top left (widget point %d,%d, "
+        "%.3f device px a CSS px, resolution %.3f, scrolled to %.0f,%.0f); "
+        "under the finger %s, clicked %s",
+        css.x, css.y,
+        aRootFrame.mViewportType == ViewportType::Visual ? "visual viewport"
+                                                         : "layout viewport",
+        int(aEvent->mRefPoint.x), int(aEvent->mRefPoint.y),
+        float(pc->CSSToDevPixelScale().scale), shell->GetResolution(),
+        CSSPixel::FromAppUnits(scroll.x), CSSPixel::FromAppUnits(scroll.y),
+        GeckoW10mDescribe(exact).get(),
+        result == exact ? "the same" : GeckoW10mDescribe(result).get());
+    GeckoW10mNote(note.get());
+  }
+  return result;
+}
+
+static nsIFrame* FindFrameTargetedByInputEventUnnoted(
+    WidgetGUIEvent* aEvent, RelativeTo aRootFrame,
+    const nsPoint& aPointRelativeToRootFrame, uint32_t aFlags) {
+#else
+nsIFrame* FindFrameTargetedByInputEvent(
+    WidgetGUIEvent* aEvent, RelativeTo aRootFrame,
+    const nsPoint& aPointRelativeToRootFrame, uint32_t aFlags) {
+#endif
   using FrameForPointOption = nsLayoutUtils::FrameForPointOption;
   EnumSet<FrameForPointOption> options;
   if (aFlags & INPUT_IGNORE_ROOT_SCROLL_FRAME) {

@@ -128,18 +128,77 @@ namespace {
 // Written on the main thread when focus moves, read by the shell from its own.
 // A bool either side of a torn read is still a bool.
 mozilla::Atomic<bool> sTextInputWanted{false};
+mozilla::Atomic<int32_t> sTextInputKind{0};
+mozilla::Atomic<uint32_t> sTextInputSerial{0};
+
+int32_t KindOf(const InputContext& aContext) {
+  if (aContext.mIMEState.mEnabled == IMEEnabled::Password ||
+      aContext.IsPasswordEditor()) {
+    return 1;
+  }
+  // inputmode says what the page wants typed, whatever the element is.
+  const nsString& mode = aContext.mHTMLInputMode;
+  if (mode.EqualsLiteral("numeric") || mode.EqualsLiteral("decimal")) {
+    return 5;
+  }
+  if (mode.EqualsLiteral("tel")) {
+    return 4;
+  }
+  if (mode.EqualsLiteral("email")) {
+    return 2;
+  }
+  if (mode.EqualsLiteral("url")) {
+    return 3;
+  }
+  if (mode.EqualsLiteral("search")) {
+    return 6;
+  }
+  if (!mode.IsEmpty()) {
+    return 0;
+  }
+  const nsString& type = aContext.mHTMLInputType;
+  if (type.EqualsLiteral("email")) {
+    return 2;
+  }
+  if (type.EqualsLiteral("url")) {
+    return 3;
+  }
+  if (type.EqualsLiteral("tel")) {
+    return 4;
+  }
+  if (type.EqualsLiteral("number")) {
+    return 5;
+  }
+  if (type.EqualsLiteral("search") || aContext.mActionHint.EqualsLiteral("search")) {
+    return 6;
+  }
+  return 0;
+}
 }  // namespace
 
 bool HeadlessWidget::TextInputWanted() { return sTextInputWanted; }
+int32_t HeadlessWidget::TextInputKind() { return sTextInputKind; }
+uint32_t HeadlessWidget::TextInputSerial() { return sTextInputSerial; }
 
 void HeadlessWidget::SetInputContext(const InputContext& aContext,
                                      const InputContextAction& aAction) {
   mInputContext = aContext;
   // Gecko says this whenever focus moves onto or off an editable field, which
   // is exactly when a phone should raise or drop its keyboard.
-  sTextInputWanted =
+  const bool wanted =
       aContext.mIMEState.mEnabled == IMEEnabled::Enabled ||
       aContext.mIMEState.mEnabled == IMEEnabled::Password;
+  if (wanted) {
+    sTextInputKind = KindOf(aContext);
+    // Focus moving onto a field, or a field being clicked while it has the
+    // focus: both are someone about to type.
+    if (aAction.mFocusChange != InputContextAction::FOCUS_NOT_CHANGED ||
+        aAction.mCause == InputContextAction::CAUSE_MOUSE ||
+        aAction.mCause == InputContextAction::CAUSE_TOUCH) {
+      ++sTextInputSerial;
+    }
+  }
+  sTextInputWanted = wanted;
 }
 #endif
 

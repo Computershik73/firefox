@@ -69,6 +69,12 @@ class HeadlessWidget final : public nsIWidget {
   // True while focus is on something that takes text. It is the only
   // signal a phone has that it should raise its keyboard.
   static bool TextInputWanted();
+  // What kind of field has the focus, for the keyboard the shell raises:
+  // 0 text, 1 password, 2 e-mail, 3 URL, 4 telephone, 5 number, 6 search.
+  static int32_t TextInputKind();
+  // Goes up each time an editable field takes the focus, so the shell can
+  // tell a new field -- or the same one tapped again -- from no change.
+  static uint32_t TextInputSerial();
 #endif
 
   nsresult Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,

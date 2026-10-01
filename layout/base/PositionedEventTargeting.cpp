@@ -806,12 +806,17 @@ nsIFrame* FindFrameTargetedByInputEvent(
         "tap: at %.0f,%.0f CSS px from the %s's top left (widget point %d,%d, "
         "%.3f device px a CSS px, resolution %.3f, scrolled to %.0f,%.0f); "
         "under the finger %s, clicked %s",
-        css.x, css.y,
+        // Every number goes through the varargs as a double: CSSCoord is a
+        // struct, and passing one there shifted every argument after it --
+        // the first build of this note read a %s from a garbage address and
+        // took the browser down on the first tap.
+        double(css.x.value), double(css.y.value),
         aRootFrame.mViewportType == ViewportType::Visual ? "visual viewport"
                                                          : "layout viewport",
         int(aEvent->mRefPoint.x), int(aEvent->mRefPoint.y),
-        float(pc->CSSToDevPixelScale().scale), shell->GetResolution(),
-        CSSPixel::FromAppUnits(scroll.x), CSSPixel::FromAppUnits(scroll.y),
+        double(pc->CSSToDevPixelScale().scale), double(shell->GetResolution()),
+        double(CSSPixel::FromAppUnits(scroll.x).value),
+        double(CSSPixel::FromAppUnits(scroll.y).value),
         GeckoW10mDescribe(exact).get(),
         result == exact ? "the same" : GeckoW10mDescribe(result).get());
     GeckoW10mNote(note.get());

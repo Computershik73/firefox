@@ -845,6 +845,10 @@ gecko-port-donate-abroad =
     .label = Outside the CIS and would like to help?
     .description = Send a message to the Telegram channel.
 
+gecko-verbose-logs =
+    .label = Verbose logs for debugging
+    .description = Writes detailed engine logs to the app's folder. Slows the browser down; takes effect after a restart.
+
 ## Firefox support
 
 support-application-heading =

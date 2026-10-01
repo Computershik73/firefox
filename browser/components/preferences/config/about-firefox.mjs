@@ -284,6 +284,16 @@ Preferences.addSetting({ id: "geckoPortTelegram" });
 Preferences.addSetting({ id: "geckoPortDonate" });
 Preferences.addSetting({ id: "geckoPortDonateAbroad" });
 Preferences.addSetting({ id: "geckoDefaultBrowser" });
+
+// Port: the shell's diagnostics. Off, the browser writes only what a crash
+// needs; on, the shell turns on Gecko's own logging and its probes at the
+// next launch. The shell reads this pref out of prefs.js before the engine
+// starts, so a change here takes effect after a restart.
+Preferences.addAll([{ id: "gecko.debug.verbose_logs", type: "bool" }]);
+Preferences.addSetting({
+  id: "geckoVerboseLogs",
+  pref: "gecko.debug.verbose_logs",
+});
 Preferences.addSetting({
   id: "geckoPortVersion",
   getControlConfig(config) {
@@ -659,6 +669,10 @@ SettingGroupManager.registerGroups({
             control: "moz-box-item",
           },
         ],
+      },
+      {
+        id: "geckoVerboseLogs",
+        l10nId: "gecko-verbose-logs",
       },
     ],
   },

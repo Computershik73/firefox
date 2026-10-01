@@ -47,6 +47,10 @@ class RenderCompositorEGL : public RenderCompositor {
 
   LayoutDeviceIntSize GetBufferSize() override;
 
+#if defined(GECKO_W10M)
+  bool SurfaceOriginIsTopLeft() override { return mTopLeftOrigin; }
+#endif
+
   // Interface for partial present
   bool UsePartialPresent() override;
   bool RequestFullRender() override;
@@ -92,6 +96,9 @@ class RenderCompositorEGL : public RenderCompositor {
   gfx::IntSize mPresentedSurfaceSize;
   // What RequestFullRender decided for the frame being drawn.
   bool mWholeFrame = true;
+  // The surface's rows run top down: WebRender draws into the swap chain's
+  // back buffer directly, with no ANGLE offscreen texture in between.
+  bool mTopLeftOrigin = false;
   // For the note every ten seconds: what presenting cost.
   TimeStamp mPresentStatsStart;
   uint32_t mPresentFrames = 0;

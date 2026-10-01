@@ -8724,6 +8724,16 @@
   mirror: once
 #endif
 
+#if defined(GECKO_W10M)
+# Hardware WebRender draws straight into the panel's swap chain instead of an
+# ANGLE offscreen texture that is copied to it on every present -- one whole
+# pass over the screen less a frame. False goes back to the copy.
+- name: gfx.webrender.gecko-w10m.direct-back-buffer
+  type: bool
+  value: true
+  mirror: once
+#endif
+
 #if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GTK)
 - name: gfx.webrender.software.opengl
   type: bool

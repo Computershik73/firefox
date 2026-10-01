@@ -80,7 +80,35 @@ EGLSurface RenderCompositorEGL::CreateEGLSurface() {
       GeckoW10mNote("gfx: no panel to make a surface for");
       return EGL_NO_SURFACE;
     }
-    surface = gle->CreateCompatibleSurface(window);
+    // ANGLE draws into an offscreen texture of its own and, on every
+    // present, copies it into the swap chain's back buffer -- turning it the
+    // right way up on the way, since GL counts rows from the bottom and
+    // Direct3D from the top. In fullscreen that copy is a whole extra pass
+    // over 2560x1440 pixels a frame. Asked for a surface whose rows run top
+    // down, ANGLE leaves the texture out and WebRender draws straight into
+    // the back buffer, turning its own picture the right way up instead
+    // (SurfaceOriginIsTopLeft).
+    const auto& egl = gle->mEgl;
+    const char* extensions =
+        egl->mLib->fQueryString(egl->mDisplay, LOCAL_EGL_EXTENSIONS);
+    if (StaticPrefs::gfx_webrender_gecko_w10m_direct_back_buffer_AtStartup() &&
+        extensions && strstr(extensions, "EGL_ANGLE_surface_orientation")) {
+      const EGLint attribs[] = {0x33A8 /* EGL_SURFACE_ORIENTATION_ANGLE */,
+                                0x0002 /* ..._INVERT_Y_ANGLE */,
+                                LOCAL_EGL_NONE};
+      surface = egl->fCreateWindowSurface(
+          gle->mSurfaceConfig, reinterpret_cast<EGLNativeWindowType>(window),
+          attribs);
+      mTopLeftOrigin = surface != EGL_NO_SURFACE;
+      GeckoW10mNote(mTopLeftOrigin
+                        ? "gfx: drawing straight into the swap chain, no "
+                          "offscreen copy"
+                        : "gfx: a top-down surface was refused, back to the "
+                          "offscreen copy");
+    }
+    if (surface == EGL_NO_SURFACE) {
+      surface = gle->CreateCompatibleSurface(window);
+    }
     GeckoW10mNote(surface == EGL_NO_SURFACE
                     ? "gfx: the context's own display refused the panel too"
                     : "gfx: the panel has a surface on the context's display");
@@ -488,8 +516,11 @@ uint32_t RenderCompositorEGL::GetMaxPartialPresentRects() {
 
 bool RenderCompositorEGL::ShouldDrawPreviousPartialPresentRegions() {
 #if defined(GECKO_W10M)
-  // ANGLE's offscreen texture is the buffer WebRender draws into, and it is
-  // the same one every frame: what was drawn before is still there.
+  // What was drawn before is still there: either in ANGLE's offscreen
+  // texture, which is the same one every frame, or -- drawing straight into
+  // the swap chain -- because a flip-model present with a dirty rect has
+  // DXGI carry the rest of the previous frame into the next back buffer,
+  // which is what Firefox's own ANGLE compositor relies on too.
   if (mPostSubBuffer) {
     return false;
   }

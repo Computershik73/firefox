@@ -2497,6 +2497,12 @@ impl TileCacheInstance {
                             break;
                         }
 
+                        // GeckoW10m: why a video could not be drawn over the
+                        // page as an overlay, for the composite stats.
+                        if let (CompositorSurfaceKind::Overlay, Err(failure)) = (kind, &promotion_result) {
+                            crate::renderer::gecko_w10m_note_overlay_refusal(&format!("{}", failure));
+                        }
+
                         // We couldn't promote, but did we give up because the slice is marked
                         // atomic? If that was the reason, and the YuvImage is wide color,
                         // failing to promote will flatten the colors and look terrible. Let's

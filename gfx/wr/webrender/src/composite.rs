@@ -1031,6 +1031,11 @@ impl CompositeState {
             );
         }
 
+        crate::renderer::gecko_w10m_count_surfaces(
+            tile_cache.underlays.len() as u32,
+            tile_cache.sub_slices.iter().map(|s| s.compositor_surfaces.len() as u32).sum(),
+        );
+
         // Add any underlay surfaces to the compositing tree
         for underlay in &tile_cache.underlays {
             self.push_compositor_surface(

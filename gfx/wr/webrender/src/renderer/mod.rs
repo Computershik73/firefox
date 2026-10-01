@@ -53,7 +53,7 @@ use crate::batch::{AlphaBatchContainer, BatchKind, BatchFeatures, BatchTextures,
 use crate::batch::ClipMaskInstanceList;
 #[cfg(any(feature = "capture", feature = "replay"))]
 use crate::capture::{CaptureConfig, ExternalCaptureImage, PlainExternalImage};
-use crate::composite::{CompositeState, CompositeTileSurface};
+use crate::composite::{CompositeState, CompositeTileSurface, TileKind};
 use crate::composite::{CompositorKind, Compositor, NativeTileId};
 use crate::composite::{CompositorConfig, NativeSurfaceOperationDetails, NativeSurfaceId, NativeSurfaceOperation};
 #[cfg(feature = "debugger")]
@@ -671,15 +671,26 @@ fn gecko_w10m_composite_stats(state: &CompositeState) {
     static WITH_SURFACE: AtomicU32 = AtomicU32::new(0);
     static TILES: AtomicU32 = AtomicU32::new(0);
     static REDRAWN: AtomicU32 = AtomicU32::new(0);
+    static VIDEO_BLENDED: AtomicU32 = AtomicU32::new(0);
 
     let mut tiles = 0u32;
     let mut redrawn = 0u32;
     for tile in state.tiles.iter() {
-        if let CompositeTileSurface::Texture { .. } = tile.surface {
-            tiles += 1;
-            if !tile.local_dirty_rect.is_empty() {
-                redrawn += 1;
+        match tile.surface {
+            CompositeTileSurface::Texture { .. } => {
+                tiles += 1;
+                if !tile.local_dirty_rect.is_empty() {
+                    redrawn += 1;
+                }
             }
+            // A video that is not opaque occludes nothing: what is behind it
+            // is drawn, and then it is blended on top.
+            CompositeTileSurface::ExternalSurface { .. } => {
+                if tile.kind != TileKind::Opaque {
+                    VIDEO_BLENDED.fetch_add(1, Relaxed);
+                }
+            }
+            _ => {}
         }
     }
     if !state.external_surfaces.is_empty() {
@@ -689,14 +700,66 @@ fn gecko_w10m_composite_stats(state: &CompositeState) {
     REDRAWN.fetch_add(redrawn, Relaxed);
     let frames = FRAMES.fetch_add(1, Relaxed) + 1;
     if frames >= 300 {
+        let (passes, cleared, opaque, alpha) = {
+            let mut pass = GECKO_W10M_PASS.lock().unwrap();
+            let taken = *pass;
+            *pass = (0, 0.0, 0.0, 0.0);
+            taken
+        };
+        let per = |v: f64| if passes > 0 { v / passes as f64 } else { 0.0 };
+        let refusal = GECKO_W10M_OVERLAY_REFUSAL
+            .lock()
+            .map(|r| r.clone())
+            .unwrap_or_default();
         crate::device::gecko_w10m_note_always(&format!(
-            "wr: last {} composites -- {} with a video as a surface of its own; {:.1} tiles a frame, {:.1} of them redrawn",
+            "wr: last {} composites -- {} with a video as a surface of its own, {} of those blended; video as underlay {} times, as overlay {} times{}; {:.1} tiles a frame, {:.1} of them redrawn; a frame clears {:.2} of the screen, draws {:.2} opaque and {:.2} blended",
             frames,
             WITH_SURFACE.swap(0, Relaxed),
+            VIDEO_BLENDED.swap(0, Relaxed),
+            GECKO_W10M_UNDERLAYS.swap(0, Relaxed),
+            GECKO_W10M_OVERLAYS.swap(0, Relaxed),
+            if refusal.is_empty() { String::new() } else { format!(" (last overlay refusal: {})", refusal) },
             TILES.swap(0, Relaxed) as f32 / frames as f32,
             REDRAWN.swap(0, Relaxed) as f32 / frames as f32,
+            per(cleared),
+            per(opaque),
+            per(alpha),
         ));
         FRAMES.store(0, Relaxed);
+    }
+}
+
+/// GeckoW10m: compositor surfaces per frame by kind, and the last reason a
+/// video was refused as an overlay.
+static GECKO_W10M_UNDERLAYS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static GECKO_W10M_OVERLAYS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static GECKO_W10M_OVERLAY_REFUSAL: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+pub(crate) fn gecko_w10m_count_surfaces(underlays: u32, overlays: u32) {
+    use std::sync::atomic::Ordering::Relaxed;
+    GECKO_W10M_UNDERLAYS.fetch_add(underlays, Relaxed);
+    GECKO_W10M_OVERLAYS.fetch_add(overlays, Relaxed);
+}
+
+pub(crate) fn gecko_w10m_note_overlay_refusal(reason: &str) {
+    if let Ok(mut last) = GECKO_W10M_OVERLAY_REFUSAL.lock() {
+        if last.as_str() != reason {
+            *last = reason.to_string();
+        }
+    }
+}
+
+/// GeckoW10m: per composite pass, the share of the screen cleared, drawn
+/// opaque and drawn blended (see composite_pass).
+static GECKO_W10M_PASS: std::sync::Mutex<(u32, f64, f64, f64)> =
+    std::sync::Mutex::new((0, 0.0, 0.0, 0.0));
+
+pub(crate) fn gecko_w10m_note_pass(cleared: f32, opaque: f32, alpha: f32) {
+    if let Ok(mut pass) = GECKO_W10M_PASS.lock() {
+        pass.0 += 1;
+        pass.1 += cleared as f64;
+        pass.2 += opaque as f64;
+        pass.3 += alpha as f64;
     }
 }
 

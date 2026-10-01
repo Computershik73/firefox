@@ -462,6 +462,27 @@ impl Renderer {
             }
         }
 
+        // GeckoW10m: how many times over the screen this pass draws -- the
+        // clear, the opaque tiles, the blended ones -- summed up every 300
+        // composites with the rest of the composite stats.
+        {
+            let fb = draw_target.dimensions();
+            let fb_area = (fb.width.max(1) as f32) * (fb.height.max(1) as f32);
+            let cleared = match partial_present_mode {
+                Some(PartialPresentMode::Single { dirty_rect }) => {
+                    if !dirty_rect.is_empty() && layer.occlusion.test(&dirty_rect) {
+                        dirty_rect.area()
+                    } else {
+                        0.0
+                    }
+                }
+                None => fb_area,
+            };
+            let opaque: f32 = layer.occlusion.opaque_items().iter().map(|i| i.rectangle.area()).sum();
+            let alpha: f32 = layer.occlusion.alpha_items().iter().map(|i| i.rectangle.area()).sum();
+            super::gecko_w10m_note_pass(cleared / fb_area, opaque / fb_area, alpha / fb_area);
+        }
+
         // Clear the framebuffer
         let clear_color = Some(clear_color.to_array());
 

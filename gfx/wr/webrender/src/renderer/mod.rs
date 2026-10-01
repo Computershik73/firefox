@@ -661,6 +661,45 @@ pub(crate) struct BufferDamageTracker {
     current_offset: usize,
 }
 
+/// GeckoW10m: every 300 composites, how the frame was put together -- whether
+/// a video went straight to the screen as a surface of its own, or had to be
+/// drawn into the page's tiles first, and how many tiles were redrawn. A
+/// fullscreen video that is drawn into tiles is drawn twice a frame.
+fn gecko_w10m_composite_stats(state: &CompositeState) {
+    use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+    static FRAMES: AtomicU32 = AtomicU32::new(0);
+    static WITH_SURFACE: AtomicU32 = AtomicU32::new(0);
+    static TILES: AtomicU32 = AtomicU32::new(0);
+    static REDRAWN: AtomicU32 = AtomicU32::new(0);
+
+    let mut tiles = 0u32;
+    let mut redrawn = 0u32;
+    for tile in state.tiles.iter() {
+        if let CompositeTileSurface::Texture { .. } = tile.surface {
+            tiles += 1;
+            if !tile.local_dirty_rect.is_empty() {
+                redrawn += 1;
+            }
+        }
+    }
+    if !state.external_surfaces.is_empty() {
+        WITH_SURFACE.fetch_add(1, Relaxed);
+    }
+    TILES.fetch_add(tiles, Relaxed);
+    REDRAWN.fetch_add(redrawn, Relaxed);
+    let frames = FRAMES.fetch_add(1, Relaxed) + 1;
+    if frames >= 300 {
+        crate::device::gecko_w10m_note_always(&format!(
+            "wr: last {} composites -- {} with a video as a surface of its own; {:.1} tiles a frame, {:.1} of them redrawn",
+            frames,
+            WITH_SURFACE.swap(0, Relaxed),
+            TILES.swap(0, Relaxed) as f32 / frames as f32,
+            REDRAWN.swap(0, Relaxed) as f32 / frames as f32,
+        ));
+        FRAMES.store(0, Relaxed);
+    }
+}
+
 impl BufferDamageTracker {
     /// Sets the damage rect for the current frame. Should only be called *after*
     /// get_damage_rect() has been called to get the current backbuffer's damage rect.
@@ -3759,6 +3798,9 @@ impl Renderer {
                 results,
             )
         });
+        if device_size.is_some() {
+            gecko_w10m_composite_stats(&frame.composite_state);
+        }
 
         // If we have a native OS compositor, then make use of that interface to
         // specify how to composite each of the picture cache surfaces. First, we

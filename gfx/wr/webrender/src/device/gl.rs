@@ -34,6 +34,16 @@ pub fn gecko_w10m_note(text: &str) {
 }
 #[cfg(not(windows))]
 pub fn gecko_w10m_note(_text: &str) {}
+// A note that is always written. For summaries a few times a minute, never
+// for anything per frame (see GECKO_W10M_TRACE above for why).
+#[cfg(windows)]
+pub fn gecko_w10m_note_always(text: &str) {
+    if let Ok(c) = std::ffi::CString::new(text) {
+        unsafe { GeckoW10mNote(c.as_ptr()) }
+    }
+}
+#[cfg(not(windows))]
+pub fn gecko_w10m_note_always(_text: &str) {}
 static GECKO_W10M_FRAMES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static GECKO_W10M_TEXTURES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static GECKO_W10M_DRAWS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);

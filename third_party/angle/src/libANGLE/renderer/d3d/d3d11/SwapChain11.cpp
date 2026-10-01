@@ -504,6 +504,13 @@ EGLint SwapChain11::resize(DisplayD3D *displayD3D, EGLint backbufferWidth, EGLin
     ASSERT(mSwapChain && mBackBufferTexture.valid() && mBackBufferRTView.valid() &&
            mBackBufferSRView.valid());
 
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    // How long the keyboard costs here: every time it opens or closes, the
+    // panel changes size and the swap chain and offscreen buffers are made
+    // again.
+    const ULONGLONG resizeStart = ::GetTickCount64();
+#endif
+
     mBackBufferTexture.reset();
     mBackBufferRTView.reset();
     mBackBufferSRView.reset();
@@ -520,12 +527,16 @@ EGLint SwapChain11::resize(DisplayD3D *displayD3D, EGLint backbufferWidth, EGLin
 
     hr = mSwapChain->ResizeBuffers(desc.BufferCount, backbufferWidth, backbufferHeight,
                                    getSwapChainNativeFormat(), 0);
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    const ULONGLONG resizeBuffersMs = ::GetTickCount64() - resizeStart;
+    if (FAILED(hr))
     {
         char note[128];
-        snprintf(note, sizeof(note), "angle: swap chain resized to %dx%d -> 0x%08lx", backbufferWidth,
-                 backbufferHeight, static_cast<unsigned long>(hr));
+        snprintf(note, sizeof(note), "angle: swap chain resize to %dx%d failed -> 0x%08lx",
+                 backbufferWidth, backbufferHeight, static_cast<unsigned long>(hr));
         AngleUwpNote(note);
     }
+#endif
 
     if (FAILED(hr))
     {
@@ -569,7 +580,22 @@ EGLint SwapChain11::resize(DisplayD3D *displayD3D, EGLint backbufferWidth, EGLin
 
     mFirstSwap = true;
 
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    const EGLint offscreenResult =
+        resetOffscreenBuffers(displayD3D, backbufferWidth, backbufferHeight);
+    {
+        char note[160];
+        snprintf(note, sizeof(note),
+                 "angle: swap chain resized to %dx%d in %llu ms (ResizeBuffers %llu ms)",
+                 backbufferWidth, backbufferHeight,
+                 static_cast<unsigned long long>(::GetTickCount64() - resizeStart),
+                 static_cast<unsigned long long>(resizeBuffersMs));
+        AngleUwpNote(note);
+    }
+    return offscreenResult;
+#else
     return resetOffscreenBuffers(displayD3D, backbufferWidth, backbufferHeight);
+#endif
 }
 
 DXGI_FORMAT SwapChain11::getSwapChainNativeFormat() const

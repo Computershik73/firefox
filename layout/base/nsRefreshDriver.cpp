@@ -101,6 +101,11 @@
 
 #include "nsXULPopupManager.h"
 
+#if defined(GECKO_W10M)
+#  include "mozilla/Sprintf.h"
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 using namespace mozilla;
 using namespace mozilla::widget;
 using namespace mozilla::ipc;
@@ -2301,6 +2306,25 @@ void nsRefreshDriver::Tick(VsyncId aId, TimeStamp aNowTime,
   }
   auto cleanupInExtraTick = MakeScopeExit([&] { mInNormalTick = false; });
   mInNormalTick = aIsExtraTick != IsExtraTick::Yes;
+#if defined(GECKO_W10M)
+  // A tick is where the page answers a resize: its resize handlers, the
+  // reflow, the paint. When the keyboard closes and the browser "thinks",
+  // this says whether it is thinking here. Only the long ones, at most one
+  // a second.
+  const TimeStamp geckoW10mTickStart = TimeStamp::Now();
+  auto geckoW10mTickNote = MakeScopeExit([geckoW10mTickStart] {
+    static TimeStamp sLastNote;
+    const TimeStamp end = TimeStamp::Now();
+    const double ms = (end - geckoW10mTickStart).ToMilliseconds();
+    if (ms >= 150 &&
+        (sLastNote.IsNull() || (end - sLastNote).ToSeconds() >= 1)) {
+      sLastNote = end;
+      char note[96];
+      SprintfLiteral(note, "main thread: a refresh tick took %.0f ms", ms);
+      GeckoW10mNote(note);
+    }
+  });
+#endif
 
   if (!IsPresentingInVR() && IsWaitingForPaint(aNowTime)) {
     // In immersive VR mode, we do not get notifications when frames are

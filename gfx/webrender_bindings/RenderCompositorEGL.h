@@ -86,6 +86,12 @@ class RenderCompositorEGL : public RenderCompositor {
   // and presented whole.
   LayoutDeviceIntSize mPresentedSize;
   bool mFullRender = true;
+  // ANGLE's own idea of the surface's size, which follows the panel and
+  // changes a present later than the window's.
+  gfx::IntSize SurfaceSize() const;
+  gfx::IntSize mPresentedSurfaceSize;
+  // What RequestFullRender decided for the frame being drawn.
+  bool mWholeFrame = true;
   // For the note every ten seconds: what presenting cost.
   TimeStamp mPresentStatsStart;
   uint32_t mPresentFrames = 0;

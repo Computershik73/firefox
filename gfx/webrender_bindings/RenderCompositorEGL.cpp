@@ -224,10 +224,9 @@ RenderedFrameId RenderCompositorEGL::EndFrame(
 #if defined(GECKO_W10M)
   if (mPostSubBuffer && mEGLSurface != EGL_NO_SURFACE) {
     const auto bufferSize = GetBufferSize();
-    // WebRender drew this frame whole (RequestFullRender), so the whole of
-    // it goes out -- after a resize the swap chain's buffers are new and
-    // hold nothing outside a dirty rect.
-    const bool whole = mFullRender || bufferSize != mPresentedSize;
+    // WebRender drew this frame whole (RequestFullRender decided it), so
+    // the whole of it goes out.
+    const bool whole = mWholeFrame;
     gfx::IntRect bounds;
     for (const DeviceIntRect& rect : aDirtyRects) {
       const auto left = std::clamp(rect.min.x, 0, bufferSize.width);
@@ -251,8 +250,15 @@ RenderedFrameId RenderCompositorEGL::EndFrame(
       const auto& egl = gl::GLContextEGL::Cast(gl())->mEgl;
       if (mPostSubBuffer(egl->mDisplay, mEGLSurface, bounds.X(), bounds.Y(),
                          bounds.Width(), bounds.Height())) {
-        mFullRender = false;
         mPresentedSize = bufferSize;
+        // ANGLE resizes its buffers after a present, when it sees that the
+        // panel changed size -- and moves the old picture into the new
+        // offscreen texture as it does. So the frame after a resize has to
+        // be drawn whole as well, and so does every frame until ANGLE's size
+        // and the window's agree. Drawing only the dirty tiles into the
+        // moved picture is what left a strip of new page over the old one
+        // after the keyboard opened or closed.
+        mFullRender = SurfaceSize() != bufferSize.ToUnknownSize();
       } else {
         // Present the next frame whole, whatever went wrong with this one.
         mFullRender = true;
@@ -446,11 +452,30 @@ bool RenderCompositorEGL::UsePartialPresent() {
 bool RenderCompositorEGL::RequestFullRender() {
 #if defined(GECKO_W10M)
   if (mPostSubBuffer) {
-    return mFullRender || GetBufferSize() != mPresentedSize;
+    const auto bufferSize = GetBufferSize();
+    const gfx::IntSize surfaceSize = SurfaceSize();
+    mWholeFrame = mFullRender || bufferSize != mPresentedSize ||
+                  surfaceSize != bufferSize.ToUnknownSize() ||
+                  surfaceSize != mPresentedSurfaceSize;
+    mPresentedSurfaceSize = surfaceSize;
+    return mWholeFrame;
   }
 #endif
   return false;
 }
+
+#if defined(GECKO_W10M)
+gfx::IntSize RenderCompositorEGL::SurfaceSize() const {
+  EGLint width = 0;
+  EGLint height = 0;
+  if (mEGLSurface != EGL_NO_SURFACE) {
+    const auto& egl = gl::GLContextEGL::Cast(gl())->mEgl;
+    egl->fQuerySurface(mEGLSurface, LOCAL_EGL_WIDTH, &width);
+    egl->fQuerySurface(mEGLSurface, LOCAL_EGL_HEIGHT, &height);
+  }
+  return gfx::IntSize(width, height);
+}
+#endif
 
 uint32_t RenderCompositorEGL::GetMaxPartialPresentRects() {
 #if defined(GECKO_W10M)

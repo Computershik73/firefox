@@ -6,6 +6,7 @@
 #define MOZILLA_GFX_RENDERCOMPOSITOR_EGL_H
 
 #include "GLTypes.h"
+#include "mozilla/TimeStamp.h"
 #include "mozilla/webrender/RenderCompositor.h"
 
 namespace mozilla {
@@ -70,6 +71,28 @@ class RenderCompositorEGL : public RenderCompositor {
   // this is used to allow the widget an opportunity to recover from the first
   // instance, before raising a WebRenderError on subsequent occurences.
   bool mHandlingNewSurfaceError = false;
+
+#if defined(GECKO_W10M)
+  // Partial present through ANGLE's EGL_NV_post_sub_buffer. ANGLE draws into
+  // an offscreen texture of its own and keeps it from frame to frame, so
+  // WebRender only has to draw what changed, and eglPostSubBufferNV copies
+  // just that rectangle to the swap chain and presents it as the dirty rect.
+  // Null when ANGLE does not offer it; every frame is then drawn whole.
+  using PostSubBufferFn = EGLBoolean(GLAPIENTRY*)(EGLDisplay, EGLSurface,
+                                                  EGLint, EGLint, EGLint,
+                                                  EGLint);
+  PostSubBufferFn mPostSubBuffer = nullptr;
+  // A new size, or a present that failed, means the next frame is drawn
+  // and presented whole.
+  LayoutDeviceIntSize mPresentedSize;
+  bool mFullRender = true;
+  // For the note every ten seconds: what presenting cost.
+  TimeStamp mPresentStatsStart;
+  uint32_t mPresentFrames = 0;
+  uint32_t mPresentSkipped = 0;
+  uint32_t mPresentWhole = 0;
+  double mPresentArea = 0;
+#endif
 
   // FileDescriptor of release fence.
   // Release fence is a fence that is used for waiting until usage/composite of

@@ -804,6 +804,19 @@ EGLint SwapChain11::swapRect(DisplayD3D *displayD3D,
                              EGLint width,
                              EGLint height)
 {
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    // A sub-buffer post right after the buffers were made (the first frame,
+    // a resize) would copy a strip into a back buffer that holds nothing
+    // else, and present() presents that frame whole. The offscreen texture
+    // is complete, so copy all of it.
+    if (mFirstSwap)
+    {
+        x      = 0;
+        y      = 0;
+        width  = mWidth;
+        height = mHeight;
+    }
+#endif
     if (mNeedsOffscreenTexture)
     {
         EGLint result = copyOffscreenToBackbuffer(displayD3D, x, y, width, height);

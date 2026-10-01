@@ -30,6 +30,8 @@
 #endif
 
 #if defined(GECKO_W10M)
+#  include <cstring>
+#  include "mozilla/Sprintf.h"
 extern "C" void GeckoW10mNote(const char* text);
 extern "C" void* gecko_w10m_egl_native_window();
 #endif
@@ -115,6 +117,27 @@ RenderCompositorEGL::RenderCompositorEGL(
   } else {
     gl::GLContextEGL::Cast(gl())->SetEGLSurfaceOverride(mEGLSurface);
     GeckoW10mNote("gfx: the panel has an EGL surface, frames go to the GPU");
+
+    // Every frame was drawn and presented whole: 1440x2308 pixels composited,
+    // then copied again by ANGLE from its offscreen texture to the swap
+    // chain, for a video frame or a progress bar that changed a strip of it.
+    // WebRender asked for partial present and was told the buffer's age is
+    // unknown, which to it means "redraw everything". ANGLE's offscreen
+    // texture is never swapped, so it always holds the previous frame; what
+    // is missing is only a way to present part of it, and that is
+    // EGL_NV_post_sub_buffer.
+    const auto& egl = gl::GLContextEGL::Cast(gl())->mEgl;
+    const char* extensions =
+        egl->mLib->fQueryString(egl->mDisplay, LOCAL_EGL_EXTENSIONS);
+    if (extensions && strstr(extensions, "EGL_NV_post_sub_buffer")) {
+      mPostSubBuffer = reinterpret_cast<PostSubBufferFn>(
+          egl->mLib->fGetProcAddress("eglPostSubBufferNV"));
+    }
+    GeckoW10mNote(mPostSubBuffer
+                      ? "gfx: partial present -- only what changed is drawn "
+                        "and presented"
+                      : "gfx: no EGL_NV_post_sub_buffer -- every frame is "
+                        "drawn whole");
   }
 #endif
 #ifdef MOZ_WAYLAND
@@ -195,6 +218,76 @@ RenderedFrameId RenderCompositorEGL::EndFrame(
   RenderedFrameId frameId = GetNextRenderFrameId();
 #ifdef MOZ_WIDGET_GTK
   if (mWidget->IsHidden()) {
+    return frameId;
+  }
+#endif
+#if defined(GECKO_W10M)
+  if (mPostSubBuffer && mEGLSurface != EGL_NO_SURFACE) {
+    const auto bufferSize = GetBufferSize();
+    // WebRender drew this frame whole (RequestFullRender), so the whole of
+    // it goes out -- after a resize the swap chain's buffers are new and
+    // hold nothing outside a dirty rect.
+    const bool whole = mFullRender || bufferSize != mPresentedSize;
+    gfx::IntRect bounds;
+    for (const DeviceIntRect& rect : aDirtyRects) {
+      const auto left = std::clamp(rect.min.x, 0, bufferSize.width);
+      const auto top = std::clamp(rect.min.y, 0, bufferSize.height);
+      const auto right = std::clamp(rect.max.x, 0, bufferSize.width);
+      const auto bottom = std::clamp(rect.max.y, 0, bufferSize.height);
+      // EGL counts rows from the bottom.
+      bounds = bounds.Union(gfx::IntRect(left, bufferSize.height - bottom,
+                                         right - left, bottom - top));
+    }
+    if (whole) {
+      bounds = gfx::IntRect(0, 0, bufferSize.width, bufferSize.height);
+    }
+
+    ++mPresentFrames;
+    if (bounds.IsEmpty()) {
+      // Nothing changed on screen: WebRender returns no dirty rect at all,
+      // and there is nothing to copy or present.
+      ++mPresentSkipped;
+    } else {
+      const auto& egl = gl::GLContextEGL::Cast(gl())->mEgl;
+      if (mPostSubBuffer(egl->mDisplay, mEGLSurface, bounds.X(), bounds.Y(),
+                         bounds.Width(), bounds.Height())) {
+        mFullRender = false;
+        mPresentedSize = bufferSize;
+      } else {
+        // Present the next frame whole, whatever went wrong with this one.
+        mFullRender = true;
+        GeckoW10mNote("gfx: eglPostSubBufferNV failed, next frame whole");
+      }
+      if (whole) {
+        ++mPresentWhole;
+      }
+      if (bufferSize.width > 0 && bufferSize.height > 0) {
+        mPresentArea += double(bounds.Width()) * bounds.Height() /
+                        (double(bufferSize.width) * bufferSize.height);
+      }
+    }
+
+    const TimeStamp now = TimeStamp::Now();
+    if (mPresentStatsStart.IsNull()) {
+      mPresentStatsStart = now;
+    }
+    const double span = (now - mPresentStatsStart).ToSeconds();
+    if (span >= 10) {
+      if (mPresentFrames >= 100) {
+        const uint32_t presented = mPresentFrames - mPresentSkipped;
+        char note[200];
+        SprintfLiteral(note,
+                       "present: %u frames, %u with nothing changed (not "
+                       "presented), %u whole; a presented frame is %.0f%% of "
+                       "the screen on average",
+                       mPresentFrames, mPresentSkipped, mPresentWhole,
+                       presented ? 100.0 * mPresentArea / presented : 0.0);
+        GeckoW10mNote(note);
+      }
+      mPresentStatsStart = now;
+      mPresentFrames = mPresentSkipped = mPresentWhole = 0;
+      mPresentArea = 0;
+    }
     return frameId;
   }
 #endif
@@ -342,16 +435,40 @@ LayoutDeviceIntSize RenderCompositorEGL::GetBufferSize() {
 }
 
 bool RenderCompositorEGL::UsePartialPresent() {
+#if defined(GECKO_W10M)
+  if (mPostSubBuffer) {
+    return true;
+  }
+#endif
   return gfx::gfxVars::WebRenderMaxPartialPresentRects() > 0;
 }
 
-bool RenderCompositorEGL::RequestFullRender() { return false; }
+bool RenderCompositorEGL::RequestFullRender() {
+#if defined(GECKO_W10M)
+  if (mPostSubBuffer) {
+    return mFullRender || GetBufferSize() != mPresentedSize;
+  }
+#endif
+  return false;
+}
 
 uint32_t RenderCompositorEGL::GetMaxPartialPresentRects() {
+#if defined(GECKO_W10M)
+  if (mPostSubBuffer) {
+    return 1;  // eglPostSubBufferNV takes one rectangle
+  }
+#endif
   return gfx::gfxVars::WebRenderMaxPartialPresentRects();
 }
 
 bool RenderCompositorEGL::ShouldDrawPreviousPartialPresentRegions() {
+#if defined(GECKO_W10M)
+  // ANGLE's offscreen texture is the buffer WebRender draws into, and it is
+  // the same one every frame: what was drawn before is still there.
+  if (mPostSubBuffer) {
+    return false;
+  }
+#endif
   return true;
 }
 

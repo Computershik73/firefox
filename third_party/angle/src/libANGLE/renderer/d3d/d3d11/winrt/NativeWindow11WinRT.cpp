@@ -281,7 +281,14 @@ HRESULT NativeWindow11WinRT::createSwapChain(ID3D11Device *device,
     swapChainDesc.SampleDesc.Quality = 0;
     swapChainDesc.BufferUsage =
         DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_BACK_BUFFER | DXGI_USAGE_SHADER_INPUT;
-    swapChainDesc.BufferCount = 2;
+    // Three, not two. With two, a frame that takes a little longer than one
+    // refresh (16.7 ms) has nowhere to go while the previous one waits for
+    // the display, so the renderer stands until the next refresh and every
+    // frame costs two: fullscreen video ran at exactly 30 frames a second,
+    // 30-33 ms each, on frames that needed perhaps 18. The third buffer lets
+    // the next frame be drawn while one waits -- Firefox's triple buffering
+    // on Windows, for the same reason.
+    swapChainDesc.BufferCount = 3;
     swapChainDesc.Scaling     = DXGI_SCALING_STRETCH;
     swapChainDesc.SwapEffect  = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
     swapChainDesc.AlphaMode = mHasAlpha ? DXGI_ALPHA_MODE_PREMULTIPLIED : DXGI_ALPHA_MODE_IGNORE;
@@ -289,8 +296,9 @@ HRESULT NativeWindow11WinRT::createSwapChain(ID3D11Device *device,
 
     {
         char note[128];
-        snprintf(note, sizeof(note), "angle: making a %ux%u swap chain for the panel", width,
-                 height);
+        snprintf(note, sizeof(note),
+                 "angle: making a %ux%u swap chain for the panel, %u buffers", width, height,
+                 swapChainDesc.BufferCount);
         Note(note);
     }
 

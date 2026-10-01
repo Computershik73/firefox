@@ -51,7 +51,12 @@ static nsIWidget* GetWidget(PresShell* aPresShell) {
     return nullptr;
   }
   if (nsIFrame* rootFrame = aPresShell->GetRootFrame()) {
-#if defined(MOZ_WIDGET_ANDROID)
+    // GECKO_W10M: every page is in the parent process here, inside the browser
+    // window, so its root frame has no widget of its own -- GetOwnWidget was
+    // null, the constraints were never sent, and APZ kept its defaults, in
+    // which zooming is not allowed: a pinch began and did nothing on every
+    // page. The window's widget owns the APZ tree manager, as on Android.
+#if defined(MOZ_WIDGET_ANDROID) || defined(GECKO_W10M)
     // On Android in cases of about:XX pages loaded in the browser parent
     // process we need to return the nearest widget since it's the widget owning
     // an IAPZCTreeManager to communicate with the APZCTreeManager for the

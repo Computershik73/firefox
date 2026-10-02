@@ -30,6 +30,7 @@
 #include <atomic>
 
 #include "mozilla/StaticPrefs_gfx.h"
+#include "mozilla/TimeStamp.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/webrender/RenderD3D11TextureHost.h"
 #include "mozilla/webrender/RenderThread.h"
@@ -79,6 +80,7 @@ struct VideoLayer {
   uint32_t mStableFrames = 0;
   bool mShown = false;
   bool mPresented = false;
+  uint32_t mPlacementNotes = 0;
 
   // The last frame copied in, so a composite for another reason does not
   // present the same picture again.
@@ -91,6 +93,11 @@ struct VideoLayer {
 
   uint32_t mStatFrames = 0;
   uint32_t mStatHoles = 0;
+  uint32_t mStatOverlay = 0;
+  uint32_t mStatComposed = 0;
+  uint32_t mStatOther = 0;
+  uint32_t mStatPresents = 0;
+  double mStatPresentMs = 0;
   bool mSaidHole = false;
 
   void Note(const char* aText) { GeckoW10mNote(aText); }
@@ -144,8 +151,18 @@ struct VideoLayer {
       mChainHeight = aHeight;
       mLastTexture = nullptr;
       mPresented = false;
-      ++mGeneration;  // the panel's scale depends on the chain's size
+      // The panel's scale depends on the chain's size: forget the placement
+      // so the next frame sends a new one, and keep the hole closed until
+      // the shell has applied it. Without this a quality change kept the old
+      // scale, and the new, larger picture showed magnified.
+      mRect = Rect();
+      mClip = Rect();
       mStableFrames = 0;
+      mPlacementNotes = 0;
+      char note[128];
+      SprintfLiteral(note, "video layer: the swap chain is now %dx%d", aWidth,
+                     aHeight);
+      Note(note);
       return true;
     }
 
@@ -233,10 +250,32 @@ struct VideoLayer {
     }
     D3D11_BOX box = {0, 0, 0, UINT(mChainWidth), UINT(mChainHeight), 1};
     mContext->CopySubresourceRegion(buffer, 0, 0, 0, 0, aTexture, index, &box);
+    const mozilla::TimeStamp presentStart = mozilla::TimeStamp::Now();
     hr = mChain->Present(0, 0);
+    mStatPresentMs +=
+        (mozilla::TimeStamp::Now() - presentStart).ToMilliseconds();
+    ++mStatPresents;
     if (FAILED(hr)) {
       Break("present failed", hr);
       return false;
+    }
+    // How the system really showed it: as a hardware overlay, or composed
+    // by the GPU after all. Asked every half second.
+    if (mStatPresents % 30 == 0) {
+      RefPtr<IDXGISwapChainMedia> media;
+      DXGI_FRAME_STATISTICS_MEDIA stats = {};
+      if (SUCCEEDED(mChain->QueryInterface(__uuidof(IDXGISwapChainMedia),
+                                           getter_AddRefs(media))) &&
+          SUCCEEDED(media->GetFrameStatisticsMedia(&stats))) {
+        if (stats.CompositionMode == DXGI_FRAME_PRESENTATION_MODE_OVERLAY) {
+          ++mStatOverlay;
+        } else if (stats.CompositionMode ==
+                   DXGI_FRAME_PRESENTATION_MODE_COMPOSED) {
+          ++mStatComposed;
+        } else {
+          ++mStatOther;
+        }
+      }
     }
     mLastTexture = aTexture;
     mLastIndex = index;
@@ -321,6 +360,16 @@ struct VideoLayer {
       mClip = clip;
       ++mGeneration;
       mStableFrames = 0;
+      if (mPlacementNotes < 4) {
+        ++mPlacementNotes;
+        char note[192];
+        SprintfLiteral(note,
+                       "video layer: placed %u -- %dx%d at %d,%d, visible "
+                       "%dx%d at %d,%d, chain %dx%d",
+                       mGeneration, rect.w, rect.h, rect.x, rect.y, clip.w,
+                       clip.h, clip.x, clip.y, mChainWidth, mChainHeight);
+        Note(note);
+      }
       if (auto* sink = sSink.load()) {
         sink->place(mGeneration, rect.x, rect.y, rect.w, rect.h, clip.x,
                     clip.y, clip.w, clip.h, mChainWidth, mChainHeight);
@@ -356,13 +405,19 @@ struct VideoLayer {
     }
     mOfferedThisFrame = false;
     if (mStatFrames >= 300) {
-      char note[128];
+      char note[256];
       SprintfLiteral(note,
-                     "video layer: %u of the last %u video frames shown by the "
-                     "display as an overlay",
-                     mStatHoles, mStatFrames);
+                     "video layer: a hole in %u of the last %u composites; the "
+                     "system says overlay %u, composed by the GPU %u, other "
+                     "%u; a video present took %.1f ms",
+                     mStatHoles, mStatFrames, mStatOverlay, mStatComposed,
+                     mStatOther,
+                     mStatPresents ? mStatPresentMs / mStatPresents : 0.0);
       Note(note);
       mStatFrames = mStatHoles = 0;
+      mStatOverlay = mStatComposed = mStatOther = 0;
+      mStatPresents = 0;
+      mStatPresentMs = 0;
     }
   }
 };

@@ -105,6 +105,8 @@ class RenderCompositorEGL : public RenderCompositor {
   uint32_t mPresentSkipped = 0;
   uint32_t mPresentWhole = 0;
   double mPresentArea = 0;
+  double mPresentMs = 0;
+  double mPresentMaxMs = 0;
 #endif
 
   // FileDescriptor of release fence.

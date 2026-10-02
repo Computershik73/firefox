@@ -279,8 +279,18 @@ RenderedFrameId RenderCompositorEGL::EndFrame(
       ++mPresentSkipped;
     } else {
       const auto& egl = gl::GLContextEGL::Cast(gl())->mEgl;
-      if (mPostSubBuffer(egl->mDisplay, mEGLSurface, bounds.X(), bounds.Y(),
-                         bounds.Width(), bounds.Height())) {
+      // How long handing the frame to the system takes, apart from drawing
+      // it: with a video on the display overlay, small presents were seen
+      // to cost a whole frame.
+      const TimeStamp presentStart = TimeStamp::Now();
+      const bool posted =
+          mPostSubBuffer(egl->mDisplay, mEGLSurface, bounds.X(), bounds.Y(),
+                         bounds.Width(), bounds.Height());
+      const double presentMs =
+          (TimeStamp::Now() - presentStart).ToMilliseconds();
+      mPresentMs += presentMs;
+      mPresentMaxMs = std::max(mPresentMaxMs, presentMs);
+      if (posted) {
         mPresentedSize = bufferSize;
         // ANGLE resizes its buffers after a present, when it sees that the
         // panel changed size -- and moves the old picture into the new
@@ -312,18 +322,22 @@ RenderedFrameId RenderCompositorEGL::EndFrame(
     if (span >= 10) {
       if (mPresentFrames >= 100) {
         const uint32_t presented = mPresentFrames - mPresentSkipped;
-        char note[200];
+        char note[256];
         SprintfLiteral(note,
                        "present: %u frames, %u with nothing changed (not "
                        "presented), %u whole; a presented frame is %.0f%% of "
-                       "the screen on average",
+                       "the screen on average and took %.1f ms to hand over "
+                       "(%.1f at most)",
                        mPresentFrames, mPresentSkipped, mPresentWhole,
-                       presented ? 100.0 * mPresentArea / presented : 0.0);
+                       presented ? 100.0 * mPresentArea / presented : 0.0,
+                       presented ? mPresentMs / presented : 0.0,
+                       mPresentMaxMs);
         GeckoW10mNote(note);
       }
       mPresentStatsStart = now;
       mPresentFrames = mPresentSkipped = mPresentWhole = 0;
       mPresentArea = 0;
+      mPresentMs = mPresentMaxMs = 0;
     }
     return frameId;
   }

@@ -116,6 +116,7 @@ struct VideoLayer {
   }
 
   void Hide() {
+    mLastHole = false;
     if (mShown) {
       if (auto* sink = sSink.load()) {
         sink->show(0);
@@ -244,7 +245,18 @@ struct VideoLayer {
     return true;
   }
 
-  bool Offer(const mozilla::wr::ExternalImageId& aId, const float* aRects) {
+  // 0: WebRender draws the video; 1: a hole, new this frame; 2: a hole that
+  // was already there.
+  int32_t Offer(const mozilla::wr::ExternalImageId& aId, const float* aRects) {
+    const bool hole = OfferForHole(aId, aRects);
+    const int32_t answer = hole ? (mLastHole ? 2 : 1) : 0;
+    mLastHole = hole;
+    return answer;
+  }
+  bool mLastHole = false;
+
+  bool OfferForHole(const mozilla::wr::ExternalImageId& aId,
+                    const float* aRects) {
     if (mBroken) {
       return false;
     }
@@ -378,8 +390,8 @@ extern "C" __declspec(dllexport) void gecko_w10m_video_layer_ack(
 // video about to be drawn: aRects is the video's rect and its visible part,
 // x0 y0 x1 y1 each, in device pixels. True: the display shows it, draw a
 // transparent hole.
-extern "C" bool gecko_w10m_video_layer_frame(uint64_t aExternalImageId,
-                                             const float* aRects) {
+extern "C" int32_t gecko_w10m_video_layer_frame(uint64_t aExternalImageId,
+                                                const float* aRects) {
   return Layer().Offer(mozilla::wr::ToExternalImageId(aExternalImageId), aRects);
 }
 

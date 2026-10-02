@@ -310,14 +310,10 @@ impl Renderer {
                     // transparent hole -- opaque tiles go with blending off,
                     // so this writes 0,0,0,0 -- and whatever lies over the
                     // video is blended over the hole as before.
-                    let shown_by_display = match (&surface.color_data, surface.external_image_id) {
-                        (ResolvedExternalSurfaceColorData::Yuv { .. }, Some(id))
-                            if tile.kind == TileKind::Opaque && clip.is_none() =>
-                        {
-                            super::gecko_w10m_video_layer(id, &tile_rect, &clip_rect)
-                        }
-                        _ => false,
-                    };
+                    // The frame was offered at the start of the frame
+                    // (calculate_dirty_rects); this reads the answer.
+                    let shown_by_display = clip.is_none()
+                        && super::gecko_w10m_video_hole(item.key.tile_index).is_some();
 
                     if shown_by_display {
                         let dummy = TextureSource::Dummy;
@@ -1371,6 +1367,14 @@ impl Renderer {
             return None;
         }
 
+        // GeckoW10m: every opaque video goes to the video layer first, which
+        // presents its frame to the display overlay and says whether the
+        // compositor should leave a hole for it -- and whether that hole is
+        // already there. A hole that is already there is not dirty: when only
+        // the video changes, nothing of the browser's layer is drawn or
+        // presented at all, and the display updates the overlay by itself.
+        super::gecko_w10m_offer_videos(composite_state);
+
         let mut partial_present_mode = None;
 
         let (max_partial_present_rects, draw_previous_partial_present_regions) =
@@ -1415,7 +1419,10 @@ impl Renderer {
 
                 // Work out how many dirty rects WR produced, and if that's more than
                 // what the device supports.
-                for tile in &composite_state.tiles {
+                for (tile_index, tile) in composite_state.tiles.iter().enumerate() {
+                    if super::gecko_w10m_video_hole(tile_index) == Some(true) {
+                        continue;
+                    }
                     let dirty_rect = composite_state
                         .get_device_rect(&tile.local_dirty_rect, tile.transform_index);
 

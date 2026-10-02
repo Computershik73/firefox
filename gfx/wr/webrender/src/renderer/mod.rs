@@ -54,6 +54,7 @@ use crate::batch::ClipMaskInstanceList;
 #[cfg(any(feature = "capture", feature = "replay"))]
 use crate::capture::{CaptureConfig, ExternalCaptureImage, PlainExternalImage};
 use crate::composite::{CompositeState, CompositeTileSurface, TileKind};
+use crate::composite::ResolvedExternalSurfaceColorData;
 use crate::composite::{CompositorKind, Compositor, NativeTileId};
 use crate::composite::{CompositorConfig, NativeSurfaceOperationDetails, NativeSurfaceId, NativeSurfaceOperation};
 #[cfg(feature = "debugger")]
@@ -732,16 +733,18 @@ fn gecko_w10m_composite_stats(state: &CompositeState) {
 /// GeckoW10m: offers an opaque video about to be composited to the display,
 /// as a hardware overlay of its own (GeckoW10mVideoLayer.cpp). True when the
 /// display is showing it and the compositor should leave a transparent hole.
+/// 0: the compositor draws the video; 1: leave a hole, which is new this
+/// frame (draw it); 2: leave a hole, already there (not dirty).
 #[cfg(windows)]
 extern "C" {
-    fn gecko_w10m_video_layer_frame(external_image_id: u64, rects: *const f32) -> bool;
+    fn gecko_w10m_video_layer_frame(external_image_id: u64, rects: *const f32) -> i32;
 }
 
-pub(crate) fn gecko_w10m_video_layer(
+fn gecko_w10m_video_layer(
     id: api::ExternalImageId,
     tile_rect: &DeviceRect,
     clip_rect: &DeviceRect,
-) -> bool {
+) -> i32 {
     #[cfg(windows)]
     {
         let rects = [
@@ -753,8 +756,52 @@ pub(crate) fn gecko_w10m_video_layer(
     #[cfg(not(windows))]
     {
         let _ = (id, tile_rect, clip_rect);
-        false
+        0
     }
+}
+
+/// This frame's holes: tile index, and whether the hole was already there.
+static GECKO_W10M_HOLES: std::sync::Mutex<Vec<(usize, bool)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Offers every opaque YUV video of the frame to the video layer, once per
+/// frame, and remembers which tiles are to be holes.
+pub(crate) fn gecko_w10m_offer_videos(state: &CompositeState) {
+    let mut holes = match GECKO_W10M_HOLES.lock() {
+        Ok(holes) => holes,
+        Err(_) => return,
+    };
+    holes.clear();
+    for (index, tile) in state.tiles.iter().enumerate() {
+        if let CompositeTileSurface::ExternalSurface { external_surface_index } = tile.surface {
+            if tile.kind != TileKind::Opaque || tile.clip_index.is_some() {
+                continue;
+            }
+            let surface = &state.external_surfaces[external_surface_index.0];
+            if let (ResolvedExternalSurfaceColorData::Yuv { .. }, Some(id)) =
+                (&surface.color_data, surface.external_image_id)
+            {
+                let tile_rect = state.get_device_rect(&tile.local_rect, tile.transform_index);
+                let clip_rect = tile_rect
+                    .intersection(&tile.device_clip_rect)
+                    .unwrap_or(DeviceRect::zero());
+                match gecko_w10m_video_layer(id, &tile_rect, &clip_rect) {
+                    1 => holes.push((index, false)),
+                    2 => holes.push((index, true)),
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// Whether this tile is a hole this frame (Some), and if so whether the hole
+/// was already there (true).
+pub(crate) fn gecko_w10m_video_hole(tile_index: usize) -> Option<bool> {
+    GECKO_W10M_HOLES
+        .lock()
+        .ok()
+        .and_then(|holes| holes.iter().find(|h| h.0 == tile_index).map(|h| h.1))
 }
 
 /// GeckoW10m: compositor surfaces per frame by kind, and the last reason a

@@ -734,16 +734,24 @@ fn gecko_w10m_composite_stats(state: &CompositeState) {
 /// as a hardware overlay of its own (GeckoW10mVideoLayer.cpp). True when the
 /// display is showing it and the compositor should leave a transparent hole.
 /// 0: the compositor draws the video; 1: leave a hole, which is new this
-/// frame (draw it); 2: leave a hole, already there (not dirty).
+/// frame (draw it); 2: leave a hole, already there (not dirty). `covered`
+/// says whether anything of the page is drawn in front of the video this
+/// frame: the display takes the layer as an overlay only when it lies above
+/// the browser's, which it can only do while nothing is in front of it.
 #[cfg(windows)]
 extern "C" {
-    fn gecko_w10m_video_layer_frame(external_image_id: u64, rects: *const f32) -> i32;
+    fn gecko_w10m_video_layer_frame(
+        external_image_id: u64,
+        rects: *const f32,
+        covered: i32,
+    ) -> i32;
 }
 
 fn gecko_w10m_video_layer(
     id: api::ExternalImageId,
     tile_rect: &DeviceRect,
     clip_rect: &DeviceRect,
+    covered: bool,
 ) -> i32 {
     #[cfg(windows)]
     {
@@ -751,13 +759,30 @@ fn gecko_w10m_video_layer(
             tile_rect.min.x, tile_rect.min.y, tile_rect.max.x, tile_rect.max.y,
             clip_rect.min.x, clip_rect.min.y, clip_rect.max.x, clip_rect.max.y,
         ];
-        unsafe { gecko_w10m_video_layer_frame(id.0, rects.as_ptr()) }
+        unsafe { gecko_w10m_video_layer_frame(id.0, rects.as_ptr(), covered as i32) }
     }
     #[cfg(not(windows))]
     {
-        let _ = (id, tile_rect, clip_rect);
+        let _ = (id, tile_rect, clip_rect, covered);
         0
     }
+}
+
+/// Whether any tile in front of the one at `index` (a smaller z) draws
+/// something over `rect`. Tiles with nothing in them are not composited at
+/// all, so a tile in the list is content; its valid rect is where.
+fn gecko_w10m_covered(state: &CompositeState, index: usize, rect: &DeviceRect) -> bool {
+    let z = state.tiles[index].z_id.0;
+    state.tiles.iter().enumerate().any(|(other, tile)| {
+        if other == index || tile.z_id.0 >= z {
+            return false;
+        }
+        let valid = state.get_device_rect(&tile.local_valid_rect, tile.transform_index);
+        valid
+            .intersection(&tile.device_clip_rect)
+            .and_then(|r| r.intersection(rect))
+            .map_or(false, |r| r.width() >= 1.0 && r.height() >= 1.0)
+    })
 }
 
 /// This frame's holes: tile index, and whether the hole was already there.
@@ -785,7 +810,8 @@ pub(crate) fn gecko_w10m_offer_videos(state: &CompositeState) {
                 let clip_rect = tile_rect
                     .intersection(&tile.device_clip_rect)
                     .unwrap_or(DeviceRect::zero());
-                match gecko_w10m_video_layer(id, &tile_rect, &clip_rect) {
+                let covered = gecko_w10m_covered(state, index, &clip_rect);
+                match gecko_w10m_video_layer(id, &tile_rect, &clip_rect, covered) {
                     1 => holes.push((index, false)),
                     2 => holes.push((index, true)),
                     _ => {}

@@ -50,6 +50,11 @@ struct GeckoW10mVideoLayerSink {
                 int32_t aClipWidth, int32_t aClipHeight, int32_t aChainWidth,
                 int32_t aChainHeight);
   void (*show)(int32_t aVisible);
+  // Above the browser's panel, or under it. The display takes the layer as
+  // a hardware overlay only above (the test in build 132: under the
+  // browser it was composed by the GPU whatever else was done), and above
+  // it hides whatever the page draws over the video.
+  void (*stack)(int32_t aAbove);
 };
 
 std::atomic<const GeckoW10mVideoLayerSink*> sSink{nullptr};
@@ -81,6 +86,12 @@ struct VideoLayer {
   Rect mClip;
   uint32_t mStableFrames = 0;
   bool mShown = false;
+  // Whether the panel lies above the browser's, and for how many composites
+  // in a row nothing of the page has been drawn in front of the video.
+  bool mAbove = false;
+  uint32_t mUncoveredFrames = 0;
+  uint32_t mStatAbove = 0;
+  uint32_t mStackNotes = 0;
   bool mPresented = false;
   uint32_t mPlacementNotes = 0;
 
@@ -127,8 +138,27 @@ struct VideoLayer {
     Hide();
   }
 
+  void Stack(bool aAbove) {
+    if (aAbove == mAbove) {
+      return;
+    }
+    mAbove = aAbove;
+    if (auto* sink = sSink.load()) {
+      sink->stack(aAbove ? 1 : 0);
+    }
+    if (mStackNotes < 40) {
+      ++mStackNotes;
+      Note(aAbove ? "video layer: above the browser -- nothing of the page "
+                    "is in front of the video"
+                  : "video layer: under the browser -- the page draws in "
+                    "front of the video, or it moved");
+    }
+  }
+
   void Hide() {
     mLastHole = false;
+    mUncoveredFrames = 0;
+    Stack(false);
     if (mShown) {
       if (auto* sink = sSink.load()) {
         sink->show(0);
@@ -311,8 +341,25 @@ struct VideoLayer {
 
   // 0: WebRender draws the video; 1: a hole, new this frame; 2: a hole that
   // was already there.
-  int32_t Offer(const mozilla::wr::ExternalImageId& aId, const float* aRects) {
+  int32_t Offer(const mozilla::wr::ExternalImageId& aId, const float* aRects,
+                bool aCovered) {
     const bool hole = OfferForHole(aId, aRects);
+    // Above the browser only while the hole is there -- the panel is where
+    // this frame's video is -- and nothing of the page is in front of it;
+    // under it at once otherwise. Raised only after a tenth of a second
+    // uncovered, so a player's controls fading in and out do not make the
+    // panel jump back and forth.
+    if (hole && !aCovered) {
+      if (++mUncoveredFrames >= 6) {
+        Stack(true);
+      }
+    } else {
+      mUncoveredFrames = 0;
+      Stack(false);
+    }
+    if (mAbove) {
+      ++mStatAbove;
+    }
     const int32_t answer = hole ? (mLastHole ? 2 : 1) : 0;
     mLastHole = hole;
     return answer;
@@ -448,17 +495,19 @@ struct VideoLayer {
                      "video layer: a hole in %u of the last %u composites; the "
                      "system says overlay %u, composed by the GPU %u, other "
                      "%u; a video present took %.1f ms, %u of %u turned "
-                     "down as the display was still busy%s",
+                     "down as the display was still busy; above the browser "
+                     "in %u composites%s",
                      mStatHoles, mStatFrames, mStatOverlay, mStatComposed,
                      mStatOther,
                      mStatPresents ? mStatPresentMs / mStatPresents : 0.0,
-                     mStatBusy, mStatPresents,
+                     mStatBusy, mStatPresents, mStatAbove,
                      mClip == mRect ? "" : "; the panel is clipped");
       Note(note);
       mStatFrames = mStatHoles = 0;
       mStatOverlay = mStatComposed = mStatOther = 0;
       mStatPresents = 0;
       mStatBusy = 0;
+      mStatAbove = 0;
       mStatPresentMs = 0;
     }
   }
@@ -485,11 +534,14 @@ extern "C" __declspec(dllexport) void gecko_w10m_video_layer_ack(
 
 // From WebRender's composite (renderer/composite.rs), for an opaque NV12
 // video about to be drawn: aRects is the video's rect and its visible part,
-// x0 y0 x1 y1 each, in device pixels. True: the display shows it, draw a
+// x0 y0 x1 y1 each, in device pixels; aCovered, whether anything of the
+// page is drawn in front of it this frame. True: the display shows it, draw a
 // transparent hole.
 extern "C" int32_t gecko_w10m_video_layer_frame(uint64_t aExternalImageId,
-                                                const float* aRects) {
-  return Layer().Offer(mozilla::wr::ToExternalImageId(aExternalImageId), aRects);
+                                                const float* aRects,
+                                                int32_t aCovered) {
+  return Layer().Offer(mozilla::wr::ToExternalImageId(aExternalImageId), aRects,
+                       aCovered != 0);
 }
 
 // From RenderCompositorEGL::EndFrame, once per presented frame.

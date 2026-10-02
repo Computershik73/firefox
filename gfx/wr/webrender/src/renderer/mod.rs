@@ -729,6 +729,34 @@ fn gecko_w10m_composite_stats(state: &CompositeState) {
     }
 }
 
+/// GeckoW10m: offers an opaque video about to be composited to the display,
+/// as a hardware overlay of its own (GeckoW10mVideoLayer.cpp). True when the
+/// display is showing it and the compositor should leave a transparent hole.
+#[cfg(windows)]
+extern "C" {
+    fn gecko_w10m_video_layer_frame(external_image_id: u64, rects: *const f32) -> bool;
+}
+
+pub(crate) fn gecko_w10m_video_layer(
+    id: api::ExternalImageId,
+    tile_rect: &DeviceRect,
+    clip_rect: &DeviceRect,
+) -> bool {
+    #[cfg(windows)]
+    {
+        let rects = [
+            tile_rect.min.x, tile_rect.min.y, tile_rect.max.x, tile_rect.max.y,
+            clip_rect.min.x, clip_rect.min.y, clip_rect.max.x, clip_rect.max.y,
+        ];
+        unsafe { gecko_w10m_video_layer_frame(id.0, rects.as_ptr()) }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (id, tile_rect, clip_rect);
+        false
+    }
+}
+
 /// GeckoW10m: compositor surfaces per frame by kind, and the last reason a
 /// video was refused as an overlay.
 static GECKO_W10M_UNDERLAYS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);

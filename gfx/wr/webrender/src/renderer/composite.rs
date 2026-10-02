@@ -303,6 +303,39 @@ impl Renderer {
                 CompositeTileSurface::ExternalSurface { external_surface_index } => {
                     let surface = &external_surfaces[external_surface_index.0];
 
+                    // GeckoW10m: an opaque video is offered to the display
+                    // first, as a hardware overlay under the browser's layer
+                    // (gfx/webrender_bindings/GeckoW10mVideoLayer.cpp). When
+                    // the display is showing it, what is drawn here is a
+                    // transparent hole -- opaque tiles go with blending off,
+                    // so this writes 0,0,0,0 -- and whatever lies over the
+                    // video is blended over the hole as before.
+                    let shown_by_display = match (&surface.color_data, surface.external_image_id) {
+                        (ResolvedExternalSurfaceColorData::Yuv { .. }, Some(id))
+                            if tile.kind == TileKind::Opaque && clip.is_none() =>
+                        {
+                            super::gecko_w10m_video_layer(id, &tile_rect, &clip_rect)
+                        }
+                        _ => false,
+                    };
+
+                    if shown_by_display {
+                        let dummy = TextureSource::Dummy;
+                        let image_buffer_kind = dummy.image_buffer_kind();
+                        let instance = CompositeInstance::new(
+                            tile_rect,
+                            clip_rect,
+                            PremultipliedColorF::TRANSPARENT,
+                            flip,
+                            clip,
+                        );
+                        let features = instance.get_rgb_features();
+                        (
+                            instance,
+                            BatchTextures::composite_rgb(dummy),
+                            (CompositeSurfaceFormat::Rgba, image_buffer_kind, features, None),
+                        )
+                    } else {
                     match surface.color_data {
                         ResolvedExternalSurfaceColorData::Yuv{ ref planes, color_space, format, channel_bit_depth, .. } => {
                             let textures = BatchTextures::composite_yuv(
@@ -368,6 +401,7 @@ impl Renderer {
                                 ),
                             )
                         },
+                    }
                     }
                 }
                 CompositeTileSurface::Texture { surface: ResolvedSurfaceTexture::Native { .. } } => {

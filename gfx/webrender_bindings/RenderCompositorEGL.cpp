@@ -33,6 +33,8 @@
 #  include <cstring>
 #  include "mozilla/Sprintf.h"
 extern "C" void GeckoW10mNote(const char* text);
+// GeckoW10mVideoLayer.cpp: hides the video layer once its video is gone.
+void GeckoW10mVideoLayerEndFrame();
 extern "C" void* gecko_w10m_egl_native_window();
 #endif
 
@@ -270,6 +272,7 @@ RenderedFrameId RenderCompositorEGL::EndFrame(
     }
 
     ++mPresentFrames;
+    GeckoW10mVideoLayerEndFrame();
     if (bounds.IsEmpty()) {
       // Nothing changed on screen: WebRender returns no dirty rect at all,
       // and there is nothing to copy or present.

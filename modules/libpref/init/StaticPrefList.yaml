@@ -8732,6 +8732,14 @@
   type: bool
   value: true
   mirror: once
+
+# A playing video goes to the display as a hardware overlay of its own, under
+# the browser's layer, and WebRender leaves a transparent hole for it
+# (gfx/webrender_bindings/GeckoW10mVideoLayer.cpp). False: WebRender draws it.
+- name: gfx.webrender.gecko-w10m.video-overlay
+  type: bool
+  value: true
+  mirror: once
 #endif
 
 #if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GTK)

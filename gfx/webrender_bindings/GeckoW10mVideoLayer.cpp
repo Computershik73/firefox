@@ -98,6 +98,8 @@ struct VideoLayer {
   uint32_t mStatOverlay = 0;
   uint32_t mStatComposed = 0;
   uint32_t mStatOther = 0;
+  // The display's last answer, to note each time it changes its mind.
+  int mLastMode = -1;
   uint32_t mStatPresents = 0;
   uint32_t mStatBusy = 0;
   double mStatPresentMs = 0;
@@ -272,8 +274,8 @@ struct VideoLayer {
       return false;
     }
     // How the system really showed it: as a hardware overlay, or composed
-    // by the GPU after all. Asked every half second.
-    if (mStatPresents % 30 == 0) {
+    // by the GPU after all. Asked four times a second.
+    if (mStatPresents % 15 == 0) {
       RefPtr<IDXGISwapChainMedia> media;
       DXGI_FRAME_STATISTICS_MEDIA stats = {};
       if (SUCCEEDED(mChain->QueryInterface(__uuidof(IDXGISwapChainMedia),
@@ -286,6 +288,17 @@ struct VideoLayer {
           ++mStatComposed;
         } else {
           ++mStatOther;
+        }
+        const int mode = int(stats.CompositionMode);
+        if (mode != mLastMode) {
+          mLastMode = mode;
+          Note(mode == DXGI_FRAME_PRESENTATION_MODE_OVERLAY
+                   ? "video layer: the system shows it as a HARDWARE OVERLAY "
+                     "now"
+                   : mode == DXGI_FRAME_PRESENTATION_MODE_COMPOSED
+                         ? "video layer: the system composes it on the GPU now"
+                         : "video layer: the system shows it some other way "
+                           "now");
         }
       }
     }
@@ -373,12 +386,19 @@ struct VideoLayer {
     if (rect.w <= 0 || rect.h <= 0 || clip.w <= 0 || clip.h <= 0) {
       return false;
     }
+    // A fullscreen video's rect runs a pixel past the screen's edge (2561
+    // wide on a 2560 screen), and the clip that cuts the pixel off made the
+    // panel a clipped one for nothing: what lies off the screen is not seen
+    // anyway. Two pixels or less on each side is no clip.
+    if (cx0 - x0 <= 2 && cy0 - y0 <= 2 && x1 - cx1 <= 2 && y1 - cy1 <= 2) {
+      clip = rect;
+    }
     if (rect != mRect || clip != mClip) {
       mRect = rect;
       mClip = clip;
       ++mGeneration;
       mStableFrames = 0;
-      if (mPlacementNotes < 4) {
+      if (mPlacementNotes < 40) {
         ++mPlacementNotes;
         char note[192];
         SprintfLiteral(note,

@@ -1880,7 +1880,13 @@ impl TileCacheInstance {
         // If this primitive is an external image, and supports being used
         // directly by a native compositor, then lookup the external image id
         // so we can pass that through.
-        let mut external_image_id = if flags.contains(PrimitiveFlags::SUPPORTS_EXTERNAL_COMPOSITOR_SURFACE)
+        // GeckoW10m: with the Draw compositor too, where the id only travels
+        // to the video layer (GeckoW10mVideoLayer.cpp), which shows the frame
+        // as a display overlay. Gecko marks images as supporting an external
+        // compositor surface only for DirectComposition.
+        let draw_compositor = matches!(composite_state.compositor_kind, CompositorKind::Draw { .. });
+        let mut external_image_id = if (flags.contains(PrimitiveFlags::SUPPORTS_EXTERNAL_COMPOSITOR_SURFACE)
+            || draw_compositor)
             && image_rendering == ImageRendering::Auto {
             resource_cache.get_image_properties(api_keys[0])
                 .and_then(|properties| properties.external_image)

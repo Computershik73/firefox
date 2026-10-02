@@ -91,8 +91,20 @@ struct VideoLayer {
 
   uint32_t mStatFrames = 0;
   uint32_t mStatHoles = 0;
+  bool mSaidHole = false;
 
   void Note(const char* aText) { GeckoW10mNote(aText); }
+
+  // Each reason a video is left to WebRender, said once.
+  uint32_t mDeclinedReasons = 0;
+  void Decline(uint32_t aReason, const char* aWhy) {
+    if (!(mDeclinedReasons & aReason)) {
+      mDeclinedReasons |= aReason;
+      char note[160];
+      SprintfLiteral(note, "video layer: a video left to WebRender -- %s", aWhy);
+      Note(note);
+    }
+  }
 
   void Break(const char* aWhy, HRESULT aHr) {
     char note[160];
@@ -233,21 +245,39 @@ struct VideoLayer {
   }
 
   bool Offer(const mozilla::wr::ExternalImageId& aId, const float* aRects) {
-    if (mBroken || !sSink.load() ||
-        !mozilla::StaticPrefs::gfx_webrender_gecko_w10m_video_overlay_AtStartup()) {
+    if (mBroken) {
+      return false;
+    }
+    if (!mozilla::StaticPrefs::gfx_webrender_gecko_w10m_video_overlay_AtStartup()) {
+      Decline(16, "turned off (gfx.webrender.gecko-w10m.video-overlay)");
+      return false;
+    }
+    if (!sSink.load()) {
+      Decline(32, "the shell has no panel for it");
       return false;
     }
     mOfferedThisFrame = true;
 
     auto* texture = mozilla::wr::RenderThread::Get()->GetRenderTexture(aId);
     auto* host = texture ? texture->AsRenderDXGITextureHost() : nullptr;
-    if (!host || host->GetFormat() != mozilla::gfx::SurfaceFormat::NV12 ||
-        host->mHasKeyedMutex) {
+    if (!host) {
+      Decline(1, texture ? "not a D3D11 texture" : "no texture for its id");
+      Hide();
+      return false;
+    }
+    if (host->GetFormat() != mozilla::gfx::SurfaceFormat::NV12) {
+      Decline(2, "not NV12");
+      Hide();
+      return false;
+    }
+    if (host->mHasKeyedMutex) {
+      Decline(4, "the frame is behind a keyed mutex");
       Hide();
       return false;
     }
     ID3D11Texture2D* d3dTexture = host->GetD3D11Texture2DWithGL();
     if (!d3dTexture) {
+      Decline(8, "the frame's texture could not be opened");
       Hide();
       return false;
     }
@@ -297,6 +327,10 @@ struct VideoLayer {
     ++mStatFrames;
     if (hole) {
       ++mStatHoles;
+      if (!mSaidHole) {
+        mSaidHole = true;
+        Note("video layer: the display shows the video; WebRender leaves a hole");
+      }
     }
     return hole;
   }

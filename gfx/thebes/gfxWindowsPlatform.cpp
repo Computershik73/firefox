@@ -1466,6 +1466,10 @@ void gfxWindowsPlatform::InitializeD3D11() {
   }
 }
 
+#if defined(GECKO_W10M)
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 class D3DVsyncSource final : public VsyncSource {
  public:
   D3DVsyncSource()
@@ -1534,6 +1538,9 @@ class D3DVsyncSource final : public VsyncSource {
 
   void ScheduleSoftwareVsync(TimeStamp aVsyncTimestamp) {
     MOZ_ASSERT(IsInVsyncThread());
+#if defined(GECKO_W10M)
+    NoteTick(false);
+#endif
     NS_WARNING(
         "DwmComposition dynamically disabled, falling back to software "
         "timers");
@@ -1661,6 +1668,9 @@ class D3DVsyncSource final : public VsyncSource {
         return;
       }
 
+#if defined(GECKO_W10M)
+      NoteTick(true);
+#endif
       TimeStamp now = TimeStamp::Now();
       TimeDuration flushDiff = now - flushTime;
       flushTime = now;
@@ -1705,7 +1715,69 @@ class D3DVsyncSource final : public VsyncSource {
     return mVsyncThread->thread_id() == PlatformThread::CurrentId();
   }
 
+#if defined(GECKO_W10M)
+  // Every ten seconds, where the ticks came from: the display's vertical
+  // blank, or the software timer this falls back on, which posts a task with
+  // a whole number of milliseconds and fires on the system timer's coarse
+  // grain -- some 56 ticks a second instead of 60, a video frame dropped for
+  // each one missed.
+  void NoteTick(bool aVBlank) {
+    ++(aVBlank ? mVBlankTicks : mTimerTicks);
+    const TimeStamp now = TimeStamp::Now();
+    if (mTickStatsStart.IsNull()) {
+      mTickStatsStart = now;
+      return;
+    }
+    const double seconds = (now - mTickStatsStart).ToSeconds();
+    if (seconds < 10.0) {
+      return;
+    }
+    char note[192];
+    SprintfLiteral(note,
+                   "vsync: %u ticks in %.1f s (%.1f a second), %u from the "
+                   "display's vertical blank, %u from a timer",
+                   mVBlankTicks + mTimerTicks, seconds,
+                   (mVBlankTicks + mTimerTicks) / seconds, mVBlankTicks,
+                   mTimerTicks);
+    GeckoW10mNote(note);
+    mTickStatsStart = now;
+    mVBlankTicks = mTimerTicks = 0;
+  }
+  TimeStamp mTickStatsStart;
+  uint32_t mVBlankTicks = 0;
+  uint32_t mTimerTicks = 0;
+#endif
+
   void UpdateVBlankOutput() {
+#if defined(GECKO_W10M)
+    // There is no MonitorFromWindow in an app container on Windows 10
+    // Mobile (and no dwmapi either), so the output was never found and every
+    // tick came from the software timer. The phone has one display: the
+    // first output of the compositor device's adapter is the one to wait on.
+    if (mWaitVBlankOutput) {
+      return;
+    }
+    RefPtr<ID3D11Device> device;
+    if (DeviceManagerDx* dx = DeviceManagerDx::Get()) {
+      device = dx->GetCompositorDevice();
+    }
+    if (!device) {
+      return;
+    }
+    RefPtr<IDXGIDevice> dxgiDevice;
+    RefPtr<IDXGIAdapter> adapter;
+    RefPtr<IDXGIOutput> output;
+    if (SUCCEEDED(device->QueryInterface(__uuidof(IDXGIDevice),
+                                         getter_AddRefs(dxgiDevice))) &&
+        SUCCEEDED(dxgiDevice->GetAdapter(getter_AddRefs(adapter))) &&
+        SUCCEEDED(adapter->EnumOutputs(0, getter_AddRefs(output)))) {
+      mWaitVBlankOutput = output;
+      GeckoW10mNote(
+          "vsync: waiting on the display's vertical blank (the adapter's "
+          "first output)");
+    }
+    return;
+#endif
     HMONITOR primary_monitor =
         MonitorFromWindow(nullptr, MONITOR_DEFAULTTOPRIMARY);
     if (primary_monitor == mWaitVBlankMonitor && mWaitVBlankOutput) {

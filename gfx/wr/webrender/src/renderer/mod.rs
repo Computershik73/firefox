@@ -738,12 +738,14 @@ fn gecko_w10m_composite_stats(state: &CompositeState) {
 /// is how many tiles of the page draw in front of the video this frame, and
 /// the last four floats of `rects` the box they cover of it: the display
 /// takes the layer as an overlay only when it lies above the browser's,
-/// which hides whatever is in front of the video.
+/// which hides whatever is in front of the video. The layer writes the last
+/// four floats of `rects`: where its panel shows the video, when that is
+/// less than all of what shows of it (zero otherwise).
 #[cfg(windows)]
 extern "C" {
     fn gecko_w10m_video_layer_frame(
         external_image_id: u64,
-        rects: *const f32,
+        rects: *mut f32,
         covered: i32,
     ) -> i32;
 }
@@ -753,21 +755,28 @@ fn gecko_w10m_video_layer(
     tile_rect: &DeviceRect,
     clip_rect: &DeviceRect,
     covered: (i32, DeviceRect),
-) -> i32 {
+) -> (i32, Option<DeviceRect>) {
     #[cfg(windows)]
     {
         let (count, cover) = covered;
-        let rects = [
+        let mut rects = [
             tile_rect.min.x, tile_rect.min.y, tile_rect.max.x, tile_rect.max.y,
             clip_rect.min.x, clip_rect.min.y, clip_rect.max.x, clip_rect.max.y,
             cover.min.x, cover.min.y, cover.max.x, cover.max.y,
+            0.0, 0.0, 0.0, 0.0,
         ];
-        unsafe { gecko_w10m_video_layer_frame(id.0, rects.as_ptr(), count) }
+        let answer =
+            unsafe { gecko_w10m_video_layer_frame(id.0, rects.as_mut_ptr(), count) };
+        let part = DeviceRect::new(
+            api::units::DevicePoint::new(rects[12], rects[13]),
+            api::units::DevicePoint::new(rects[14], rects[15]),
+        );
+        (answer, if part.is_empty() { None } else { Some(part) })
     }
     #[cfg(not(windows))]
     {
         let _ = (id, tile_rect, clip_rect, covered);
-        0
+        (0, None)
     }
 }
 
@@ -801,8 +810,11 @@ fn gecko_w10m_covered(
     (count, cover)
 }
 
-/// This frame's holes: tile index, and whether the hole was already there.
-static GECKO_W10M_HOLES: std::sync::Mutex<Vec<(usize, bool)>> =
+/// This frame's holes: tile index, whether the hole was already there, and
+/// the part of the video's visible rect that is a hole when it is not all of
+/// it -- the video layer's panel leaves out a band along an edge where the
+/// page draws over the video, and there the compositor draws the video.
+static GECKO_W10M_HOLES: std::sync::Mutex<Vec<(usize, bool, Option<DeviceRect>)>> =
     std::sync::Mutex::new(Vec::new());
 
 /// Offers every opaque YUV video of the frame to the video layer, once per
@@ -828,8 +840,8 @@ pub(crate) fn gecko_w10m_offer_videos(state: &CompositeState) {
                     .unwrap_or(DeviceRect::zero());
                 let covered = gecko_w10m_covered(state, index, &clip_rect);
                 match gecko_w10m_video_layer(id, &tile_rect, &clip_rect, covered) {
-                    1 => holes.push((index, false)),
-                    2 => holes.push((index, true)),
+                    (1, part) => holes.push((index, false, part)),
+                    (2, part) => holes.push((index, true, part)),
                     _ => {}
                 }
             }
@@ -844,6 +856,31 @@ pub(crate) fn gecko_w10m_video_hole(tile_index: usize) -> Option<bool> {
         .lock()
         .ok()
         .and_then(|holes| holes.iter().find(|h| h.0 == tile_index).map(|h| h.1))
+}
+
+/// The part of this tile's video that is a hole, when the hole is not all of
+/// it (see GECKO_W10M_HOLES).
+pub(crate) fn gecko_w10m_video_hole_part(tile_index: usize) -> Option<DeviceRect> {
+    GECKO_W10M_HOLES
+        .lock()
+        .ok()
+        .and_then(|holes| holes.iter().find(|h| h.0 == tile_index).and_then(|h| h.2))
+}
+
+/// What is left of `whole` around `part` when `part` takes all of it but a
+/// band along one edge -- the band, which the compositor draws.
+pub(crate) fn gecko_w10m_band(whole: &DeviceRect, part: &DeviceRect) -> DeviceRect {
+    let mut band = *whole;
+    if part.min.x > whole.min.x {
+        band.max.x = part.min.x;
+    } else if part.max.x < whole.max.x {
+        band.min.x = part.max.x;
+    } else if part.min.y > whole.min.y {
+        band.max.y = part.min.y;
+    } else if part.max.y < whole.max.y {
+        band.min.y = part.max.y;
+    }
+    band
 }
 
 /// GeckoW10m: compositor surfaces per frame by kind, and the last reason a

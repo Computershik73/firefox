@@ -261,6 +261,10 @@ impl Renderer {
                 None
             };
 
+            // GeckoW10m: a transparent hole drawn right after this tile's
+            // video, over the part of it the video layer's panel shows.
+            let mut gecko_w10m_hole_after: Option<CompositeInstance> = None;
+
             // Work out the draw params based on the tile surface
             let (instance, textures, shader_params) = match tile.surface {
                 CompositeTileSurface::Color { color } => {
@@ -312,8 +316,29 @@ impl Renderer {
                     // video is blended over the hole as before.
                     // The frame was offered at the start of the frame
                     // (calculate_dirty_rects); this reads the answer.
+                    // When the panel leaves out a band of the video (the
+                    // page draws over the video's edge there), the video is
+                    // drawn here as usual and the hole goes only where the
+                    // panel is, after it (gecko_w10m_hole_after).
+                    let hole_part = if clip.is_none() {
+                        super::gecko_w10m_video_hole_part(item.key.tile_index)
+                    } else {
+                        None
+                    };
                     let shown_by_display = clip.is_none()
+                        && hole_part.is_none()
                         && super::gecko_w10m_video_hole(item.key.tile_index).is_some();
+                    if let Some(part) = hole_part {
+                        gecko_w10m_hole_after = clip_rect.intersection(&part).map(|r| {
+                            CompositeInstance::new(
+                                tile_rect,
+                                r,
+                                PremultipliedColorF::TRANSPARENT,
+                                flip,
+                                None,
+                            )
+                        });
+                    }
 
                     if shown_by_display {
                         let dummy = TextureSource::Dummy;
@@ -405,6 +430,18 @@ impl Renderer {
                 }
             };
 
+            let gecko_w10m_hole_after = gecko_w10m_hole_after.map(|hole| {
+                let dummy = TextureSource::Dummy;
+                let features = hole.get_rgb_features();
+                (
+                    hole,
+                    BatchTextures::composite_rgb(dummy),
+                    (CompositeSurfaceFormat::Rgba, dummy.image_buffer_kind(), features, None),
+                )
+            });
+            for (instance, textures, shader_params) in
+                std::iter::once((instance, textures, shader_params)).chain(gecko_w10m_hole_after)
+            {
             // Flush batch if shader params or textures changed
             let flush_batch = !current_textures.is_compatible_with(&textures) ||
                 shader_params != current_shader_params;
@@ -438,6 +475,7 @@ impl Renderer {
 
             // Add instance to current batch
             instances.push(instance);
+            }
         }
 
         // Flush the last batch
@@ -1420,11 +1458,26 @@ impl Renderer {
                 // Work out how many dirty rects WR produced, and if that's more than
                 // what the device supports.
                 for (tile_index, tile) in composite_state.tiles.iter().enumerate() {
-                    if super::gecko_w10m_video_hole(tile_index) == Some(true) {
+                    let hole_part = super::gecko_w10m_video_hole_part(tile_index);
+                    if super::gecko_w10m_video_hole(tile_index) == Some(true)
+                        && hole_part.is_none()
+                    {
                         continue;
                     }
-                    let dirty_rect = composite_state
+                    let mut dirty_rect = composite_state
                         .get_device_rect(&tile.local_dirty_rect, tile.transform_index);
+                    // A steady hole with a band the compositor draws: only
+                    // the band changes with the video.
+                    if let (Some(true), Some(part)) =
+                        (super::gecko_w10m_video_hole(tile_index), hole_part)
+                    {
+                        let whole = composite_state
+                            .get_device_rect(&tile.local_rect, tile.transform_index)
+                            .intersection(&tile.device_clip_rect)
+                            .unwrap_or(DeviceRect::zero());
+                        let band = super::gecko_w10m_band(&whole, &part);
+                        dirty_rect = dirty_rect.intersection(&band).unwrap_or(DeviceRect::zero());
+                    }
 
                     // In pathological cases where a tile is extremely zoomed, it
                     // may end up with device coords outside the range of an i32,

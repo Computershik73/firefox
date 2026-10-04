@@ -613,7 +613,7 @@ struct VideoLayer {
 
   // 0: WebRender draws the video; 1: a hole, new this frame; 2: a hole that
   // was already there.
-  int32_t Offer(const mozilla::wr::ExternalImageId& aId, const float* aRects,
+  int32_t Offer(const mozilla::wr::ExternalImageId& aId, float* aRects,
                 int32_t aCoveredTiles) {
     const bool hole = OfferForHole(aId, aRects);
     Rect cover;
@@ -647,6 +647,17 @@ struct VideoLayer {
     }
     if (mAbove) {
       ++mStatAbove;
+    }
+    // Where the panel shows the video, when it leaves out a band: there the
+    // page draws over the video, and WebRender draws the video under it --
+    // left a hole, the band showed the page's background, a grey strip.
+    aRects[12] = aRects[13] = aRects[14] = aRects[15] = 0;
+    if (hole && mAbove &&
+        (mTrim.top || mTrim.bottom || mTrim.left || mTrim.right)) {
+      aRects[12] = float(mClip.x + mTrim.left);
+      aRects[13] = float(mClip.y + mTrim.top);
+      aRects[14] = float(mClip.x + mClip.w - mTrim.right);
+      aRects[15] = float(mClip.y + mClip.h - mTrim.bottom);
     }
     const int32_t answer = hole ? (mLastHole ? 2 : 1) : 0;
     mLastHole = hole;
@@ -889,9 +900,10 @@ extern "C" __declspec(dllexport) void gecko_w10m_video_layer_ack(
 // video about to be drawn: aRects is the video's rect and its visible part,
 // then the box the page draws over in front of it, x0 y0 x1 y1 each, in
 // device pixels; aCovered, how many of the page's tiles do. True: the display
-// shows it, draw a transparent hole.
+// shows it, draw a transparent hole -- over aRects[12..16] alone when that is
+// set, the part the panel shows; WebRender draws the video in the rest.
 extern "C" int32_t gecko_w10m_video_layer_frame(uint64_t aExternalImageId,
-                                                const float* aRects,
+                                                float* aRects,
                                                 int32_t aCovered) {
   return Layer().Offer(mozilla::wr::ToExternalImageId(aExternalImageId), aRects,
                        aCovered);

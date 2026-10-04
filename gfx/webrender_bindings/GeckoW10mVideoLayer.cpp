@@ -28,6 +28,7 @@
 #include <dxgi1_3.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <atomic>
 #include <math.h>
 
@@ -54,7 +55,10 @@ struct GeckoW10mVideoLayerSink {
   // a hardware overlay only above (the test in build 132: under the
   // browser it was composed by the GPU whatever else was done), and above
   // it hides whatever the page draws over the video.
-  void (*stack)(int32_t aAbove);
+  // aTrimTop/aTrimBottom: rows of the visible part, in the browser surface's
+  // pixels, cut off the panel while it is above, so that a thin band the page
+  // draws over the video's edge (a player's progress bar) still shows.
+  void (*stack)(int32_t aAbove, int32_t aTrimTop, int32_t aTrimBottom);
 };
 
 std::atomic<const GeckoW10mVideoLayerSink*> sSink{nullptr};
@@ -89,9 +93,16 @@ struct VideoLayer {
   // Whether the panel lies above the browser's, and for how many composites
   // in a row nothing of the page has been drawn in front of the video.
   bool mAbove = false;
+  int32_t mTrimTop = 0;
+  int32_t mTrimBottom = 0;
   uint32_t mUncoveredFrames = 0;
   uint32_t mStatAbove = 0;
   uint32_t mStackNotes = 0;
+  // What the page drew in front of the video, for the notes.
+  uint32_t mStatCovered = 0;
+  uint32_t mCoverTiles = 0;
+  Rect mCover;
+  bool mSaidCover = false;
   bool mPresented = false;
   uint32_t mPlacementNotes = 0;
 
@@ -138,21 +149,59 @@ struct VideoLayer {
     Hide();
   }
 
-  void Stack(bool aAbove) {
-    if (aAbove == mAbove) {
+  void Stack(bool aAbove, int32_t aTrimTop = 0, int32_t aTrimBottom = 0) {
+    if (!aAbove) {
+      aTrimTop = aTrimBottom = 0;
+    }
+    // A band that only moves by a pixel or two is the same band.
+    if (aAbove == mAbove && std::abs(aTrimTop - mTrimTop) <= 2 &&
+        std::abs(aTrimBottom - mTrimBottom) <= 2) {
       return;
     }
     mAbove = aAbove;
+    mTrimTop = aTrimTop;
+    mTrimBottom = aTrimBottom;
     if (auto* sink = sSink.load()) {
-      sink->stack(aAbove ? 1 : 0);
+      sink->stack(aAbove ? 1 : 0, aTrimTop, aTrimBottom);
     }
     if (mStackNotes < 40) {
       ++mStackNotes;
-      Note(aAbove ? "video layer: above the browser -- nothing of the page "
-                    "is in front of the video"
-                  : "video layer: under the browser -- the page draws in "
-                    "front of the video, or it moved");
+      char note[192];
+      if (aAbove) {
+        SprintfLiteral(note,
+                       "video layer: above the browser, %d rows cut off the "
+                       "top and %d off the bottom for what the page draws there",
+                       aTrimTop, aTrimBottom);
+      } else {
+        SprintfLiteral(note,
+                       "video layer: under the browser -- the page draws in "
+                       "front of the video, or it moved");
+      }
+      Note(note);
     }
+  }
+
+  // Whether the panel can go above the browser though the page draws over
+  // the video: only when all of it lies in a band along the top or the
+  // bottom edge, at most a twelfth of the visible height, which the panel
+  // then leaves out.
+  bool Trims(int32_t aTiles, const Rect& aCover, int32_t* aTop,
+             int32_t* aBottom) const {
+    *aTop = *aBottom = 0;
+    if (aTiles <= 0) {
+      return true;
+    }
+    const int32_t band = std::max(4, mClip.h / 12);
+    const int32_t clipBottom = mClip.y + mClip.h;
+    if (aCover.y >= clipBottom - band) {
+      *aBottom = clipBottom - aCover.y;
+      return true;
+    }
+    if (aCover.y + aCover.h <= mClip.y + band) {
+      *aTop = aCover.y + aCover.h - mClip.y;
+      return true;
+    }
+    return false;
   }
 
   void Hide() {
@@ -342,16 +391,32 @@ struct VideoLayer {
   // 0: WebRender draws the video; 1: a hole, new this frame; 2: a hole that
   // was already there.
   int32_t Offer(const mozilla::wr::ExternalImageId& aId, const float* aRects,
-                bool aCovered) {
+                int32_t aCoveredTiles) {
     const bool hole = OfferForHole(aId, aRects);
+    Rect cover;
+    if (aCoveredTiles > 0) {
+      cover.x = int32_t(floorf(aRects[8]));
+      cover.y = int32_t(floorf(aRects[9]));
+      cover.w = int32_t(ceilf(aRects[10])) - cover.x;
+      cover.h = int32_t(ceilf(aRects[11])) - cover.y;
+      ++mStatCovered;
+      mCoverTiles = uint32_t(aCoveredTiles);
+      mCover = cover;
+      if (!mSaidCover && hole) {
+        mSaidCover = true;
+        NoteCover("first seen");
+      }
+    }
     // Above the browser only while the hole is there -- the panel is where
-    // this frame's video is -- and nothing of the page is in front of it;
-    // under it at once otherwise. Raised only after a tenth of a second
-    // uncovered, so a player's controls fading in and out do not make the
-    // panel jump back and forth.
-    if (hole && !aCovered) {
+    // this frame's video is -- and nothing of the page is in front of it but
+    // a band along an edge, which the panel leaves out; under it at once
+    // otherwise. Raised only after a tenth of a second like that, so a
+    // player's controls fading in and out do not make the panel jump back
+    // and forth.
+    int32_t trimTop = 0, trimBottom = 0;
+    if (hole && Trims(aCoveredTiles, cover, &trimTop, &trimBottom)) {
       if (++mUncoveredFrames >= 6) {
-        Stack(true);
+        Stack(true, trimTop, trimBottom);
       }
     } else {
       mUncoveredFrames = 0;
@@ -481,6 +546,21 @@ struct VideoLayer {
     return hole;
   }
 
+  void NoteCover(const char* aWhen) {
+    char note[256];
+    const double share =
+        mClip.w > 0 && mClip.h > 0
+            ? 100.0 * double(mCover.w) * mCover.h / (double(mClip.w) * mClip.h)
+            : 0.0;
+    SprintfLiteral(note,
+                   "video layer: in front of the video (%s): %u tiles of the "
+                   "page over %dx%d at %d,%d, %.1f%% of what shows of it "
+                   "(%dx%d at %d,%d)",
+                   aWhen, mCoverTiles, mCover.w, mCover.h, mCover.x, mCover.y,
+                   share, mClip.w, mClip.h, mClip.x, mClip.y);
+    Note(note);
+  }
+
   void EndFrame() {
     if (mOfferedThisFrame) {
       mFramesWithout = 0;
@@ -496,18 +576,22 @@ struct VideoLayer {
                      "system says overlay %u, composed by the GPU %u, other "
                      "%u; a video present took %.1f ms, %u of %u turned "
                      "down as the display was still busy; above the browser "
-                     "in %u composites%s",
+                     "in %u composites, something in front of it in %u%s",
                      mStatHoles, mStatFrames, mStatOverlay, mStatComposed,
                      mStatOther,
                      mStatPresents ? mStatPresentMs / mStatPresents : 0.0,
-                     mStatBusy, mStatPresents, mStatAbove,
+                     mStatBusy, mStatPresents, mStatAbove, mStatCovered,
                      mClip == mRect ? "" : "; the panel is clipped");
       Note(note);
       mStatFrames = mStatHoles = 0;
       mStatOverlay = mStatComposed = mStatOther = 0;
       mStatPresents = 0;
       mStatBusy = 0;
+      if (mStatCovered) {
+        NoteCover("the last of them");
+      }
       mStatAbove = 0;
+      mStatCovered = 0;
       mStatPresentMs = 0;
     }
   }
@@ -534,14 +618,14 @@ extern "C" __declspec(dllexport) void gecko_w10m_video_layer_ack(
 
 // From WebRender's composite (renderer/composite.rs), for an opaque NV12
 // video about to be drawn: aRects is the video's rect and its visible part,
-// x0 y0 x1 y1 each, in device pixels; aCovered, whether anything of the
-// page is drawn in front of it this frame. True: the display shows it, draw a
-// transparent hole.
+// then the box the page draws over in front of it, x0 y0 x1 y1 each, in
+// device pixels; aCovered, how many of the page's tiles do. True: the display
+// shows it, draw a transparent hole.
 extern "C" int32_t gecko_w10m_video_layer_frame(uint64_t aExternalImageId,
                                                 const float* aRects,
                                                 int32_t aCovered) {
   return Layer().Offer(mozilla::wr::ToExternalImageId(aExternalImageId), aRects,
-                       aCovered != 0);
+                       aCovered);
 }
 
 // From RenderCompositorEGL::EndFrame, once per presented frame.

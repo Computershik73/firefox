@@ -735,9 +735,10 @@ fn gecko_w10m_composite_stats(state: &CompositeState) {
 /// display is showing it and the compositor should leave a transparent hole.
 /// 0: the compositor draws the video; 1: leave a hole, which is new this
 /// frame (draw it); 2: leave a hole, already there (not dirty). `covered`
-/// says whether anything of the page is drawn in front of the video this
-/// frame: the display takes the layer as an overlay only when it lies above
-/// the browser's, which it can only do while nothing is in front of it.
+/// is how many tiles of the page draw in front of the video this frame, and
+/// the last four floats of `rects` the box they cover of it: the display
+/// takes the layer as an overlay only when it lies above the browser's,
+/// which hides whatever is in front of the video.
 #[cfg(windows)]
 extern "C" {
     fn gecko_w10m_video_layer_frame(
@@ -751,15 +752,17 @@ fn gecko_w10m_video_layer(
     id: api::ExternalImageId,
     tile_rect: &DeviceRect,
     clip_rect: &DeviceRect,
-    covered: bool,
+    covered: (i32, DeviceRect),
 ) -> i32 {
     #[cfg(windows)]
     {
+        let (count, cover) = covered;
         let rects = [
             tile_rect.min.x, tile_rect.min.y, tile_rect.max.x, tile_rect.max.y,
             clip_rect.min.x, clip_rect.min.y, clip_rect.max.x, clip_rect.max.y,
+            cover.min.x, cover.min.y, cover.max.x, cover.max.y,
         ];
-        unsafe { gecko_w10m_video_layer_frame(id.0, rects.as_ptr(), covered as i32) }
+        unsafe { gecko_w10m_video_layer_frame(id.0, rects.as_ptr(), count) }
     }
     #[cfg(not(windows))]
     {
@@ -768,21 +771,34 @@ fn gecko_w10m_video_layer(
     }
 }
 
-/// Whether any tile in front of the one at `index` (a smaller z) draws
-/// something over `rect`. Tiles with nothing in them are not composited at
-/// all, so a tile in the list is content; its valid rect is where.
-fn gecko_w10m_covered(state: &CompositeState, index: usize, rect: &DeviceRect) -> bool {
+/// How many tiles in front of the one at `index` (a smaller z) draw over
+/// `rect`, and the box of `rect` they cover. Tiles with nothing in them are
+/// not composited at all, and a tile's valid rect is the union of what its
+/// primitives cover, so this is where the page really draws.
+fn gecko_w10m_covered(
+    state: &CompositeState,
+    index: usize,
+    rect: &DeviceRect,
+) -> (i32, DeviceRect) {
     let z = state.tiles[index].z_id.0;
-    state.tiles.iter().enumerate().any(|(other, tile)| {
+    let mut count = 0;
+    let mut cover = DeviceRect::zero();
+    for (other, tile) in state.tiles.iter().enumerate() {
         if other == index || tile.z_id.0 >= z {
-            return false;
+            continue;
         }
         let valid = state.get_device_rect(&tile.local_valid_rect, tile.transform_index);
-        valid
+        if let Some(r) = valid
             .intersection(&tile.device_clip_rect)
             .and_then(|r| r.intersection(rect))
-            .map_or(false, |r| r.width() >= 1.0 && r.height() >= 1.0)
-    })
+        {
+            if r.width() >= 1.0 && r.height() >= 1.0 {
+                count += 1;
+                cover = if cover.is_empty() { r } else { cover.union(&r) };
+            }
+        }
+    }
+    (count, cover)
 }
 
 /// This frame's holes: tile index, and whether the hole was already there.

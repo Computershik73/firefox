@@ -1766,12 +1766,12 @@ class D3DVsyncSource final : public VsyncSource {
     }
     RefPtr<IDXGIDevice> dxgiDevice;
     RefPtr<IDXGIAdapter> adapter;
-    RefPtr<IDXGIOutput> output;
+    RefPtr<IDXGIOutput> firstOutput;
     if (SUCCEEDED(device->QueryInterface(__uuidof(IDXGIDevice),
                                          getter_AddRefs(dxgiDevice))) &&
         SUCCEEDED(dxgiDevice->GetAdapter(getter_AddRefs(adapter))) &&
-        SUCCEEDED(adapter->EnumOutputs(0, getter_AddRefs(output)))) {
-      mWaitVBlankOutput = output;
+        SUCCEEDED(adapter->EnumOutputs(0, getter_AddRefs(firstOutput)))) {
+      mWaitVBlankOutput = firstOutput;
       GeckoW10mNote(
           "vsync: waiting on the display's vertical blank (the adapter's "
           "first output)");

@@ -930,7 +930,8 @@ extern "C" __declspec(dllexport) void gecko_w10m_input_text(
         // Typing has now failed twice for reasons that were in different
         // halves of the path, so each step reports itself and the next log
         // names the one that is silent.
-        auto* widget = mozilla::widget::HeadlessWidget::ShownWidget();
+        // An open dialog takes the text (a prompt's field, a sign-in box).
+        auto* widget = mozilla::widget::HeadlessWidget::KeyWidget();
         if (!widget) {
           GeckoW10mNote("text: arrived, but there is no shown widget");
           return;
@@ -959,7 +960,9 @@ extern "C" __declspec(dllexport) void gecko_w10m_input_text(
 extern "C" __declspec(dllexport) void gecko_w10m_input_key(int32_t aKeyCode) {
   GeckoW10mDispatchInput(
       NS_NewRunnableFunction("gecko_w10m_input_key", [aKeyCode]() {
-        auto* widget = mozilla::widget::HeadlessWidget::ShownWidget();
+        // An open dialog takes the keys: Escape from the phone's back button
+        // closes it, Enter answers it.
+        auto* widget = mozilla::widget::HeadlessWidget::KeyWidget();
         if (!widget) {
           return;
         }

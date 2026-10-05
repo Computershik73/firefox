@@ -112,16 +112,35 @@ namespace {
 // Raw, and main thread only. A strong reference here would keep a window
 // alive past its own teardown, which is worse than the discipline.
 HeadlessWidget* sShownWidget = nullptr;
-// Popups in creation order; the last visible one under a point is on top.
-// The shell delivers every tap to the browser window, and an operating system
-// would have delivered it to the popup window under the finger instead, so
-// that is done here.
+// Popups and dialogs in creation order; the last visible one under a point
+// is on top. The shell delivers every tap to the browser window, and an
+// operating system would have delivered it to the window under the finger
+// instead, so that is done here. Dialogs were left out, and their buttons
+// never got a tap: it went through to the page under them.
 std::vector<HeadlessWidget*> sGeckoW10mPopups;
 }  // namespace
 
 HeadlessWidget* HeadlessWidget::ShownWidget() {
   MOZ_ASSERT(NS_IsMainThread());
   return sShownWidget;
+}
+
+HeadlessWidget* HeadlessWidget::TopDialog() {
+  MOZ_ASSERT(NS_IsMainThread());
+  for (auto it = sGeckoW10mPopups.rbegin(); it != sGeckoW10mPopups.rend();
+       ++it) {
+    HeadlessWidget* window = *it;
+    if (window->mWindowType == WindowType::Dialog && window->mVisible &&
+        !window->mDestroyed) {
+      return window;
+    }
+  }
+  return nullptr;
+}
+
+HeadlessWidget* HeadlessWidget::KeyWidget() {
+  HeadlessWidget* dialog = TopDialog();
+  return dialog ? dialog : ShownWidget();
 }
 
 namespace {
@@ -248,7 +267,7 @@ nsresult HeadlessWidget::Create(nsIWidget* aParent,
   mRestoreBounds = aRect;
   mAlwaysOnTop = aInitData.mAlwaysOnTop;
 #if defined(GECKO_W10M)
-  if (mWindowType == WindowType::Popup) {
+  if (mWindowType == WindowType::Popup || mWindowType == WindowType::Dialog) {
     sGeckoW10mPopups.push_back(this);
   }
 #endif
@@ -700,6 +719,12 @@ nsresult HeadlessWidget::SynthesizeNativeMouseEvent(
                                                  aModifierFlags, nullptr);
       }
     }
+    // A dialog is modal: what is under it waits for its answer. A tap
+    // beside it reaching the page would act on a page that is not done
+    // asking.
+    if (TopDialog()) {
+      return NS_OK;
+    }
   }
 #endif
   EventMessage msg;
@@ -762,7 +787,8 @@ nsresult HeadlessWidget::SynthesizeNativeTouchPoint(
     return NS_ERROR_UNEXPECTED;
   }
 #if defined(GECKO_W10M)
-  // As with the mouse: a finger over a popup belongs to the popup window.
+  // As with the mouse: a finger over a popup or a dialog belongs to its
+  // window, and one beside an open dialog to nobody.
   if (mWindowType == WindowType::TopLevel) {
     for (auto it = sGeckoW10mPopups.rbegin(); it != sGeckoW10mPopups.rend(); ++it) {
       HeadlessWidget* popup = *it;
@@ -772,6 +798,11 @@ nsresult HeadlessWidget::SynthesizeNativeTouchPoint(
                                                  aPoint, aPointerPressure,
                                                  aPointerOrientation, nullptr);
       }
+    }
+    // The whole touch, unless one the page already has under way is ending.
+    if (TopDialog() && (!mSynthesizedTouchInput ||
+                        mSynthesizedTouchInput->mTouches.IsEmpty())) {
+      return NS_OK;
     }
   }
 #endif

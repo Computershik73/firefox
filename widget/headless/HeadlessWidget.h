@@ -66,6 +66,12 @@ class HeadlessWidget final : public nsIWidget {
   // it is destroyed, read by the input entry points in
   // HeadlessCompositorWidget.cpp.
   static HeadlessWidget* ShownWidget();
+  // The dialog window on top (a prompt, the "allow this site to open..."
+  // question, a slow-script warning), if one is showing: keys and text go to
+  // it rather than to the browser window under it.
+  static HeadlessWidget* TopDialog();
+  // Where keys and text go: the top dialog, else the shown window.
+  static HeadlessWidget* KeyWidget();
   // True while focus is on something that takes text. It is the only
   // signal a phone has that it should raise its keyboard.
   static bool TextInputWanted();

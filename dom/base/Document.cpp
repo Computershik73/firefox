@@ -3553,6 +3553,10 @@ bool Document::IsCallerChromeOrAddon(JSContext* aCx, JSObject* aObject) {
                        principal->GetIsAddonOrExpandedAddonPrincipal());
 }
 
+#if defined(GECKO_W10M)
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 static void CheckIsBadPolicy(nsILoadInfo::CrossOriginOpenerPolicy aPolicy,
                              BrowsingContext* aContext, nsIChannel* aChannel) {
 #if defined(NIGHTLY_BUILD)
@@ -3716,6 +3720,29 @@ nsresult Document::StartDocumentLoad(const char* aCommand, nsIChannel* aChannel,
       docShell->GetBrowsingContext()) {
     CheckIsBadPolicy(policy, docShell->GetBrowsingContext(), aChannel);
 
+#if defined(GECKO_W10M)
+    // A page that asks to be cross-origin isolated (COOP same-origin with
+    // COEP require-corp: WhatsApp Web does) gets, in Firefox, a new process
+    // and with it a new browsing context, because a context can never
+    // become isolated, nor stop being, in place: CanSet refuses, and a
+    // refused transaction is a deliberate crash. This port runs in one
+    // process, so the load reuses the tab's context and WhatsApp Web
+    // crashed the browser every time it was opened. The change is left
+    // out instead: the page loads, just not isolated (no
+    // SharedArrayBuffer), as in a browser without the feature.
+    {
+      const auto requireCORP =
+          nsILoadInfo::OPENER_POLICY_SAME_ORIGIN_EMBEDDER_POLICY_REQUIRE_CORP;
+      const auto current = docShell->GetBrowsingContext()->GetOpenerPolicy();
+      if (current != policy &&
+          (current == requireCORP || policy == requireCORP)) {
+        GeckoW10mNote(
+            "document: a page asked for cross-origin isolation; one process "
+            "cannot give it a new browsing context, so it loads without");
+        policy = current;
+      }
+    }
+#endif
     // Setting the opener policy on a discarded context has no effect.
     (void)docShell->GetBrowsingContext()->SetOpenerPolicy(policy);
   }

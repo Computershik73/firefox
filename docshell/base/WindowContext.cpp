@@ -700,8 +700,17 @@ void WindowContext::ConsumeHistoryActivation() {
   // including for example cross-origin iframes. As such we need to send an
   // message over the IPC boundary to ensure out of processes contexts also
   // consume their activations.
+#if defined(GECKO_W10M)
+  // In a single process there are no other processes to tell, and no
+  // ContentChild to tell them with: closing a <dialog> by tapping outside it
+  // (light dismiss) got here and crashed on a null ContentChild.
+  if (XRE_IsContentProcess()) {
+    ContentChild::GetSingleton()->SendConsumeHistoryActivation(top);
+  }
+#else
   MOZ_ASSERT(XRE_IsContentProcess());
   ContentChild::GetSingleton()->SendConsumeHistoryActivation(top);
+#endif
 
   // Update the local process children immediately.
   top->ConsumeHistoryActivation();

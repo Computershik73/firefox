@@ -557,6 +557,20 @@ var PlacesCommandHook = {
    *                      AllBookmarks, History, Downloads.
    */
   showPlacesOrganizer(item) {
+    // Windows 10 Mobile port: the Library is a window of its own, which is
+    // never shown there and yet takes every tap. Its parts open in tabs:
+    // downloads and history have pages of their own, bookmarks the Library's
+    // page itself (gecko.places.inTab).
+    if (Services.prefs.getBoolPref("gecko.places.inTab", false)) {
+      const page =
+        item == "Downloads"
+          ? "about:downloads"
+          : item == "History"
+            ? "about:firefoxview#history"
+            : "chrome://browser/content/places/places.xhtml";
+      openTrustedLinkIn(page, "tab");
+      return;
+    }
     var organizer = Services.wm.getMostRecentWindow("Places:Organizer");
     // Due to bug 528706, getMostRecentWindow can return closed windows.
     if (!organizer || organizer.closed) {

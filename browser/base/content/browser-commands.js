@@ -577,7 +577,14 @@ var BrowserCommands = {
   },
 
   downloadsUI() {
-    if (PrivateBrowsingUtils.isWindowPrivate(window)) {
+    // Windows 10 Mobile port: a window of its own is never shown there --
+    // the shell shows the browser window and nothing else -- yet it takes
+    // every tap, so the browser seemed to hang. The downloads list opens in
+    // a tab instead (gecko.places.inTab).
+    if (
+      PrivateBrowsingUtils.isWindowPrivate(window) ||
+      Services.prefs.getBoolPref("gecko.places.inTab", false)
+    ) {
       openTrustedLinkIn("about:downloads", "tab");
     } else {
       PlacesCommandHook.showPlacesOrganizer("Downloads");

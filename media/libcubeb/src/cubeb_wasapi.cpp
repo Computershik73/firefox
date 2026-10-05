@@ -296,6 +296,13 @@ typedef enum {
   CUBEB_AUDIO_CLIENT2_RAW,
   /* Use CUBEB_STREAM_PREF_COMMUNICATIONS */
   CUBEB_AUDIO_CLIENT2_VOICE
+#if defined(GECKO_W10M)
+  ,
+  /* AudioCategory_Media: a UWP app with the backgroundMediaPlayback
+   * capability keeps running while it plays media, minimised or with the
+   * screen locked, and a WASAPI stream counts as media by its category. */
+  CUBEB_AUDIO_CLIENT2_MEDIA
+#endif
 } AudioClient2Option;
 
 struct cubeb {
@@ -2173,6 +2180,11 @@ initialize_iaudioclient2(com_ptr<IAudioClient> & audio_client,
   } else if (option == CUBEB_AUDIO_CLIENT2_VOICE) {
     properties.eCategory = AudioCategory_Communications;
   }
+#  if defined(GECKO_W10M)
+  else if (option == CUBEB_AUDIO_CLIENT2_MEDIA) {
+    properties.eCategory = AudioCategory_Media;
+  }
+#  endif
 #endif
   HRESULT hr = audio_client2->SetClientProperties(&properties);
   if (FAILED(hr)) {
@@ -2510,6 +2522,15 @@ setup_wasapi_stream_one_side(cubeb_stream * stm,
       return CUBEB_ERROR;
     }
   }
+#if defined(GECKO_W10M)
+  else if (direction == eRender) {
+    if (initialize_iaudioclient2(audio_client, CUBEB_AUDIO_CLIENT2_MEDIA) !=
+        CUBEB_OK) {
+      LOG("Can't mark the stream as media, error: %lx", GetLastError());
+      // Not fatal: it plays, only not in the background.
+    }
+  }
+#endif
 
 #if 0 // See https://bugzilla.mozilla.org/show_bug.cgi?id=1590902
   if (initialize_iaudioclient3(audio_client, stm, mix_format, flags, direction)) {

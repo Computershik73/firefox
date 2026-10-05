@@ -47,6 +47,94 @@
 #include "nsToolkit.h"
 #include "nsWindow.h"
 
+#if defined(GECKO_W10M)
+#  include <atomic>
+#  include "nsTHashMap.h"
+#  include "nsThreadUtils.h"
+
+extern "C" void GeckoW10mNote(const char* aText);
+
+// Windows 10 Mobile: the file dialogs belong to the shell. There is no
+// IFileOpenDialog in the app container, no utility process to show one from,
+// and no HWND to parent one to -- the engine runs headless, and every
+// <input type=file>, every Save As and the Downloads folder's Browse button
+// came back NS_ERROR_NOT_AVAILABLE, so tapping them did nothing. The shell
+// leaves a function here, shows the system's FileOpenPicker, FolderPicker or
+// FileSavePicker on its UI thread, and answers through
+// gecko_w10m_picker_result with the paths chosen; integers and UTF-16 strings
+// only across the boundary.
+//   aMode: nsIFilePicker::Mode. aFilters: "title|*.png; *.jpg" lines.
+using GeckoW10mPickerSink = void (*)(uint32_t aId, int32_t aMode,
+                                     const wchar_t* aTitle,
+                                     const wchar_t* aInitialDir,
+                                     const wchar_t* aDefaultName,
+                                     const wchar_t* aDefaultExtension,
+                                     const wchar_t* aFilters);
+static std::atomic<GeckoW10mPickerSink> sGeckoW10mPickerSink{nullptr};
+
+using GeckoW10mPickerPromise =
+    mozilla::MozPromise<nsTArray<nsString>, mozilla::widget::filedialog::Error,
+                        true>;
+// Main thread only.
+static nsTHashMap<uint32_t, RefPtr<GeckoW10mPickerPromise::Private>>&
+GeckoW10mPendingPickers() {
+  static nsTHashMap<uint32_t, RefPtr<GeckoW10mPickerPromise::Private>> sMap;
+  return sMap;
+}
+static uint32_t sGeckoW10mNextPicker = 1;
+
+extern "C" __declspec(dllexport) void gecko_w10m_set_picker_sink(
+    GeckoW10mPickerSink aSink) {
+  sGeckoW10mPickerSink.store(aSink);
+  GeckoW10mNote(aSink ? "picker: the shell shows the file dialogs"
+                      : "picker: sink cleared");
+}
+
+// From the shell, on any thread: the paths the user chose, one after another,
+// each ended by a NUL and the list by another; null or empty for a cancel.
+extern "C" __declspec(dllexport) void gecko_w10m_picker_result(
+    uint32_t aId, const wchar_t* aPaths) {
+  nsTArray<nsString> paths;
+  if (aPaths) {
+    for (const wchar_t* p = aPaths; *p; p += wcslen(p) + 1) {
+      paths.AppendElement(nsDependentString(reinterpret_cast<const char16_t*>(p)));
+    }
+  }
+  NS_DispatchToMainThread(NS_NewRunnableFunction(
+      "gecko_w10m_picker_result", [aId, paths = std::move(paths)]() mutable {
+        auto pending = GeckoW10mPendingPickers().Extract(aId);
+        if (!pending || !*pending) {
+          return;
+        }
+        RefPtr<GeckoW10mPickerPromise::Private> promise = pending.extract();
+        nsPrintfCString note("picker: %u answered with %zu path(s)", aId,
+                             size_t(paths.Length()));
+        GeckoW10mNote(note.get());
+        promise->Resolve(std::move(paths), __func__);
+      }));
+}
+
+static RefPtr<GeckoW10mPickerPromise> GeckoW10mShowPicker(
+    int32_t aMode, const nsString& aTitle, const nsString& aInitialDir,
+    const nsString& aDefaultName, const nsString& aDefaultExtension,
+    const nsString& aFilters) {
+  MOZ_ASSERT(NS_IsMainThread());
+  RefPtr<GeckoW10mPickerPromise::Private> promise =
+      new GeckoW10mPickerPromise::Private(__func__);
+  const uint32_t id = sGeckoW10mNextPicker++;
+  GeckoW10mPendingPickers().InsertOrUpdate(id, promise);
+  nsPrintfCString note("picker: %u asked of the shell, mode %d", id, aMode);
+  GeckoW10mNote(note.get());
+  auto wide = [](const nsString& aText) {
+    return static_cast<const wchar_t*>(aText.get());
+  };
+  sGeckoW10mPickerSink.load()(id, aMode, wide(aTitle), wide(aInitialDir),
+                              wide(aDefaultName), wide(aDefaultExtension),
+                              wide(aFilters));
+  return promise;
+}
+#endif
+
 using mozilla::LogLevel;
 using mozilla::UniquePtr;
 
@@ -107,7 +195,11 @@ NS_IMETHODIMP nsFilePicker::Init(
     mozilla::dom::BrowsingContext* aBrowsingContext, const nsAString& aTitle,
     nsIFilePicker::Mode aMode, nsISupports* aGlobal) {
   // Don't attempt to open a real file-picker in headless mode.
-  if (gfxPlatform::IsHeadless()) {
+  if (gfxPlatform::IsHeadless()
+#if defined(GECKO_W10M)
+      && !sGeckoW10mPickerSink.load()
+#endif
+  ) {
     return NS_ERROR_NOT_AVAILABLE;
   }
 
@@ -481,6 +573,20 @@ using fd_async::AsyncExecute;
  */
 RefPtr<mozilla::MozPromise<bool, nsFilePicker::Error, true>>
 nsFilePicker::ShowFolderPicker(const nsString& aInitialDir) {
+#if defined(GECKO_W10M)
+  if (sGeckoW10mPickerSink.load()) {
+    return GeckoW10mShowPicker(int32_t(mMode), mTitle, aInitialDir, u""_ns,
+                               u""_ns, u""_ns)
+        ->Map(mozilla::GetMainThreadSerialEventTarget(), __PRETTY_FUNCTION__,
+              [self = RefPtr(this)](nsTArray<nsString> aPaths) {
+                if (aPaths.IsEmpty()) {
+                  return false;
+                }
+                self->mUnicodeFile = aPaths[0];
+                return true;
+              });
+  }
+#endif
   namespace fd = ::mozilla::widget::filedialog;
   nsTArray<fd::Command> commands = {
       fd::SetOptions(FOS_PICKFOLDERS),
@@ -586,6 +692,44 @@ nsFilePicker::ShowFilePicker(const nsString& aInitialDir) {
         return NotOk(MOZ_FD_LOCAL_ERROR(
             "file-picker opened in directory-picker mode", E_INVALIDARG));
     }
+#if defined(GECKO_W10M)
+    if (sGeckoW10mPickerSink.load()) {
+      nsAutoString filters;
+      for (auto const& filter : mFilterList) {
+        filters.Append(filter.title);
+        filters.Append(u'|');
+        filters.Append(filter.filter);
+        filters.Append(u'\n');
+      }
+      nsAutoString name(mDefaultFilename);
+      name.ReplaceChar('%', '_');
+      nsAutoString extension(mDefaultExtension);
+      if (extension.IsEmpty() && IsDefaultPathHtml()) {
+        extension.AssignLiteral("html");
+      }
+      return GeckoW10mShowPicker(int32_t(mMode), mTitle, aInitialDir, name,
+                                 extension, filters)
+          ->Map(mozilla::GetMainThreadSerialEventTarget(), __PRETTY_FUNCTION__,
+                [self = RefPtr(this),
+                 mode = mMode](nsTArray<nsString> aPaths) {
+                  if (aPaths.IsEmpty()) {
+                    return false;
+                  }
+                  if (mode != modeOpenMultiple) {
+                    self->mUnicodeFile = aPaths[0];
+                    return true;
+                  }
+                  for (auto const& path : aPaths) {
+                    nsCOMPtr<nsIFile> file;
+                    if (NS_SUCCEEDED(
+                            NS_NewLocalFile(path, getter_AddRefs(file)))) {
+                      self->mFiles.AppendObject(file);
+                    }
+                  }
+                  return true;
+                });
+    }
+#endif
 
     commands.AppendElement(fd::SetOptions(fos));
   }
@@ -759,7 +903,11 @@ nsresult nsFilePicker::Open(nsIFilePickerShownCallback* aCallback) {
   }
 
   // Don't attempt to open a real file-picker in headless mode.
-  if (gfxPlatform::IsHeadless()) {
+  if (gfxPlatform::IsHeadless()
+#if defined(GECKO_W10M)
+      && !sGeckoW10mPickerSink.load()
+#endif
+  ) {
     return nsresult::NS_ERROR_NOT_AVAILABLE;
   }
 

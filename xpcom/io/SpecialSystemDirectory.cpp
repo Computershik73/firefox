@@ -566,6 +566,21 @@ nsresult GetSpecialSystemDirectory(SystemDirectories aSystemSystemDirectory,
     }
 
     case Win_Downloads: {
+#  if defined(GECKO_W10M)
+      // The phone's own Downloads -- the one Files and every other app show
+      // -- is the public one. The known folder resolves under the account
+      // the app runs as (C:\Data\Users\DefApps), where nothing else looks.
+      {
+        nsCOMPtr<nsIFile> publicDownloads;
+        bool exists = false;
+        if (NS_SUCCEEDED(NS_NewLocalFile(u"C:\\Data\\Users\\Public\\Downloads"_ns,
+                                         getter_AddRefs(publicDownloads))) &&
+            NS_SUCCEEDED(publicDownloads->Exists(&exists)) && exists) {
+          publicDownloads.forget(aFile);
+          return NS_OK;
+        }
+      }
+#  endif
       return GetKnownFolder(FOLDERID_Downloads, aFile);
     }
 

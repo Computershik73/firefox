@@ -3353,10 +3353,32 @@ nsLocalFile::SetUseDOSDevicePathSyntax(bool aUseDOSDevicePathSyntax) {
   return NS_OK;
 }
 
+#if defined(GECKO_W10M)
+// Opening a downloaded file, and showing the folder it is in, goes to the
+// shell: ShellExecuteEx and SHOpenFolderAndSelectItems are refused in the app
+// container, so the downloads panel's Open did nothing. The shell hands the
+// path to Windows.System.Launcher (LaunchFileAsync / LaunchFolderAsync) on
+// its UI thread. aReveal: 0 open the file, 1 show the folder it is in.
+static void (*sGeckoW10mFileLauncher)(const wchar_t* aPath,
+                                      int32_t aReveal) = nullptr;
+
+extern "C" __declspec(dllexport) void gecko_w10m_set_file_launcher(
+    void (*aLauncher)(const wchar_t*, int32_t)) {
+  sGeckoW10mFileLauncher = aLauncher;
+}
+#endif
+
 NS_IMETHODIMP
 nsLocalFile::Reveal() {
   // This API should be main thread only
   MOZ_ASSERT(NS_IsMainThread());
+#if defined(GECKO_W10M)
+  if (sGeckoW10mFileLauncher) {
+    sGeckoW10mFileLauncher(static_cast<const wchar_t*>(mWorkingPath.get()),
+                           1);
+    return NS_OK;
+  }
+#endif
 
   // make sure mResolvedPath is set
   nsresult rv = Resolve();
@@ -3414,6 +3436,13 @@ NS_IMETHODIMP
 nsLocalFile::Launch() {
   // This API should be main thread only
   MOZ_ASSERT(NS_IsMainThread());
+#if defined(GECKO_W10M)
+  if (sGeckoW10mFileLauncher) {
+    sGeckoW10mFileLauncher(static_cast<const wchar_t*>(mWorkingPath.get()),
+                           0);
+    return NS_OK;
+  }
+#endif
 
   // use the app registry name to launch a shell execute....
   _bstr_t execPath(mWorkingPath.get());

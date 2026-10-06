@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "HeadlessCompositorWidget.h"
+#include "nsIRollupListener.h"
 #include "HeadlessScreenHelper.h"
 #include "nsPrintfCString.h"
 #if defined(GECKO_W10M)
@@ -960,6 +961,18 @@ extern "C" __declspec(dllexport) void gecko_w10m_input_text(
 extern "C" __declspec(dllexport) void gecko_w10m_input_key(int32_t aKeyCode) {
   GeckoW10mDispatchInput(
       NS_NewRunnableFunction("gecko_w10m_input_key", [aKeyCode]() {
+        // The phone's back button is Escape. With no dialog open it closes
+        // the open popup -- a panel whose page has the focus would never see
+        // an Escape sent to the browser window.
+        if (aKeyCode == 27 && !mozilla::widget::HeadlessWidget::TopDialog()) {
+          if (nsIRollupListener* rollup = nsIWidget::GetActiveRollupListener()) {
+            nsCOMPtr<nsIWidget> popup = rollup->GetRollupWidget();
+            if (popup) {
+              rollup->Rollup({});
+              return;
+            }
+          }
+        }
         // An open dialog takes the keys: Escape from the phone's back button
         // closes it, Enter answers it.
         auto* widget = mozilla::widget::HeadlessWidget::KeyWidget();

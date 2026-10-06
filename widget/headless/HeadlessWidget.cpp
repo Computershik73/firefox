@@ -2,6 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "HeadlessWidget.h"
+#if defined(GECKO_W10M)
+#  include "nsIRollupListener.h"
+#endif
 
 #include <algorithm>
 
@@ -118,6 +121,27 @@ HeadlessWidget* sShownWidget = nullptr;
 // instead, so that is done here. Dialogs were left out, and their buttons
 // never got a tap: it went through to the page under them.
 std::vector<HeadlessWidget*> sGeckoW10mPopups;
+// A touch that closed a popup, kept from the page until the finger lifts.
+int64_t sGeckoW10mSwallowedPointer = -1;
+
+// A finger or a click outside every open popup closes them, as the operating
+// system's window manager tells Firefox to on the desktop (nsWindow's
+// DealWithPopups). Headless, nothing did, and a panel -- an extension's,
+// the downloads panel -- stayed over the page for good. True when the event
+// that closed them is to go no further.
+bool GeckoW10mRollupOutside(const mozilla::LayoutDeviceIntPoint& aPoint) {
+  nsIRollupListener* listener = nsIWidget::GetActiveRollupListener();
+  if (!listener) {
+    return false;
+  }
+  nsCOMPtr<nsIWidget> rollupWidget = listener->GetRollupWidget();
+  if (!rollupWidget) {
+    return false;
+  }
+  nsIRollupListener::RollupOptions options;
+  options.mPoint = &aPoint;
+  return listener->Rollup(options);
+}
 }  // namespace
 
 HeadlessWidget* HeadlessWidget::ShownWidget() {
@@ -725,6 +749,10 @@ nsresult HeadlessWidget::SynthesizeNativeMouseEvent(
     if (TopDialog()) {
       return NS_OK;
     }
+    if (aNativeMessage == NativeMouseMessage::ButtonDown &&
+        GeckoW10mRollupOutside(aPoint)) {
+      return NS_OK;
+    }
   }
 #endif
   EventMessage msg;
@@ -802,6 +830,21 @@ nsresult HeadlessWidget::SynthesizeNativeTouchPoint(
     // The whole touch, unless one the page already has under way is ending.
     if (TopDialog() && (!mSynthesizedTouchInput ||
                         mSynthesizedTouchInput->mTouches.IsEmpty())) {
+      return NS_OK;
+    }
+    // A touch outside the open popups closes them; if Firefox says so, the
+    // whole touch stops there.
+    if (sGeckoW10mSwallowedPointer == int64_t(aPointerId)) {
+      if (aPointerState & (TOUCH_REMOVE | TOUCH_CANCEL)) {
+        sGeckoW10mSwallowedPointer = -1;
+      }
+      return NS_OK;
+    }
+    if ((aPointerState & TOUCH_CONTACT) &&
+        (!mSynthesizedTouchInput ||
+         mSynthesizedTouchInput->mTouches.IsEmpty()) &&
+        GeckoW10mRollupOutside(aPoint)) {
+      sGeckoW10mSwallowedPointer = int64_t(aPointerId);
       return NS_OK;
     }
   }

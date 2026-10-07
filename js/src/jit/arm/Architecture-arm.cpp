@@ -342,6 +342,16 @@ static auto ReadARMHwCapFlags() {
   capabilities += ARMCapability::ARMv7;
 #  endif
 
+#  if defined(XP_WIN) && defined(GECKO_W10M)
+  // Windows has no auxv to read. Hardware divide is the one capability that
+  // matters here: without it Ion divides through a call, and the wasm
+  // baseline compiler refuses to run at all (BaselinePlatformSupport), so
+  // every module waits for Ion. Every Windows 10 Mobile phone has it.
+  if (IsProcessorFeaturePresent(PF_ARM_DIVIDE_INSTRUCTION_AVAILABLE)) {
+    capabilities += ARMCapability::IDivA;
+  }
+#  endif
+
 #  if defined(__APPLE__)
 #    if defined(__ARM_NEON__)
   capabilities += ARMCapability::Neon;

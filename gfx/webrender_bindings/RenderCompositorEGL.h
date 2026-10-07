@@ -86,6 +86,13 @@ class RenderCompositorEGL : public RenderCompositor {
                                                   EGLint, EGLint, EGLint,
                                                   EGLint);
   PostSubBufferFn mPostSubBuffer = nullptr;
+  // gfx.webrender.max-partial-present-rects == 0: nothing outside
+  // WebRender's dirty rectangle is trusted to be on the screen; a frame that
+  // changes anything is drawn and presented whole, one that changes nothing
+  // is neither. Off by default -- partial present is what keeps scrolling
+  // and video cheap -- and there to tell a fault of partial present from
+  // anything else on the phone.
+  bool mWholeFrames = false;
   // A new size, or a present that failed, means the next frame is drawn
   // and presented whole.
   LayoutDeviceIntSize mPresentedSize;

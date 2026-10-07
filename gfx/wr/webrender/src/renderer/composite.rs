@@ -1507,7 +1507,14 @@ impl Renderer {
                 // to determine the total_dirty_rect. The is used to determine what region we
                 // render to, and is what we send to the compositor as the buffer damage region
                 // (eg for KHR_partial_update).
-                let total_dirty_rect = if draw_previous_partial_present_regions {
+                let total_dirty_rect = if draw_previous_partial_present_regions
+                    // GeckoW10m: RenderCompositorEGL's whole frames present
+                    // nothing for a frame that changed nothing, so nothing of
+                    // the earlier frames has to be drawn again into it.
+                    // Without this a video on its own layer would have the
+                    // whole screen composed, for nothing, on every frame.
+                    && !(cfg!(windows) && combined_dirty_rect.is_empty())
+                {
                     combined_dirty_rect.union(&prev_frames_damage_rect.unwrap())
                 } else {
                     combined_dirty_rect

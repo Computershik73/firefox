@@ -1915,7 +1915,12 @@ impl Device {
         // We have Additionally encountered issues on PowerVR D-Series. See bug 2005312.
         let supports_render_target_partial_update = !is_mali_midgard(&renderer_name)
             && !is_mali_bifrost(&renderer_name)
-            && !renderer_name.starts_with("PowerVR D-Series");
+            && !renderer_name.starts_with("PowerVR D-Series")
+            // GeckoW10m: gfx.webrender.gecko-w10m.tile-partial-update = false
+            // (RenderCompositorEGL.cpp) -- a test for specks on Qualcomm's
+            // Direct3D driver under ANGLE.
+            && !(is_windows_angle
+                && std::env::var_os("GECKO_W10M_NO_TILE_PARTIAL_UPDATE").is_some());
 
         let supports_shader_storage_object = match gl.get_type() {
             // see https://www.g-truc.net/post-0734.html

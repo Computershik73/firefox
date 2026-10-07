@@ -8740,6 +8740,16 @@
   type: bool
   value: true
   mirror: once
+
+# Picture-cache tiles are redrawn only in the part that changed. False redraws
+# a changed tile whole -- a test for specks on Qualcomm's Direct3D driver,
+# which upstream saw from partial updates of render targets on other mobile
+# GPUs (Mali, PowerVR). Partial present, which is the screen and not the
+# tiles, is gfx.webrender.max-partial-present-rects.
+- name: gfx.webrender.gecko-w10m.tile-partial-update
+  type: bool
+  value: true
+  mirror: once
 #endif
 
 #if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GTK)

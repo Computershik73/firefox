@@ -163,11 +163,33 @@ RenderCompositorEGL::RenderCompositorEGL(
       mPostSubBuffer = reinterpret_cast<PostSubBufferFn>(
           egl->mLib->fGetProcAddress("eglPostSubBufferNV"));
     }
-    GeckoW10mNote(mPostSubBuffer
-                      ? "gfx: partial present -- only what changed is drawn "
-                        "and presented"
-                      : "gfx: no EGL_NV_post_sub_buffer -- every frame is "
-                        "drawn whole");
+    // The preference was set to 0 once and then never read on this path, so
+    // partial present ran regardless of it. Now 0 means whole frames, for a
+    // comparison on the phone, and the build ships with partial present on.
+    mWholeFrames =
+        mPostSubBuffer &&
+        StaticPrefs::gfx_webrender_max_partial_present_rects_AtStartup() == 0;
+    {
+      char note[256];
+      SprintfLiteral(
+          note, "gfx: %s (max-partial-present-rects: pref %u, in use %d)",
+          !mPostSubBuffer ? "no EGL_NV_post_sub_buffer -- every frame is "
+                            "drawn whole"
+          : mWholeFrames  ? "whole frames -- a frame that changed anything is "
+                            "drawn and presented whole, one that changed "
+                            "nothing is skipped"
+                          : "partial present -- only what changed is drawn "
+                            "and presented",
+          StaticPrefs::gfx_webrender_max_partial_present_rects_AtStartup(),
+          int(gfx::gfxVars::WebRenderMaxPartialPresentRects()));
+      GeckoW10mNote(note);
+    }
+    // WebRender reads this when it sets its device up, which is after the
+    // compositor is made (WebRenderAPI.cpp, NewRenderer).
+    if (!StaticPrefs::gfx_webrender_gecko_w10m_tile_partial_update_AtStartup()) {
+      ::SetEnvironmentVariableW(L"GECKO_W10M_NO_TILE_PARTIAL_UPDATE", L"1");
+      GeckoW10mNote("gfx: a changed picture tile is redrawn whole");
+    }
   }
 #endif
 #ifdef MOZ_WAYLAND
@@ -254,9 +276,10 @@ RenderedFrameId RenderCompositorEGL::EndFrame(
 #if defined(GECKO_W10M)
   if (mPostSubBuffer && mEGLSurface != EGL_NO_SURFACE) {
     const auto bufferSize = GetBufferSize();
-    // WebRender drew this frame whole (RequestFullRender decided it), so
-    // the whole of it goes out.
-    const bool whole = mWholeFrame;
+    // WebRender drew this frame whole (RequestFullRender decided it, or
+    // whole frames are asked for and it changed something), so the whole of
+    // it goes out.
+    const bool whole = mWholeFrame || (mWholeFrames && !aDirtyRects.IsEmpty());
     gfx::IntRect bounds;
     for (const DeviceIntRect& rect : aDirtyRects) {
       const auto left = std::clamp(rect.min.x, 0, bufferSize.width);
@@ -539,7 +562,9 @@ bool RenderCompositorEGL::ShouldDrawPreviousPartialPresentRegions() {
   // DXGI carry the rest of the previous frame into the next back buffer,
   // which is what Firefox's own ANGLE compositor relies on too.
   if (mPostSubBuffer) {
-    return false;
+    // Whole frames: nothing of it is trusted, and with a buffer age of 0
+    // WebRender redraws all of any frame that changed something.
+    return mWholeFrames;
   }
 #endif
   return true;

@@ -480,6 +480,13 @@ extern "C" __declspec(dllexport) uint64_t gecko_w10m_frame_serial() {
 // were going through NS_DispatchToMainThread, which puts them behind all of
 // it -- which is how taps came to be swallowed while a video was playing, and
 // why a burst of them used to arrive at once when a page finished loading.
+//
+// Only in a content process, though: the input task manager that gives
+// InputHigh its meaning is turned on by ContentChild alone, and in this
+// single-process port InputHigh runs as Normal -- first in, first out, behind
+// whatever the page queued before it. So a finger's moves still wait during
+// a load, and arrive together; touches carry the time the shell saw them
+// for that reason (gecko_w10m_input_touch).
 static void GeckoW10mDispatchInput(already_AddRefed<nsIRunnable> aRunnable) {
   NS_DispatchToMainThreadQueue(std::move(aRunnable),
                                mozilla::EventQueuePriority::InputHigh);
@@ -749,8 +756,16 @@ extern "C" __declspec(dllexport) void gecko_w10m_input_touch(int32_t aPointerId,
                                                           int32_t aState,
                                                           int32_t aX,
                                                           int32_t aY) {
+  // When the finger was there: taken here, on the shell's UI thread, as XAML
+  // reports it. The runnable below runs only when the main thread reaches it,
+  // behind whatever the page queued, and while a feed loads that can be
+  // hundreds of milliseconds; every move queued meanwhile then ran within a
+  // millisecond or two. Stamped as they ran, APZ divided a whole swipe by
+  // those few milliseconds and flung the page to its end -- or, when a long
+  // task fell between the last moves, measured no speed at all.
+  const mozilla::TimeStamp when = mozilla::TimeStamp::Now();
   GeckoW10mDispatchInput(NS_NewRunnableFunction(
-      "gecko_w10m_input_touch", [aPointerId, aState, aX, aY]() {
+      "gecko_w10m_input_touch", [aPointerId, aState, aX, aY, when]() {
 
         auto* widget = mozilla::widget::HeadlessWidget::ShownWidget();
         if (!widget) {
@@ -762,9 +777,43 @@ extern "C" __declspec(dllexport) void gecko_w10m_input_touch(int32_t aPointerId,
         } else if (aState == 3) {
           state = TOUCH_CANCEL;
         }
-        widget->SynthesizeNativeTouchPoint(
+        if (aState == 0) {
+          mozilla::widget::HeadlessWidget::GeckoW10mPress(
+              static_cast<uint32_t>(aPointerId));
+        }
+
+        // How late the moves of one swipe reached APZ, once per swipe: the
+        // number a fling that goes too far, or not at all, comes down to.
+        static uint32_t sMoves = 0;
+        static double sLongestWaitMs = 0;
+        static mozilla::TimeStamp sDownMade;
+        static mozilla::TimeStamp sDownRan;
+        const mozilla::TimeStamp ran = mozilla::TimeStamp::Now();
+        const double waitMs = (ran - when).ToMilliseconds();
+        if (aState == 0) {
+          sMoves = 0;
+          sLongestWaitMs = waitMs;
+          sDownMade = when;
+          sDownRan = ran;
+        } else if (aState == 1) {
+          ++sMoves;
+          sLongestWaitMs = std::max(sLongestWaitMs, waitMs);
+        } else if (sMoves >= 2 && !sDownMade.IsNull()) {
+          char note[192];
+          SprintfLiteral(note,
+                         "touch: a swipe of %u moves, made over %.0f ms, reached "
+                         "APZ over %.0f ms; the longest wait for the main thread "
+                         "was %.0f ms",
+                         sMoves, (when - sDownMade).ToMilliseconds(),
+                         (ran - sDownRan).ToMilliseconds(),
+                         std::max(sLongestWaitMs, waitMs));
+          GeckoW10mNote(note);
+          sMoves = 0;
+        }
+
+        widget->GeckoW10mSynthesizeTouch(
             static_cast<uint32_t>(aPointerId), state,
-            mozilla::LayoutDeviceIntPoint(aX, aY), 1.0, 90, nullptr);
+            mozilla::LayoutDeviceIntPoint(aX, aY), 1.0, 90, when);
       }));
 }
 

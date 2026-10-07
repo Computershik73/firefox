@@ -81,6 +81,33 @@ class HeadlessWidget final : public nsIWidget {
   // Goes up each time an editable field takes the focus, so the shell can
   // tell a new field -- or the same one tapped again -- from no change.
   static uint32_t TextInputSerial();
+
+  // A finger from the shell, stamped with the time the shell saw it rather
+  // than the time the main thread got round to it. Every input runnable
+  // waits behind whatever the page queued before it, and APZ takes a
+  // fling's speed from the gaps between these times: stamped late, a swipe
+  // made while a feed was loading arrived as a burst and flung the page to
+  // its end. SynthesizeNativeTouchPoint gives "now", as before.
+  nsresult GeckoW10mSynthesizeTouch(uint32_t aPointerId,
+                                    TouchPointerState aPointerState,
+                                    LayoutDeviceIntPoint aPoint,
+                                    double aPointerPressure,
+                                    uint32_t aPointerOrientation,
+                                    const mozilla::TimeStamp& aTime);
+  // The shell says a finger has just gone down. A window still holding a
+  // finger with that id lost its release somewhere; it is cancelled there
+  // first, or every later touch in that window would have two fingers --
+  // a pinch to APZ, never a tap.
+  static void GeckoW10mPress(uint32_t aPointerId);
+
+  // Firefox marks a popup it means to be see-through to the pointer --
+  // every tooltip is pointer-events: none -- and gives others a margin that
+  // is not theirs (the shadow round a panel). A real window lets input
+  // there fall through; headless kept neither, so a tooltip a long press
+  // left behind took every tap aimed at what was under it.
+  void SetInputRegion(const InputRegion& aRegion) override {
+    mGeckoW10mInputRegion = aRegion;
+  }
 #endif
 
   nsresult Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
@@ -192,6 +219,12 @@ class HeadlessWidget final : public nsIWidget {
   static StaticAutoPtr<nsTArray<HeadlessWidget*>> sActiveWindows;
   // Get the most recently activated widget or null if there are none.
   static already_AddRefed<HeadlessWidget> GetActiveWindow();
+#if defined(GECKO_W10M)
+  InputRegion mGeckoW10mInputRegion;
+  // The topmost visible popup or dialog under a point that takes input
+  // there, or null.
+  static HeadlessWidget* GeckoW10mPopupUnder(const LayoutDeviceIntPoint& aPoint);
+#endif
 };
 
 }  // namespace widget

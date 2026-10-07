@@ -23,6 +23,9 @@
 
 #  include "mozilla/WinHeaderOnlyUtils.h"
 #  include "nsIWindowsRegKey.h"
+#  if defined(GECKO_W10M)
+#    include "prenv.h"
+#  endif
 
 #elif defined(XP_UNIX)
 
@@ -567,6 +570,19 @@ nsresult GetSpecialSystemDirectory(SystemDirectories aSystemSystemDirectory,
 
     case Win_Downloads: {
 #  if defined(GECKO_W10M)
+      // The shell decides (app/GeckoW10m/engine/gecko_bootstrap.cpp): the
+      // phone's Downloads\Gecko when the app may write there, otherwise
+      // LocalState\Downloads, from where the shell copies each finished file
+      // out through the storage API.
+      if (const char* chosen = PR_GetEnv("GECKO_W10M_DOWNLOADS");
+          chosen && *chosen) {
+        nsCOMPtr<nsIFile> dir;
+        if (NS_SUCCEEDED(NS_NewLocalFile(NS_ConvertUTF8toUTF16(chosen),
+                                         getter_AddRefs(dir)))) {
+          dir.forget(aFile);
+          return NS_OK;
+        }
+      }
       // The phone's own Downloads -- the one Files and every other app show
       // -- is the public one. The known folder resolves under the account
       // the app runs as (C:\Data\Users\DefApps), where nothing else looks.

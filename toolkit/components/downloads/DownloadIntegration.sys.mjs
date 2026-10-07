@@ -330,6 +330,15 @@ export var DownloadIntegration = {
    *   Resolves to the downloads directory path.
    */
   async getPreferredDownloadsDirectory() {
+    // Windows 10 Mobile with interop unlock alone: see
+    // GetPreferredDownloadsDirectory in nsExternalHelperAppService.cpp.
+    let staging = Services.env.get("GECKO_W10M_DOWNLOAD_STAGING");
+    if (staging) {
+      await IOUtils.makeDirectory(staging, { createAncestors: false }).catch(
+        () => {}
+      );
+      return staging;
+    }
     let directoryPath = null;
     let prefValue = Services.prefs.getIntPref("browser.download.folderList", 1);
 

@@ -37,6 +37,9 @@
 #include "nsDependentSubstring.h"
 #include "nsSandboxFlags.h"
 #include "nsString.h"
+#if defined(GECKO_W10M)
+#  include "prenv.h"
+#endif
 #include "nsUnicharUtils.h"
 #include "nsIStringEnumerator.h"
 #include "nsIStreamListener.h"
@@ -292,6 +295,24 @@ static Result<nsCOMPtr<nsIFile>, nsresult> GetPreferredDownloadsDirectory(
   return Err(NS_ERROR_FAILURE);
 #else
   nsresult rv;
+#  if defined(GECKO_W10M)
+  // Windows 10 Mobile with interop unlock alone: no folder outside the app's
+  // own may be written by path, the one the user chose included. Everything
+  // is downloaded into LocalState\Downloads and the shell copies it to the
+  // chosen folder -- or the phone's Downloads\Gecko -- once it is complete.
+  // Keep in step with DownloadIntegration.getPreferredDownloadsDirectory.
+  if (const char* staging = PR_GetEnv("GECKO_W10M_DOWNLOAD_STAGING");
+      staging && *staging) {
+    nsCOMPtr<nsIFile> dir;
+    if (NS_SUCCEEDED(NS_NewLocalFile(NS_ConvertUTF8toUTF16(staging),
+                                     getter_AddRefs(dir)))) {
+      if (!aSkipChecks) {
+        (void)EnsureDirectoryExists(dir);
+      }
+      return dir;
+    }
+  }
+#  endif
   // Try to get the users download location, if it's set.
   switch (Preferences::GetInt(NS_PREF_DOWNLOAD_FOLDERLIST, -1)) {
     case NS_FOLDER_VALUE_DESKTOP: {

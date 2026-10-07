@@ -36,6 +36,14 @@ class HeadlessClipboard final : public nsBaseClipboard {
       ClipboardType aWhichClipboard) override;
 
  private:
+#if defined(GECKO_W10M)
+  // Takes what the shell last read from the phone's clipboard, if that
+  // changed since the last look. Main thread; the global clipboard only.
+  void GeckoW10mTakePhoneText(ClipboardType aWhichClipboard);
+  // The shell's reading this clipboard last took (or set aside as older
+  // than a copy made here).
+  uint32_t mGeckoW10mSeenSerial = 0;
+#endif
   UniquePtr<HeadlessClipboardData>
       mClipboards[nsIClipboard::kClipboardTypeCount];
 };

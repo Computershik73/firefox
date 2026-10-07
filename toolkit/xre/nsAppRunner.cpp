@@ -5822,6 +5822,12 @@ int XREMain::XRE_mainStartup(bool* aExitFlag,
 #endif
 
   bool lastStartupWasCrash = CheckLastStartupWasCrash();
+#if defined(GECKO_W10M)
+  GeckoW10mStartupMark(lastStartupWasCrash
+                           ? "startup: the last launch ended before it was "
+                             "called a success -- caches purged"
+                           : "startup: the last launch was a success");
+#endif
 
   CrashReporter::RecordAnnotationBool(
       CrashReporter::Annotation::LastStartupWasCrash, lastStartupWasCrash);

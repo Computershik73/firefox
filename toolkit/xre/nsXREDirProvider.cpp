@@ -93,6 +93,10 @@
 #  define APP_REGISTRY_NAME "appreg"
 #endif
 
+#if defined(GECKO_W10M)
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 #define PREF_OVERRIDE_DIRNAME "preferences"
 
 nsXREDirProvider* gDirServiceProvider = nullptr;
@@ -634,6 +638,24 @@ nsXREDirProvider::DoStartup() {
       rv = appStartup->TrackStartupCrashBegin(&safeModeNecessary);
       if (NS_FAILED(rv) && rv != NS_ERROR_NOT_AVAILABLE)
         NS_WARNING("Error while beginning startup crash tracking");
+#if defined(GECKO_W10M)
+      {
+        // Firefox's own count of launches that ended before it called the
+        // start a success, and whether it is about to quit for Safe Mode --
+        // which an app on the phone cannot restart into, so the quit is all
+        // that would happen (toolkit.startup.max_resumed_crashes is -1 for
+        // that reason, tools/build-appx.sh).
+        nsPrintfCString note(
+            "startup crashes: %d recent, max %d, last success %d -> safe mode "
+            "%s",
+            mozilla::Preferences::GetInt("toolkit.startup.recent_crashes", 0),
+            mozilla::Preferences::GetInt(
+                "toolkit.startup.max_resumed_crashes", -1),
+            mozilla::Preferences::GetInt("toolkit.startup.last_success", 0),
+            safeModeNecessary ? "NEEDED" : "no");
+        GeckoW10mNote(note.get());
+      }
+#endif
 
       if (!gSafeMode && safeModeNecessary) {
         appStartup->RestartInSafeMode(nsIAppStartup::eForceQuit);

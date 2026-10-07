@@ -146,8 +146,21 @@ const char* AppShutdown::GetShutdownPhaseName(ShutdownPhase aPhase) {
       aPhase)];
 }
 
+#if defined(GECKO_W10M)
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 void AppShutdown::MaybeDoRestart() {
   if (sShutdownMode == AppShutdownMode::Restart) {
+#if defined(GECKO_W10M)
+    // An app on the phone cannot start a second copy of itself; a restart
+    // here is only an exit. Said in the log, and no child is launched.
+    GeckoW10mNote("restart: asked for, but this port cannot restart itself; "
+                  "exiting -- open the browser again");
+    StopLateWriteChecks();
+    UnlockProfile();
+    return;
+#endif
     StopLateWriteChecks();
 
     // Since we'll be launching our child while we're still alive, make sure

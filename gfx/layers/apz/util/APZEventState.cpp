@@ -86,6 +86,9 @@ void APZEventState::ProcessSingleTap(const CSSPoint& aPoint,
 
 
   if (mTouchEndCancelled) {
+#if defined(GECKO_W10M)
+    GeckoW10mNote("tap: the page cancelled touchend -- no click");
+#endif
     return;
   }
 

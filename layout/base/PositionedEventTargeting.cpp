@@ -750,6 +750,10 @@ static const nsIFrame* FindZIndexAncestor(const nsIFrame* aTarget,
 static nsIFrame* FindFrameTargetedByInputEventUnnoted(
     WidgetGUIEvent* aEvent, RelativeTo aRootFrame,
     const nsPoint& aPointRelativeToRootFrame, uint32_t aFlags);
+// What was exactly under the point in the last call, before the radius had
+// its say: kept by that call, so the note needs no second hit test of its
+// own on every touch. Main thread; read at once, before anything can go.
+static nsIFrame* sGeckoW10mExactTarget = nullptr;
 
 static nsCString GeckoW10mDescribe(nsIFrame* aFrame) {
   if (!aFrame) {
@@ -793,8 +797,7 @@ nsIFrame* FindFrameTargetedByInputEvent(
   if (aEvent->mMessage == eMouseDown && aEvent->mClass == eMouseEventClass &&
       aEvent->AsMouseEvent()->mInputSource ==
           dom::MouseEvent_Binding::MOZ_SOURCE_TOUCH) {
-    nsIFrame* exact =
-        nsLayoutUtils::GetFrameForPoint(aRootFrame, aPointRelativeToRootFrame);
+    nsIFrame* exact = sGeckoW10mExactTarget;
     const CSSPoint css = CSSPoint::FromAppUnits(aPointRelativeToRootFrame);
     nsPresContext* pc = aRootFrame.mFrame->PresContext();
     PresShell* shell = pc->PresShell();
@@ -820,6 +823,21 @@ nsIFrame* FindFrameTargetedByInputEvent(
         GeckoW10mDescribe(exact).get(),
         result == exact ? "the same" : GeckoW10mDescribe(result).get());
     GeckoW10mNote(note.get());
+  } else if (aEvent->mMessage == eTouchStart) {
+    // A touch's events -- touchstart, pointerdown, and through implicit
+    // capture everything after them -- go where the touch radius sends the
+    // touchstart, which is not where the click goes. Noted only when it
+    // moved the target, which on a page that listens for touches is the
+    // case worth seeing.
+    nsIFrame* exact = sGeckoW10mExactTarget;
+    if (result != exact) {
+      const CSSPoint css = CSSPoint::FromAppUnits(aPointRelativeToRootFrame);
+      nsPrintfCString note(
+          "touch: at %.0f,%.0f CSS px under the finger %s, touchstart sent to %s",
+          double(css.x.value), double(css.y.value),
+          GeckoW10mDescribe(exact).get(), GeckoW10mDescribe(result).get());
+      GeckoW10mNote(note.get());
+    }
   }
   return result;
 }
@@ -840,6 +858,9 @@ nsIFrame* FindFrameTargetedByInputEvent(
   nsIFrame* target = nsLayoutUtils::GetFrameForPoint(
       aRootFrame, aPointRelativeToRootFrame, options);
   nsIFrame* initialTarget = target;
+#if defined(GECKO_W10M)
+  sGeckoW10mExactTarget = target;
+#endif
   PET_LOG(
       "Found initial target %s for event class %s message %s point %s "
       "relative to root frame %s\n",

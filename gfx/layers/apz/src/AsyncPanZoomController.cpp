@@ -2004,6 +2004,20 @@ nsEventStatus AsyncPanZoomController::HandleEndOfPan() {
   MOZ_ASSERT(GetCurrentTouchBlock() || GetCurrentPanGestureBlock());
   GetCurrentInputBlock()->GetOverscrollHandoffChain()->FlushRepaints();
   ParentLayerPoint flingVelocity = GetVelocityVector();
+#if defined(GECKO_W10M)
+  {
+    // One line per swipe that pans: how fast the finger was measured to go.
+    // A fling to the end of a page shows here as a speed no finger makes;
+    // none at all as 0.
+    nsPrintfCString note(
+        "fling: %.1f,%.1f px/ms from the finger (a fling above %.1f); "
+        "rested %.0f ms before panning",
+        flingVelocity.x.value, flingVelocity.y.value,
+        StaticPrefs::apz_fling_min_velocity_threshold(),
+        mTouchStartRestingTimeBeforePan.ToMilliseconds());
+    GeckoW10mNote(note.get());
+  }
+#endif
 
   // Clear our velocities; if DispatchFling() gives the fling to us,
   // the fling velocity gets *added* to our existing velocity in

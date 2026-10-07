@@ -202,6 +202,12 @@ nsEventStatus GestureEventListener::HandleInputTouchSingleStart() {
         // allow the second tap to participate in a gesture
         // (e.g. lead to a single tap, or a double tap if an additional
         // tap occurs near the same location).
+#if defined(GECKO_W10M)
+        if (mSingleTapSent.isSome() && !mSingleTapSent.value()) {
+          GeckoW10mNote("tap: a second tap far from the first came before the "
+                        "first was confirmed -- the first gives no click");
+        }
+#endif
         mSingleTapSent = Nothing();
         EnterFirstSingleTouchDown();
       } else {
@@ -485,6 +491,13 @@ nsEventStatus GestureEventListener::HandleInputTouchEnd() {
 
     case GESTURE_SECOND_SINGLE_TOUCH_DOWN: {
       MOZ_ASSERT(mSingleTapSent.isSome());
+#if defined(GECKO_W10M)
+      // Two taps close in time and place: on a page that may zoom that is a
+      // double tap, and neither one clicks.
+      GeckoW10mNote(mSingleTapSent.value()
+                        ? "tap: a second tap close to the first -- it clicks"
+                        : "tap: a double tap -- a zoom, neither tap clicks");
+#endif
       mAsyncPanZoomController->HandleGestureEvent(CreateTapEvent(
           mLastTouchInput, mSingleTapSent.value()
                                ? TapGestureInput::TAPGESTURE_SECOND
@@ -580,6 +593,10 @@ void GestureEventListener::HandleInputTimeoutLongTap() {
       CancelMaxTapTimeoutTask();
       [[fallthrough]];
     case GESTURE_FIRST_SINGLE_TOUCH_MAX_TAP_DOWN: {
+#if defined(GECKO_W10M)
+      GeckoW10mNote("tap: held past the long-press delay -- a context menu "
+                    "when it lifts, no click");
+#endif
       SetState(GESTURE_LONG_TOUCH_DOWN);
       mAsyncPanZoomController->HandleGestureEvent(
           CreateTapEvent(mLastTouchInput, TapGestureInput::TAPGESTURE_LONG));

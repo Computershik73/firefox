@@ -24,6 +24,11 @@
 #define FAKE_ONDEVICECHANGE_EVENT_PERIOD_IN_MS 500
 
 static mozilla::LazyLogModule sGetUserMediaLog("GetUserMedia");
+#if defined(GECKO_W10M)
+#  include "nsPrintfCString.h"
+extern "C" void GeckoW10mNote(const char*);
+#endif
+
 #define LOG(...) \
   MOZ_LOG_FMT(sGetUserMediaLog, mozilla::LogLevel::Debug, __VA_ARGS__)
 
@@ -203,6 +208,21 @@ void MediaEngineWebRTC::EnumerateMicrophoneDevices(
       }
     }
   }
+#if defined(GECKO_W10M)
+  // A site asking for the microphone is told there is none (NotFoundError)
+  // when this comes back empty, before anyone is asked anything.
+  {
+    size_t enabled = 0;
+    for (const auto& deviceInfo : *devices) {
+      if (deviceInfo->State() == CUBEB_DEVICE_STATE_ENABLED) {
+        ++enabled;
+      }
+    }
+    nsPrintfCString note("capture: %zu microphone(s), %zu usable",
+                         size_t(devices->Length()), enabled);
+    GeckoW10mNote(note.get());
+  }
+#endif
 }
 
 void MediaEngineWebRTC::EnumerateSpeakerDevices(

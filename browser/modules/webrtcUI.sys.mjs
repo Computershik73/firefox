@@ -930,6 +930,13 @@ export var webrtcUI = {
 };
 
 function getGlobalIndicator() {
+  // Windows 10 Mobile: the indicator is a second, always-on-top dialog
+  // window. The phone shows one window, and an open dialog takes every tap
+  // (widget/headless), so for as long as the microphone was live the page
+  // under it -- the call's own controls included -- could not be touched.
+  if (Services.prefs.getBoolPref("gecko.webrtc.globalIndicator.disabled", false)) {
+    return null;
+  }
   const INDICATOR_CHROME_URI = "chrome://browser/content/webrtcIndicator.xhtml";
   let features = "chrome,titlebar=no,alwaysontop,minimizable,dialog";
 

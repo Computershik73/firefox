@@ -305,6 +305,11 @@ typedef enum {
 #endif
 } AudioClient2Option;
 
+#if defined(GECKO_W10M)
+extern "C" void
+GeckoW10mNote(const char *);
+#endif
+
 struct cubeb {
   cubeb_ops const * ops = &wasapi_ops;
   owned_critical_section lock;
@@ -2381,6 +2386,18 @@ setup_wasapi_stream_one_side(cubeb_stream * stm,
       LOG("Could not activate the device to get an audio"
           " client for %s: error: %lx\n",
           DIRECTION_NAME, hr);
+#if defined(GECKO_W10M)
+      {
+        // E_ACCESSDENIED for the input: the phone's microphone consent
+        // (Settings > Privacy > Microphone) is off or was never given.
+        char note[128];
+        snprintf(note, sizeof(note),
+                 "audio: the %s device would not open (0x%08lx)%s",
+                 DIRECTION_NAME, static_cast<unsigned long>(hr),
+                 hr == E_ACCESSDENIED ? ", no consent" : "");
+        GeckoW10mNote(note);
+      }
+#endif
       // A particular device can't be activated because it has been
       // unplugged, try fall back to the default audio device.
       if (devid && hr == AUDCLNT_E_DEVICE_INVALIDATED && allow_fallback) {
@@ -2475,7 +2492,15 @@ setup_wasapi_stream_one_side(cubeb_stream * stm,
       if (device_info.latency_hi == 0) {
         LOG("Input: could not query latency_hi to guess safe latency");
         wasapi_destroy_device(&device_info);
+#if defined(GECKO_W10M)
+        // The latency comes from activating the device once more, which a
+        // phone may refuse where the real activation above went through.
+        // Keep the default latency rather than give up on the microphone.
+        GeckoW10mNote("audio: no input latency to go by, keeping the default");
+        goto input_settings_done;
+#else
         return CUBEB_ERROR;
+#endif
       }
       // This multiplicator has been found empirically.
       uint32_t latency_frames = device_info.latency_hi * 8;
@@ -2496,6 +2521,9 @@ setup_wasapi_stream_one_side(cubeb_stream * stm,
       LOG("Could not get cubeb_device_info. Skip customizing input settings");
     }
   }
+#if defined(GECKO_W10M)
+input_settings_done:
+#endif
 
   if (stream_params->prefs & CUBEB_STREAM_PREF_RAW) {
     if (initialize_iaudioclient2(audio_client, CUBEB_AUDIO_CLIENT2_RAW) !=

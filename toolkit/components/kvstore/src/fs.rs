@@ -41,7 +41,22 @@ impl WidePathBuf {
         #[cfg(windows)]
         {
             use std::{ffi::OsString, os::windows::prelude::*};
-            std::fs::canonicalize(OsString::from_wide(&*self.0))
+            let path = OsString::from_wide(&*self.0);
+            // Windows 10 Mobile: std::fs::canonicalize ends in
+            // GetFinalPathNameByHandleW, and turning the Data volume (mounted
+            // at C:\Data, where the profile lives) back into a drive path is
+            // a mount manager query the app container may not make -- "Access
+            // is denied" for a directory the app can read and write. Every
+            // caller passes an absolute profile path, the same way each time,
+            // so normalizing the string is as good a key and a directory.
+            #[cfg(target_vendor = "uwp")]
+            {
+                std::fs::canonicalize(&path).or_else(|_| std::path::absolute(&path))
+            }
+            #[cfg(not(target_vendor = "uwp"))]
+            {
+                std::fs::canonicalize(path)
+            }
         }
         #[cfg(unix)]
         {

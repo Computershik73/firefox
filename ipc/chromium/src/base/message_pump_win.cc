@@ -86,23 +86,38 @@ int MessagePumpWin::GetCurrentDelay() const {
 //-----------------------------------------------------------------------------
 // MessagePumpForUI public:
 
-MessagePumpForUI::MessagePumpForUI() { InitMessageWnd(); }
+MessagePumpForUI::MessagePumpForUI() {
+  InitMessageWnd();
+#if defined(GECKO_W10M)
+  wake_event_ = ::CreateEventW(nullptr, FALSE, FALSE, nullptr);
+#endif
+}
 
 MessagePumpForUI::~MessagePumpForUI() {
   DestroyWindow(message_hwnd_);
   UnregisterClass(kWndClass, GetModuleHandle(NULL));
+#if defined(GECKO_W10M)
+  if (wake_event_) {
+    ::CloseHandle(wake_event_);
+  }
+#endif
 }
 
 void MessagePumpForUI::ScheduleWork() {
   if (InterlockedExchange(&have_work_, 1))
     return;  // Someone else continued the pumping.
 
+#if defined(GECKO_W10M)
+  // No message would arrive (see wake_event_); WaitForWork wakes on this.
+  ::SetEvent(wake_event_);
+#else
   // Make sure the MessagePump does some work for us.
   PostMessage(message_hwnd_, kMsgHaveWork, reinterpret_cast<WPARAM>(this), 0);
 
   // In order to wake up any cross-process COM calls which may currently be
   // pending on the main thread, we also have to post a UI message.
   PostMessage(message_hwnd_, WM_NULL, 0, 0);
+#endif
 }
 
 void MessagePumpForUI::ScheduleDelayedWork(const TimeTicks& delayed_work_time) {
@@ -247,7 +262,15 @@ void MessagePumpForUI::WaitForWork() {
   if (delay < 0)  // Negative value means no timers waiting.
     delay = INFINITE;
 
+#if defined(GECKO_W10M)
+  ::WaitForSingleObject(wake_event_, static_cast<DWORD>(delay));
+  // What HandleWorkMessage does when the posted message arrives: the next
+  // ScheduleWork has to signal again. Cleared before the loop looks for
+  // work, so work posted from here on is either found by it or signals anew.
+  InterlockedExchange(&have_work_, 0);
+#else
   mozilla::widget::WinUtils::WaitForMessage(delay);
+#endif
 }
 
 void MessagePumpForUI::HandleWorkMessage() {

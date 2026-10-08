@@ -182,6 +182,16 @@ class MessagePumpForUI : public MessagePumpWin {
   // A hidden message-only window.
   HWND message_hwnd_;
 
+#if defined(GECKO_W10M)
+  // Windows 10 Mobile has no window messages: CreateWindow and PostMessage
+  // are stubs there, so the window above is never made and a posted message
+  // never arrives. A thread waiting in WaitForWork slept for good, and work
+  // posted to it later was never run -- the VideoCapture thread, and with
+  // it every getUserMedia after the first device list. Work is announced
+  // through this event instead.
+  HANDLE wake_event_ = nullptr;
+#endif
+
  private:
   static LRESULT CALLBACK WndProcThunk(HWND hwnd, UINT message, WPARAM wparam,
                                        LPARAM lparam);

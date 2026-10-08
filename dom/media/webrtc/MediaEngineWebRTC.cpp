@@ -26,6 +26,7 @@
 static mozilla::LazyLogModule sGetUserMediaLog("GetUserMedia");
 #if defined(GECKO_W10M)
 #  include "nsPrintfCString.h"
+#  include <algorithm>
 #  include "mozilla/Atomics.h"
 extern "C" void GeckoW10mNote(const char*);
 #endif
@@ -227,15 +228,22 @@ void MediaEngineWebRTC::EnumerateMicrophoneDevices(
   // when this comes back empty, before anyone is asked anything.
   {
     size_t enabled = 0;
+    size_t longest = 0;
     for (const auto& deviceInfo : *devices) {
       if (deviceInfo->State() == CUBEB_DEVICE_STATE_ENABLED) {
         ++enabled;
       }
+      longest = std::max(longest, size_t(deviceInfo->Name().Length()));
     }
+    // The longest name too: pages and the permission prompt build lists
+    // from these names, and one that is not a name -- garbage thousands of
+    // characters long -- would be a reason for them to run out of memory.
     static Atomic<uint32_t> sMicrophoneNotes{0};
     if (sMicrophoneNotes++ < 40) {
-      nsPrintfCString note("capture: %zu microphone(s), %zu usable",
-                           size_t(devices->Length()), enabled);
+      nsPrintfCString note(
+          "capture: %zu microphone(s), %zu usable, the longest name %zu "
+          "characters",
+          size_t(devices->Length()), enabled, longest);
       GeckoW10mNote(note.get());
     }
   }

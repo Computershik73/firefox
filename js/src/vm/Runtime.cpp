@@ -680,6 +680,7 @@ js::HashNumber JSRuntime::randomHashCode() {
 #if defined(GECKO_W10M)
 #  include <algorithm>
 
+#  include "jsapi.h"
 #  include "mozilla/Sprintf.h"
 #  include "util/WindowsWrapper.h"
 extern "C" void GeckoW10mNote(const char* text);
@@ -693,7 +694,7 @@ extern "C" IMAGE_DOS_HEADER __ImageBase;
 // says who asked.
 static void GeckoW10mNoteMallocFailure(JSRuntime* aRuntime,
                                        AllocFunction aFunc, size_t aBytes,
-                                       void* aCaller) {
+                                       void* aCaller, JSContext* aCx) {
   static mozilla::Atomic<uint32_t> sNotes{0};
   if (sNotes++ >= 8) {
     return;
@@ -727,6 +728,60 @@ static void GeckoW10mNoteMallocFailure(JSRuntime* aRuntime,
                  unsigned((uintptr_t(aCaller) & ~uintptr_t(1)) -
                           uintptr_t(&__ImageBase)));
   GeckoW10mNote(note);
+
+  // The direct caller is a vector's allocation policy, which says nothing.
+  // The script running at the time does -- a page's own, or the browser's --
+  // and so do the native callers further up, for tools/symbolize.py. The
+  // stack walker is looked up, not imported: an import the phone lacks
+  // would stop xul.dll from loading at all.
+  if (aCx && js::CurrentThreadCanAccessRuntime(aRuntime) && !aCx->realm()) {
+    // Atoms are made outside any realm, and then no caller can be named.
+    GeckoW10mNote("js: it was in the atoms zone, no script can be named");
+  } else if (aCx && js::CurrentThreadCanAccessRuntime(aRuntime)) {
+    JS::AutoFilename file;
+    uint32_t line = 0;
+    JS::ColumnNumberOneOrigin column;
+    if (JS::DescribeScriptedCaller(&file, aCx, &line, &column) && file.get()) {
+      char where[200];
+      SprintfLiteral(where, "%s", file.get());
+      // No query or fragment: the log is a file people send.
+      for (char* c = where; *c; ++c) {
+        if (*c == '?' || *c == '#') {
+          *c = 0;
+          break;
+        }
+      }
+      SprintfLiteral(note, "js: the script running then: %s:%u:%u", where,
+                     line, column.oneOriginValue());
+      GeckoW10mNote(note);
+    } else {
+      GeckoW10mNote("js: no script was running then");
+    }
+  }
+  using CaptureFn = USHORT(WINAPI*)(ULONG, ULONG, PVOID*, PULONG);
+  static const auto capture = reinterpret_cast<CaptureFn>(::GetProcAddress(
+      ::GetModuleHandleW(L"ntdll.dll"), "RtlCaptureStackBackTrace"));
+  if (capture) {
+    void* frames[24];
+    const USHORT count = capture(1, 24, frames, nullptr);
+    const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(
+        reinterpret_cast<const char*>(&__ImageBase) + __ImageBase.e_lfanew);
+    const uintptr_t begin = uintptr_t(&__ImageBase);
+    const uintptr_t end = begin + headers->OptionalHeader.SizeOfImage;
+    int length = SprintfLiteral(note, "js: native callers (%u frames):", count);
+    int listed = 0;
+    for (USHORT i = 0; i < count && listed < 10 && length > 0 &&
+                       length < int(sizeof(note)) - 16;
+         ++i) {
+      const uintptr_t pc = uintptr_t(frames[i]) & ~uintptr_t(1);
+      if (pc >= begin && pc < end) {
+        length += snprintf(note + length, sizeof(note) - length, " +0x%x",
+                           unsigned(pc - begin));
+        ++listed;
+      }
+    }
+    GeckoW10mNote(note);
+  }
 }
 #endif
 
@@ -765,7 +820,7 @@ JS_PUBLIC_API void* JSRuntime::onOutOfMemory(AllocFunction allocFunc,
     }
 #if defined(GECKO_W10M)
     GeckoW10mNoteMallocFailure(this, allocFunc, nbytes,
-                               __builtin_return_address(0));
+                               __builtin_return_address(0), maybecx);
 #endif
   }
 

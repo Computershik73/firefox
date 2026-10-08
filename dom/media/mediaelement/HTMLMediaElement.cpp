@@ -165,6 +165,11 @@ extern mozilla::LazyLogModule gAutoplayPermissionLog;
 using namespace mozilla::layers;
 using namespace mozilla::dom::HTMLMediaElement_Binding;
 
+#if defined(GECKO_W10M)
+#  include "nsPrintfCString.h"
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 namespace mozilla::dom {
 
 using AudibleState = AudioChannelService::AudibleState;
@@ -5185,6 +5190,18 @@ already_AddRefed<Promise> HTMLMediaElement::Play(ErrorResult& aRv) {
     }
 #endif
     AUTOPLAY_LOG("reject MediaElement {} to play", fmt::ptr(this));
+#if defined(GECKO_W10M)
+    {
+      static uint32_t sRefusedNotes = 0;  // main thread only
+      if (sRefusedNotes++ < 20) {
+        GeckoW10mNote(nsPrintfCString(
+                          "media: play() not allowed to start (autoplay), "
+                          "muted %s, a stream %s",
+                          Muted() ? "yes" : "no", mSrcStream ? "yes" : "no")
+                          .get());
+      }
+    }
+#endif
     AsyncRejectPendingPlayPromises(NS_ERROR_DOM_MEDIA_NOT_ALLOWED_ERR);
   }
   return promise.forget();

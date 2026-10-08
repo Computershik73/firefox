@@ -32,6 +32,12 @@ using namespace webrtc;
 #define MONO 1
 #define MAX_SAMPLING_FREQ 48000  // Hz - multiple of 100
 
+#if defined(GECKO_W10M)
+#  include "mozilla/Atomics.h"
+#  include "nsPrintfCString.h"
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 namespace mozilla {
 
 using dom::MediaSourceEnum;
@@ -404,6 +410,22 @@ nsresult MediaEngineWebRTCMicrophoneSource::Start() {
   MOZ_ASSERT(mState == kAllocated || mState == kStopped);
 
   ApplySettings(mCurrentPrefs);
+
+#if defined(GECKO_W10M)
+  {
+    static Atomic<uint32_t> sStartNotes{0};
+    if (sStartNotes++ < 40) {
+      GeckoW10mNote(
+          nsPrintfCString(
+              "capture: the microphone starts -- echo cancellation %s, gain "
+              "control %s, noise suppression %s, %d channel(s)",
+              mCurrentPrefs.mAecOn ? "on" : "off",
+              mCurrentPrefs.mAgcOn ? "on" : "off",
+              mCurrentPrefs.mNoiseOn ? "on" : "off", mCurrentPrefs.mChannels)
+              .get());
+    }
+  }
+#endif
 
   CubebUtils::AudioDeviceID deviceID = mDeviceInfo->DeviceID();
   NS_DispatchToMainThread(NS_NewRunnableFunction(

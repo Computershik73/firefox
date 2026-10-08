@@ -834,6 +834,12 @@ class AudioCallbackDriver final : public GraphDriver,
   /* If using a fallback driver, this is the duration to wait after failing to
    * start it before attempting to start it again. */
   TimeDuration mNextReInitBackoffStep;
+#if defined(GECKO_W10M)
+  // When the stream last failed after it had taken over the graph, and how
+  // many times in a row that came within seconds of the one before.
+  TimeStamp mGeckoW10mLastRunningFailure;
+  Atomic<uint32_t> mGeckoW10mQuickFailures{0};
+#endif
   /* If using a fallback driver, this is the next time we'll try to start the
    * audio stream. */
   TimeStamp mNextReInitAttempt;

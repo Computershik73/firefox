@@ -799,6 +799,19 @@ static FlipType FlipFromAttribute(nsMenuPopupFrame* aFrame) {
     return FlipType::None;
   }
   if (flip.EqualsLiteral("both")) {
+#if defined(GECKO_W10M)
+    // The phone's theme (mobile-config-firefox) makes every panel as wide as
+    // the screen. Flipped "both", which panel.js gives every arrow panel, one
+    // opened from an icon mid-way along the address bar was cut down to the
+    // room right of the icon and ran past the screen's edge: the microphone
+    // prompt lost its bottom-right corner, where Allow is. On Wayland, which
+    // the theme is made for, the compositor moves such a popup back on
+    // screen; here an arrow panel slides along the screen instead.
+    if (aFrame->PopupElement().AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
+                                           nsGkAtoms::arrow, eCaseMatters)) {
+      return FlipType::Slide;
+    }
+#endif
     return FlipType::Both;
   }
   if (flip.EqualsLiteral("slide")) {

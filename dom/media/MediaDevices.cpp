@@ -29,6 +29,10 @@
 #include "nsPIDOMWindowInlines.h"
 #include "nsQueryObject.h"
 
+#if defined(GECKO_W10M)
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 namespace mozilla::dom {
 
 using ConstDeviceSetPromise = MediaManager::ConstDeviceSetPromise;
@@ -121,6 +125,21 @@ already_AddRefed<Promise> MediaDevices::GetUserMedia(
             p->MaybeResolve(std::move(aStream));
           },
           [this, self, p](const RefPtr<MediaMgrError>& error) {
+#if defined(GECKO_W10M)
+            // The page is told only the name; this says it in the log,
+            // forty times a run (a page may retry in a loop).
+            static uint32_t sRefusedNotes = 0;  // main thread only
+            if (sRefusedNotes++ < 40) {
+              nsAutoCString note("gum: refused -- ");
+              AppendUTF16toUTF8(error->mNameString, note);
+              if (!error->mConstraint.IsEmpty()) {
+                note.AppendLiteral(" (");
+                AppendUTF16toUTF8(error->mConstraint, note);
+                note.AppendLiteral(")");
+              }
+              GeckoW10mNote(note.get());
+            }
+#endif
             nsPIDOMWindowInner* window = GetWindowIfCurrent();
             if (!window) {
               return;  // Leave Promise pending after navigation by design.

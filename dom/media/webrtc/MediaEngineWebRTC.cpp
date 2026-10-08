@@ -26,6 +26,7 @@
 static mozilla::LazyLogModule sGetUserMediaLog("GetUserMedia");
 #if defined(GECKO_W10M)
 #  include "nsPrintfCString.h"
+#  include "mozilla/Atomics.h"
 extern "C" void GeckoW10mNote(const char*);
 #endif
 
@@ -115,6 +116,19 @@ void MediaEngineWebRTC::EnumerateVideoDevices(
   camera::CaptureEngine capEngine =
       MediaEngineRemoteVideoSource::CaptureEngine(aMediaSource);
   num = GetChildAndCall(&CamerasChild::NumberOfCaptureDevices, capEngine);
+#if defined(GECKO_W10M)
+  // Every full device list asks for cameras; this asking never came back
+  // while the camera thread could not be woken, and nothing after it ran.
+  // Forty a run: a page may enumerate in a loop.
+  static Atomic<uint32_t> sCameraNotes{0};
+  if (sCameraNotes++ < 40) {
+    GeckoW10mNote(nsPrintfCString("capture: %d %s source(s)", num,
+                                  aMediaSource == MediaSourceEnum::Camera
+                                      ? "camera"
+                                      : "screen capture")
+                      .get());
+  }
+#endif
 
   for (int i = 0; i < num; i++) {
     char deviceName[MediaEngineSource::kMaxDeviceNameLength];
@@ -218,9 +232,12 @@ void MediaEngineWebRTC::EnumerateMicrophoneDevices(
         ++enabled;
       }
     }
-    nsPrintfCString note("capture: %zu microphone(s), %zu usable",
-                         size_t(devices->Length()), enabled);
-    GeckoW10mNote(note.get());
+    static Atomic<uint32_t> sMicrophoneNotes{0};
+    if (sMicrophoneNotes++ < 40) {
+      nsPrintfCString note("capture: %zu microphone(s), %zu usable",
+                           size_t(devices->Length()), enabled);
+      GeckoW10mNote(note.get());
+    }
   }
 #endif
 }

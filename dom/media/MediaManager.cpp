@@ -3232,6 +3232,16 @@ RefPtr<MediaManager::StreamPromise> MediaManager::GetUserMedia(
         })));
   }
   RefPtr<MediaManager> self = this;
+#if defined(GECKO_W10M)
+  // Forty a run: a page may call in a loop.
+  static uint32_t sCalledNotes = 0;  // main thread only
+  if (sCalledNotes++ < 40) {
+    GeckoW10mNote(nsPrintfCString("gum: called -- %s%s",
+                                  hasAudio ? "audio" : "",
+                                  hasVideo ? " video" : "")
+                      .get());
+  }
+#endif
   return EnumerateDevicesImpl(
              aWindow, CreateEnumerationParams(videoType, audioType, flags))
       ->Then(

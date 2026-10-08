@@ -291,7 +291,38 @@ nsresult nsConsoleService::LogMessageWithMode(
     // a write.
     nsCString text;
     aMessage->ToString(text);
-    if (text.Find("[JavaScript Warning:") == kNotFound) {
+    bool keep = text.Find("[JavaScript Warning:") == kNotFound;
+    if (!keep) {
+      // A script or a stylesheet that failed to load is only a warning, and
+      // a page that never draws because of one leaves no other trace --
+      // discord.com went white with nothing in the log. Those are kept,
+      // forty a run at most.
+      static mozilla::Atomic<uint32_t> sLoaderNotes{0};
+      nsCOMPtr<nsIScriptError> scriptError = do_QueryInterface(aMessage);
+      nsCString category;
+      // Web fonts report under "CSS Loader" too, a line per font; they
+      // are not what this is for and would use the allowance up.
+      if (scriptError &&
+          NS_SUCCEEDED(scriptError->GetCategory(getter_Copies(category))) &&
+          (category.EqualsLiteral("Script Loader") ||
+           (category.EqualsLiteral("CSS Loader") &&
+            text.Find("downloadable font:") == kNotFound)) &&
+          sLoaderNotes++ < 40) {
+        keep = true;
+        // The address of what failed, without its query: the log is a file
+        // people send, and a query can carry a token.
+        int32_t query;
+        while ((query = text.FindChar('?')) != kNotFound) {
+          int32_t end = query;
+          while (end < int32_t(text.Length()) && text[end] != '"' &&
+                 text[end] != ' ' && text[end] != '\xE2') {
+            ++end;
+          }
+          text.Cut(query, end - query);
+        }
+      }
+    }
+    if (keep) {
       nsCString note("console: ");
       note.Append(text);
       GeckoW10mNote(note.get());

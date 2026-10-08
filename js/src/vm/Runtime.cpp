@@ -677,6 +677,59 @@ js::HashNumber JSRuntime::randomHashCode() {
   return HashNumber(randomHashCodeGenerator_->next());
 }
 
+#if defined(GECKO_W10M)
+#  include <algorithm>
+
+#  include "mozilla/Sprintf.h"
+#  include "util/WindowsWrapper.h"
+extern "C" void GeckoW10mNote(const char* text);
+extern "C" IMAGE_DOS_HEADER __ImageBase;
+
+// An allocation the engine needed failed, and failed again after empty GC
+// chunks were given back. On the 32-bit phone that is the address space in
+// pieces more often than memory used up -- one log had 890 MB free and a
+// failure all the same. The size, the free address space and its largest
+// piece say which; the caller's address, run through tools/symbolize.py,
+// says who asked.
+static void GeckoW10mNoteMallocFailure(JSRuntime* aRuntime,
+                                       AllocFunction aFunc, size_t aBytes,
+                                       void* aCaller) {
+  static mozilla::Atomic<uint32_t> sNotes{0};
+  if (sNotes++ >= 8) {
+    return;
+  }
+  size_t freeBytes = 0, largest = 0, pieces = 0;
+  MEMORY_BASIC_INFORMATION info;
+  uintptr_t at = 0x10000;
+  while (VirtualQuery(reinterpret_cast<void*>(at), &info, sizeof(info)) ==
+         sizeof(info)) {
+    if (info.State == MEM_FREE) {
+      freeBytes += info.RegionSize;
+      largest = std::max(largest, size_t(info.RegionSize));
+      ++pieces;
+    }
+    const uintptr_t next = uintptr_t(info.BaseAddress) + info.RegionSize;
+    if (next <= at) {
+      break;
+    }
+    at = next;
+  }
+  char note[256];
+  SprintfLiteral(note,
+                 "js: %s of %zu bytes failed (%s runtime); address space %zu "
+                 "MB free in %zu pieces, the largest %zu MB; asked from "
+                 "xul.dll+0x%08x",
+                 aFunc == AllocFunction::Malloc   ? "malloc"
+                 : aFunc == AllocFunction::Calloc ? "calloc"
+                                                  : "realloc",
+                 aBytes, aRuntime->isMainRuntime() ? "main" : "worker",
+                 freeBytes >> 20, pieces, largest >> 20,
+                 unsigned((uintptr_t(aCaller) & ~uintptr_t(1)) -
+                          uintptr_t(&__ImageBase)));
+  GeckoW10mNote(note);
+}
+#endif
+
 JS_PUBLIC_API void* JSRuntime::onOutOfMemory(AllocFunction allocFunc,
                                              arena_id_t arena, size_t nbytes,
                                              void* reallocPtr,
@@ -710,6 +763,10 @@ JS_PUBLIC_API void* JSRuntime::onOutOfMemory(AllocFunction allocFunc,
     if (p) {
       return p;
     }
+#if defined(GECKO_W10M)
+    GeckoW10mNoteMallocFailure(this, allocFunc, nbytes,
+                               __builtin_return_address(0));
+#endif
   }
 
   if (maybecx) {

@@ -21,6 +21,10 @@ class HeadlessScreenHelper final : public ScreenManager::Helper {
  public:
   // Main thread only. Replaces the one screen with one of this size.
   static void GeckoW10mSetScreen(int32_t aWidth, int32_t aHeight);
+  // Main thread only. The part of the screen the browser's window has --
+  // less the status bar, the navigation bar and the keyboard -- which is
+  // where popups have to stay.
+  static void GeckoW10mSetRoom(int32_t aWidth, int32_t aHeight);
 #endif
 };
 

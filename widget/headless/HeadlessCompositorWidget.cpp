@@ -1119,6 +1119,9 @@ extern "C" __declspec(dllexport) void gecko_w10m_resize(int32_t aWidth,
   mozilla::widget::gGeckoW10mPendingHeight = aHeight;
   NS_DispatchToMainThread(
       NS_NewRunnableFunction("gecko_w10m_resize", [aWidth, aHeight]() {
+        // The screen's available area first: the window is kept inside it.
+        mozilla::widget::HeadlessScreenHelper::GeckoW10mSetRoom(aWidth,
+                                                                aHeight);
         auto* widget = mozilla::widget::HeadlessWidget::ShownWidget();
         if (!widget) {
           return;

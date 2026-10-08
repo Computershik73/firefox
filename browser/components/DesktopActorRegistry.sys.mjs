@@ -31,6 +31,12 @@ let JSPROCESSACTORS = {
         "recording-window-ended",
       ],
     },
+    // Without content processes (Windows 10 Mobile runs single-process) web
+    // pages live in the parent process, and a process actor that is not
+    // included there never sees these notifications: getUserMedia never
+    // asked anyone and never settled, and RTCPeerConnection's offer and
+    // answer waited for good -- no microphone and no calls at all.
+    includeParent: !Services.appinfo.browserTabsRemoteAutostart,
     safeForUntrustedWebProcess: true,
   },
 

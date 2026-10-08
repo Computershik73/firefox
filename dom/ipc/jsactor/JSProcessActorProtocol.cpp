@@ -12,6 +12,10 @@
 #include "mozilla/dom/JSProcessActorBinding.h"
 #include "mozilla/dom/PContent.h"
 #include "nsContentUtils.h"
+#if defined(GECKO_W10M)
+#  include "nsTHashSet.h"
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
 
 namespace mozilla::dom {
 
@@ -69,6 +73,24 @@ JSProcessActorProtocol::FromWebIDLOptions(const nsACString& aName,
 NS_IMETHODIMP JSProcessActorProtocol::Observe(nsISupports* aSubject,
                                               const char* aTopic,
                                               const char16_t* aData) {
+#if defined(GECKO_W10M)
+  // Without content processes a process actor that is not included in the
+  // parent never receives what it observes, and nothing says so: this is how
+  // getUserMedia went unanswered on Windows 10 Mobile. Said once per actor
+  // and topic.
+  if (XRE_IsParentProcess() && !mIncludeParent) {
+    static nsTHashSet<nsCString> sNoted;  // main thread only
+    nsAutoCString key(mName);
+    key.Append(' ');
+    key.Append(aTopic);
+    if (sNoted.EnsureInserted(key)) {
+      nsAutoCString note("jsactor: ");
+      note.Append(key);
+      note.AppendLiteral(" dropped -- the actor is not in the parent process");
+      GeckoW10mNote(note.get());
+    }
+  }
+#endif
   MOZ_ASSERT(nsContentUtils::IsSafeToRunScript());
 
   RefPtr<JSActorManager> manager;

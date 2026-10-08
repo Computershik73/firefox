@@ -144,6 +144,11 @@ class nsMainThreadPtrHolder<
 #endif
 };
 
+#if defined(GECKO_W10M)
+#  include "nsPrintfCString.h"
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
+
 namespace mozilla {
 
 LazyLogModule gMediaManagerLog("MediaManager");
@@ -3362,18 +3367,41 @@ RefPtr<MediaManager::StreamPromise> MediaManager::GetUserMedia(
                 self->AddTaskAndGetCount(windowID, callID, std::move(task));
 
             if (!askPermission) {
+#if defined(GECKO_W10M)
+              GeckoW10mNote("gum: allowed without asking");
+#endif
               self->NotifyAllowed(callID, *aDevices);
             } else {
+#if defined(GECKO_W10M)
+              // Before the move below.
+              const size_t deviceCount = aDevices->Length();
+#endif
               auto req = MakeRefPtr<GetUserMediaRequest>(
                   window, callID, std::move(aDevices), c, isSecure,
                   isHandlingUserInput);
               if (!Preferences::GetBool("media.navigator.permission.force") &&
                   taskCount > 1) {
+#if defined(GECKO_W10M)
+                GeckoW10mNote(nsPrintfCString("gum: queued behind %zu pending",
+                                              taskCount - 1)
+                                  .get());
+#endif
                 // there is at least 1 pending gUM request
                 // For the scarySources test case, always send the
                 // request
                 self->mPendingGUMRequest.AppendElement(req.forget());
               } else {
+#if defined(GECKO_W10M)
+                // A request that is asked and never answered shows up as an
+                // "asking" line with no "answered" after it.
+                GeckoW10mNote(
+                    nsPrintfCString("gum: asking -- %s%s, %zu device(s), "
+                                    "user input %s",
+                                    hasAudio ? "audio" : "",
+                                    hasVideo ? " video" : "", deviceCount,
+                                    isHandlingUserInput ? "yes" : "no")
+                        .get());
+#endif
                 nsCOMPtr<nsIObserverService> obs =
                     services::GetObserverService();
                 obs->NotifyObservers(req, "getUserMedia:request", nullptr);
@@ -3601,6 +3629,9 @@ RefPtr<LocalDevicePromise> MediaManager::SelectAudioOutput(
                 // there is at least 1 pending gUM request
                 self->mPendingGUMRequest.AppendElement(req.forget());
               } else {
+#if defined(GECKO_W10M)
+                GeckoW10mNote("gum: asking -- where to play sound");
+#endif
                 nsCOMPtr<nsIObserverService> obs =
                     services::GetObserverService();
                 obs->NotifyObservers(req, "getUserMedia:request", nullptr);
@@ -3976,6 +4007,9 @@ void MediaManager::Shutdown() {
 void MediaManager::SendPendingGUMRequest() {
   if (mPendingGUMRequest.Length() > 0) {
     nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
+#if defined(GECKO_W10M)
+    GeckoW10mNote("gum: asking -- a request that was queued");
+#endif
     obs->NotifyObservers(mPendingGUMRequest[0], "getUserMedia:request",
                          nullptr);
     mPendingGUMRequest.RemoveElementAt(0);
@@ -4019,6 +4053,11 @@ nsresult MediaManager::Observe(nsISupports* aSubject, const char* aTopic,
   MOZ_ASSERT(NS_IsMainThread());
 
   MediaMgrError::Name gumNoAccessError = MediaMgrError::Name::NotAllowedError;
+#if defined(GECKO_W10M)
+  if (!strncmp(aTopic, "getUserMedia:response:", 22)) {
+    GeckoW10mNote(nsPrintfCString("gum: answered %s", aTopic + 22).get());
+  }
+#endif
 
   if (!strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID)) {
     nsCOMPtr<nsIPrefBranch> branch(do_QueryInterface(aSubject));

@@ -288,17 +288,24 @@ nsresult nsConsoleService::LogMessageWithMode(
   {
     // Errors and chrome messages go to the device log. Warnings do not:
     // they are CSP and deprecation notices, dozens per page, and each was
-    // a write.
+    // a write. Nothing from a private window: it leaves no trace on the
+    // device, and that includes this log.
+    nsCOMPtr<nsIScriptError> scriptError = do_QueryInterface(aMessage);
+    bool fromPrivate = false;
+    if (scriptError) {
+      scriptError->GetIsFromPrivateWindow(&fromPrivate);
+    }
     nsCString text;
-    aMessage->ToString(text);
-    bool keep = text.Find("[JavaScript Warning:") == kNotFound;
-    if (!keep) {
+    if (!fromPrivate) {
+      aMessage->ToString(text);
+    }
+    bool keep = !fromPrivate && text.Find("[JavaScript Warning:") == kNotFound;
+    if (!fromPrivate && !keep) {
       // A script or a stylesheet that failed to load is only a warning, and
       // a page that never draws because of one leaves no other trace --
       // discord.com went white with nothing in the log. Those are kept,
       // forty a run at most.
       static mozilla::Atomic<uint32_t> sLoaderNotes{0};
-      nsCOMPtr<nsIScriptError> scriptError = do_QueryInterface(aMessage);
       nsCString category;
       // Web fonts report under "CSS Loader" too, a line per font; they
       // are not what this is for and would use the allowance up.
@@ -309,20 +316,55 @@ nsresult nsConsoleService::LogMessageWithMode(
             text.Find("downloadable font:") == kNotFound)) &&
           sLoaderNotes++ < 40) {
         keep = true;
-        // The address of what failed, without its query: the log is a file
-        // people send, and a query can carry a token.
-        int32_t query;
-        while ((query = text.FindChar('?')) != kNotFound) {
-          int32_t end = query;
-          while (end < int32_t(text.Length()) && text[end] != '"' &&
-                 text[end] != ' ' && text[end] != '\xE2') {
-            ++end;
-          }
-          text.Cut(query, end - query);
-        }
       }
     }
     if (keep) {
+      // A note line holds about 500 bytes (GeckoW10mNote), and a page can
+      // throw an error megabytes long: everything past this is never written,
+      // and cutting addresses out of it would take minutes.
+      if (text.Length() > 2048) {
+        text.Truncate(2048);
+      }
+      // Addresses without a user name or password, query or fragment: the
+      // log is a file people send, and those carry tokens and ids (an
+      // analytics hit carries the visitor's). Only inside an address, so a
+      // '?' in prose is left alone. An address ends at a double quote, a
+      // space, a line break or a curly quote's first byte; not at an
+      // apostrophe, which a path may hold unescaped.
+      auto ends = [&text](int32_t aAt) {
+        const char c = text[aAt];
+        return c == '"' || c == ' ' || c == '\n' || c == '\xE2';
+      };
+      int32_t from = 0;
+      int32_t scheme;
+      while ((scheme = text.Find("://", from)) != kNotFound) {
+        const int32_t start = scheme + 3;
+        int32_t at = kNotFound;
+        for (int32_t i = start; i < int32_t(text.Length()) && !ends(i) &&
+                                text[i] != '/' && text[i] != '?' &&
+                                text[i] != '#';
+             ++i) {
+          if (text[i] == '@') {
+            at = i;
+          }
+        }
+        if (at != kNotFound) {
+          text.Cut(start, at + 1 - start);
+        }
+        int32_t end = start;
+        int32_t cut = kNotFound;
+        while (end < int32_t(text.Length()) && !ends(end)) {
+          if (cut == kNotFound && (text[end] == '?' || text[end] == '#')) {
+            cut = end;
+          }
+          ++end;
+        }
+        if (cut != kNotFound) {
+          text.Cut(cut, end - cut);
+          end = cut;
+        }
+        from = end;
+      }
       nsCString note("console: ");
       note.Append(text);
       GeckoW10mNote(note.get());

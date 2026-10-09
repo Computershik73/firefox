@@ -325,6 +325,18 @@ extern "C" {
     fn SwglGpuAttach(device: *mut c_void) -> bool;
     fn SwglGpuAttachNewDevice(max_level: i32, warp: bool) -> bool;
     fn SwglGpuStats(out8: *mut u32);
+    fn SwglGpuWarmup(
+        budget_us: c_int,
+        keep: bool,
+        hook: Option<unsafe extern "C" fn(*mut c_void, *const c_char, c_int) -> bool>,
+        data: *mut c_void,
+    ) -> bool;
+    fn SwglGpuShaderReport(
+        sum: *mut c_char,
+        sum_len: usize,
+        refused: *mut c_char,
+        refused_len: usize,
+    ) -> u32;
     fn SwglGpuSetTextureTarget(
         tex: GLuint,
         d3d_texture: *mut c_void,
@@ -400,6 +412,31 @@ impl Context {
         let mut out = [0u32; 8];
         unsafe { SwglGpuStats(out.as_mut_ptr()) };
         out
+    }
+
+    /// The pixel shader probe (SwglGpuWarmup in gpu_d3d11.h) in one go:
+    /// creates and keeps every GPU variant's pixel shader no draw has made
+    /// yet. For the test harness, to check the probe's program table against
+    /// load_gpu_shader. Returns the probe's summary and the refused programs.
+    /// The context must be current.
+    pub fn gpu_warmup_all(&self) -> (String, String) {
+        let mut sum = [0 as c_char; 512];
+        let mut refused = [0 as c_char; 512];
+        unsafe {
+            while !SwglGpuWarmup(1 << 30, true, None, ptr::null_mut()) {}
+            SwglGpuShaderReport(
+                sum.as_mut_ptr(),
+                sum.len(),
+                refused.as_mut_ptr(),
+                refused.len(),
+            );
+            (
+                CStr::from_ptr(sum.as_ptr()).to_string_lossy().into_owned(),
+                CStr::from_ptr(refused.as_ptr())
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        }
     }
 
     pub fn init_default_framebuffer(

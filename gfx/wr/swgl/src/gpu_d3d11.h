@@ -26,6 +26,11 @@
 // row, so memory layouts match and viewport and scissor rectangles carry
 // over unchanged.
 
+// What SwglGpuWarmup asks its caller around each pixel shader it creates:
+// phase 0 just before (returning false leaves that program to its first
+// draw), phase 1 just after. aName is the program's static name.
+typedef bool (*SwglGpuWarmupHook)(void* aData, const char* aName, int aPhase);
+
 #if defined(_WIN32) && SWGL_GPU_SHADERS
 
 #  define SWGL_GPU 1
@@ -77,6 +82,24 @@ static int64_t texture_bytes(ID3D11Texture2D* t) {
   D3D11_TEXTURE2D_DESC d;
   t->GetDesc(&d);
   return texel_bytes(d.Format, d.Width, d.Height);
+}
+
+// Microseconds since a QueryPerformanceCounter reading: how long creating a
+// pixel shader took, for the log. Only shader creation is timed, which
+// happens a few dozen times a run, never per draw.
+static uint32_t qpc_us_since(const LARGE_INTEGER& a) {
+  static LONGLONG freq = 0;
+  if (!freq) {
+    LARGE_INTEGER f;
+    freq = QueryPerformanceFrequency(&f) && f.QuadPart > 0 ? f.QuadPart : 1;
+  }
+  LARGE_INTEGER b;
+  QueryPerformanceCounter(&b);
+  LONGLONG d = b.QuadPart - a.QuadPart;
+  if (d <= 0) return 0;
+  uint64_t us =
+      uint64_t(d / freq) * 1000000 + uint64_t(d % freq) * 1000000 / freq;
+  return us > 0xFFFFFFFFu ? 0xFFFFFFFFu : uint32_t(us);
 }
 
 }  // namespace swgl_gpu
@@ -173,6 +196,15 @@ struct GpuBackend {
   bool rg8_ok = false;
   bool rgba32f_ok = false;
 
+  // For the device line in the log (SwglGpuDescribe), read once at attach:
+  // the D3D11_FORMAT_SUPPORT masks of R8, RG8, RGBA32F, D24S8 and BGRA8, and
+  // what CheckFeatureSupport says about threading, the architecture, minimum
+  // precision, non-power-of-two textures and unified memory. -1 is a query
+  // that failed.
+  UINT fmt[5] = {};
+  signed char conc_creates = -1, cmd_lists = -1, tbdr = -1, uma = -1, np2 = -1;
+  int ps_minprec = -1;
+
   ID3D11VertexShader* vs[9] = {};
   ID3D11InputLayout* il[9] = {};
   ID3D11VertexShader* clear_vs = nullptr;
@@ -206,8 +238,35 @@ struct GpuBackend {
   ID3D11DepthStencilState* depth_clear = nullptr;
   std::unordered_map<uint64_t, ID3D11BlendState*> blends;
   std::unordered_map<const GpuProgramInfo*, ID3D11PixelShader*> pixel_shaders;
-  // Programs whose pixel shader the device refused.
-  std::unordered_map<const GpuProgramInfo*, bool> refused;
+  // Programs whose pixel shader the device refused, and what it answered.
+  std::unordered_map<const GpuProgramInfo*, HRESULT> refused;
+
+  // The pixel shader probe (SwglGpuWarmup). A pixel shader is otherwise made
+  // on its program's first draw, inside that frame; the probe makes the ones
+  // no draw has asked for yet, at idle, a few milliseconds at a time, so the
+  // frame that first needs one finds it made -- or finds it refused, as the
+  // draw path would have. `list` is the programs still to make, largest
+  // bytecode first; `next` the one to make next.
+  struct Warm {
+    bool listed = false, done = false;
+    // What ended the probe early (out of memory, the device lost), or S_OK.
+    HRESULT stopped = S_OK;
+    std::vector<const GpuProgramInfo*> list;
+    size_t next = 0;
+    // accepted and refused: what the probe made. before: made by a draw
+    // first. skipped: debug programs, and those whose flat data needs the
+    // float texture this device lacks. guarded: left out by the caller's
+    // hook (a crash on an earlier probe).
+    uint16_t accepted = 0, refused = 0, before = 0, skipped = 0, guarded = 0;
+    uint32_t batches = 0, total_us = 0, slowest_us = 0, bytes = 0;
+    const char* slowest = nullptr;
+  } warm;
+
+  // Pixel shaders the draw path made inside frames (pixel_shader) since the
+  // last SwglGpuFrameShaderStats: how many, how long in all and the slowest.
+  // SwglGpuStats leaves them alone.
+  uint32_t frame_made = 0, frame_made_us = 0, frame_made_max_us = 0;
+  const char* frame_made_slowest = nullptr;
 
   std::vector<float> verts;
   std::vector<float> flats;
@@ -320,16 +379,60 @@ static bool init_backend(GpuBackend* g) {
              (support & D3D11_FORMAT_SUPPORT_TEXTURE2D) &&
              (support & D3D11_FORMAT_SUPPORT_RENDER_TARGET) &&
              (support & D3D11_FORMAT_SUPPORT_SHADER_SAMPLE);
+  g->fmt[0] = support;
   support = 0;
   g->rg8_ok = SUCCEEDED(g->dev->CheckFormatSupport(DXGI_FORMAT_R8G8_UNORM,
                                                    &support)) &&
               (support & D3D11_FORMAT_SUPPORT_TEXTURE2D) &&
               (support & D3D11_FORMAT_SUPPORT_SHADER_SAMPLE);
+  g->fmt[1] = support;
   support = 0;
   g->rgba32f_ok =
       SUCCEEDED(g->dev->CheckFormatSupport(DXGI_FORMAT_R32G32B32A32_FLOAT,
                                            &support)) &&
       (support & D3D11_FORMAT_SUPPORT_TEXTURE2D);
+  g->fmt[2] = support;
+  // These two, and the feature queries below, only go to the log: depth is
+  // assumed to be D24S8 (gl_format_on_gpu) and every colour target is
+  // BGRA8, so what the driver says about them is worth seeing on a 9_3 phone.
+  support = 0;
+  if (SUCCEEDED(g->dev->CheckFormatSupport(DXGI_FORMAT_D24_UNORM_S8_UINT,
+                                           &support))) {
+    g->fmt[3] = support;
+  }
+  support = 0;
+  if (SUCCEEDED(
+          g->dev->CheckFormatSupport(DXGI_FORMAT_B8G8R8A8_UNORM, &support))) {
+    g->fmt[4] = support;
+  }
+  {
+    D3D11_FEATURE_DATA_THREADING th = {};
+    if (SUCCEEDED(g->dev->CheckFeatureSupport(D3D11_FEATURE_THREADING, &th,
+                                              sizeof(th)))) {
+      g->conc_creates = th.DriverConcurrentCreates ? 1 : 0;
+      g->cmd_lists = th.DriverCommandLists ? 1 : 0;
+    }
+    D3D11_FEATURE_DATA_ARCHITECTURE_INFO ai = {};
+    if (SUCCEEDED(g->dev->CheckFeatureSupport(D3D11_FEATURE_ARCHITECTURE_INFO,
+                                              &ai, sizeof(ai)))) {
+      g->tbdr = ai.TileBasedDeferredRenderer ? 1 : 0;
+    }
+    D3D11_FEATURE_DATA_SHADER_MIN_PRECISION_SUPPORT mp = {};
+    if (SUCCEEDED(g->dev->CheckFeatureSupport(
+            D3D11_FEATURE_SHADER_MIN_PRECISION_SUPPORT, &mp, sizeof(mp)))) {
+      g->ps_minprec = int(mp.PixelShaderMinPrecision);
+    }
+    D3D11_FEATURE_DATA_D3D9_OPTIONS d9 = {};
+    if (SUCCEEDED(g->dev->CheckFeatureSupport(D3D11_FEATURE_D3D9_OPTIONS, &d9,
+                                              sizeof(d9)))) {
+      g->np2 = d9.FullNonPow2TextureSupport ? 1 : 0;
+    }
+    D3D11_FEATURE_DATA_D3D11_OPTIONS2 o2 = {};
+    if (SUCCEEDED(g->dev->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS2, &o2,
+                                              sizeof(o2)))) {
+      g->uma = o2.UnifiedMemoryArchitecture ? 1 : 0;
+    }
+  }
 
   const unsigned char* vs_code[9] = {nullptr,      swgl_gpu_vs1, swgl_gpu_vs2,
                                      swgl_gpu_vs3, swgl_gpu_vs4, swgl_gpu_vs5,
@@ -1009,13 +1112,75 @@ static ID3D11PixelShader* pixel_shader(GpuBackend* g,
   auto it = g->pixel_shaders.find(info);
   if (it != g->pixel_shaders.end()) return it->second;
   if (g->refused.count(info)) return nullptr;
+  // Made here, inside a frame, on the program's first draw: timed, so the
+  // log can say what that costs the frame (SwglGpuFrameShaderStats). At most
+  // once per program and run.
+  LARGE_INTEGER t0;
+  QueryPerformanceCounter(&t0);
   ID3D11PixelShader* ps = nullptr;
-  if (FAILED(g->dev->CreatePixelShader(info->ps, info->ps_size, nullptr, &ps))) {
-    g->refused[info] = true;
+  HRESULT hr = g->dev->CreatePixelShader(info->ps, info->ps_size, nullptr, &ps);
+  uint32_t us = qpc_us_since(t0);
+  g->frame_made++;
+  g->frame_made_us += us;
+  if (!g->frame_made_slowest || us > g->frame_made_max_us) {
+    g->frame_made_max_us = us;
+    g->frame_made_slowest = info->name;
+  }
+  if (FAILED(hr)) {
+    g->refused[info] = hr;
     return nullptr;
   }
   g->pixel_shaders[info] = ps;
   return ps;
+}
+
+// The probe's list (GpuBackend::Warm), made once: every program with a GPU
+// variant whose pixel shader no draw has made or been refused yet, largest
+// bytecode first -- the slowest creates go to the first idle moment, the
+// likeliest to stay idle. Debug programs are left out, and so are those
+// whose flat data needs the float texture when there is none: gpu_check
+// sends them to the CPU before it asks for their pixel shader.
+static void warm_list(GpuBackend* g) {
+  GpuBackend::Warm& w = g->warm;
+  if (w.listed) return;
+  w.listed = true;
+  for (auto* fn = swgl_gpu_program_infos; *fn; ++fn) {
+    const GpuProgramInfo* info = (*fn)();
+    if (!info) continue;
+    if (!strncmp(info->name, "debug_", 6) ||
+        strstr(info->name, "DEBUG_OVERDRAW")) {
+      w.skipped++;
+      continue;
+    }
+    if (info->texture_floats > 0 && !g->flat_srv) {
+      w.skipped++;
+      continue;
+    }
+    if (g->pixel_shaders.count(info) || g->refused.count(info)) {
+      w.before++;
+      continue;
+    }
+    w.list.push_back(info);
+  }
+  // Largest first, by insertion: a few dozen entries, once a run. Not
+  // std::sort, whose unqualified swap finds glsl::swap too (GpuProgramInfo
+  // lives in namespace glsl) and cannot choose.
+  for (size_t i = 1; i < w.list.size(); i++) {
+    const GpuProgramInfo* p = w.list[i];
+    size_t j = i;
+    for (; j > 0 && w.list[j - 1]->ps_size < p->ps_size; j--) {
+      w.list[j] = w.list[j - 1];
+    }
+    w.list[j] = p;
+  }
+}
+
+// A program's name for the log, without the "_gpuv" every GPU variant's
+// name ends in.
+static void short_name(const char* name, char* out, size_t size) {
+  size_t n = strlen(name);
+  if (n >= 5 && !strcmp(name + n - 5, "_gpuv")) n -= 5;
+  snprintf(out, size, "%.*s", int(n), name);
 }
 
 static void set_target(GpuBackend* g, Texture& colortex, Texture* depthtex) {
@@ -2060,18 +2225,206 @@ void SwglGpuDescribe(char* out, size_t size) {
     snprintf(out, size, "no device");
     return;
   }
-  int programs = 0;
-  for (auto* p : ctx->programs) {
-    if (p && p->gpu_impl && p->gpu_impl->gpu_info()) programs++;
+  // Then each format's support in five letters: Texture2D, Shader sample,
+  // Render target, Blendable, Depth-stencil, '-' where it is missing. And
+  // the driver's answers to CheckFeatureSupport, '?' where it gave none.
+  char fmts[5][6];
+  for (int i = 0; i < 5; i++) {
+    const UINT bits[5] = {D3D11_FORMAT_SUPPORT_TEXTURE2D,
+                          D3D11_FORMAT_SUPPORT_SHADER_SAMPLE,
+                          D3D11_FORMAT_SUPPORT_RENDER_TARGET,
+                          D3D11_FORMAT_SUPPORT_BLENDABLE,
+                          D3D11_FORMAT_SUPPORT_DEPTH_STENCIL};
+    for (int b = 0; b < 5; b++) {
+      fmts[i][b] = (g->fmt[i] & bits[b]) ? "TSRBD"[b] : '-';
+    }
+    fmts[i][5] = 0;
+  }
+  auto flag = [](signed char v) { return v < 0 ? '?' : v ? '1' : '0'; };
+  char minprec[12];
+  if (g->ps_minprec < 0) {
+    snprintf(minprec, sizeof(minprec), "?");
+  } else {
+    snprintf(minprec, sizeof(minprec), "%x", unsigned(g->ps_minprec));
   }
   snprintf(out, size,
            "feature level %x, R8 targets %s, RG8 textures %s (NV12 video), "
-           "float textures %s (flat data and gradients %s), max texture %d",
+           "float textures %s (flat data and gradients %s), max texture %d; "
+           "formats [TSRBD] R8 %s RG8 %s RGBA32F %s D24S8 %s BGRA8 %s; "
+           "creates concurrent %c, command lists %c; tile-based %c; unified "
+           "memory %c; ps min precision %s; 9_x non-pow2 %c",
            unsigned(g->level), g->r8_ok ? "yes" : "no (BGRA instead)",
            g->rg8_ok ? "yes" : "no",
            g->rgba32f_ok ? "yes" : "NO", g->rgba32f_ok ? "on the GPU" : "on the CPU",
-           gpu_max_texture_size());
-  (void)programs;
+           gpu_max_texture_size(), fmts[0], fmts[1], fmts[2], fmts[3], fmts[4],
+           flag(g->conc_creates), flag(g->cmd_lists), flag(g->tbdr),
+           flag(g->uma), minprec, flag(g->np2));
+}
+
+// The pixel shader probe: creates, on the current context's device, the
+// pixel shaders of the programs no draw has used yet (GpuBackend::Warm), for
+// up to budget_us microseconds -- at least one create a call -- and returns
+// true once there is nothing left to do. The caller calls it at idle, never
+// inside a frame. keep: hold on to what the device accepted, so first draws
+// find it made; otherwise release it, which only tests acceptance. What the
+// device refuses goes into GpuBackend::refused, as the draw path would put
+// it. Out of memory or a lost device ends the probe for the run, marking
+// nothing. hook, if any, is asked before and told after each create.
+bool SwglGpuWarmup(int budget_us, bool keep, SwglGpuWarmupHook hook,
+                   void* data) {
+  using namespace swgl_gpu;
+  GpuBackend* g = ctx ? ctx->gpu : nullptr;
+  if (!g || g->broken || g->warm.done) return true;
+  GpuBackend::Warm& w = g->warm;
+  warm_list(g);
+  uint32_t budget = budget_us > 0 ? uint32_t(budget_us) : 0;
+  LARGE_INTEGER t0;
+  QueryPerformanceCounter(&t0);
+  w.batches++;
+  while (w.next < w.list.size()) {
+    const GpuProgramInfo* info = w.list[w.next++];
+    if (g->pixel_shaders.count(info) || g->refused.count(info)) {
+      // A frame made it meanwhile.
+      w.before++;
+      continue;
+    }
+    if (hook && !hook(data, info->name, 0)) {
+      // Left to its first draw, as without the probe.
+      w.guarded++;
+      continue;
+    }
+    LARGE_INTEGER a;
+    QueryPerformanceCounter(&a);
+    ID3D11PixelShader* ps = nullptr;
+    HRESULT hr =
+        g->dev->CreatePixelShader(info->ps, info->ps_size, nullptr, &ps);
+    uint32_t us = qpc_us_since(a);
+    if (hook) hook(data, info->name, 1);
+    w.total_us += us;
+    w.bytes += uint32_t(info->ps_size);
+    if (!w.slowest || us > w.slowest_us) {
+      w.slowest_us = us;
+      w.slowest = info->name;
+    }
+    if (SUCCEEDED(hr)) {
+      w.accepted++;
+      if (ps) {
+        if (keep) {
+          g->pixel_shaders[info] = ps;
+        } else {
+          ps->Release();
+        }
+      }
+    } else if (hr == E_OUTOFMEMORY || hr == DXGI_ERROR_DEVICE_REMOVED ||
+               hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_DEVICE_HUNG) {
+      // Says nothing about the program: left unmarked, and the probe stops
+      // for this run.
+      w.stopped = hr;
+      w.next--;
+      break;
+    } else {
+      w.refused++;
+      g->refused[info] = hr;
+    }
+    if (qpc_us_since(t0) >= budget) break;
+  }
+  w.done = w.stopped != S_OK || w.next >= w.list.size();
+  return w.done;
+}
+
+// Before the probe's first create: how many programs it has to make, and
+// the largest one's name and bytecode size. Null if there are none.
+const char* SwglGpuWarmupPeek(uint32_t* count, uint32_t* largest_bytes) {
+  GpuBackend* g = ctx ? ctx->gpu : nullptr;
+  *count = 0;
+  *largest_bytes = 0;
+  if (!g || g->broken) return nullptr;
+  swgl_gpu::warm_list(g);
+  GpuBackend::Warm& w = g->warm;
+  if (w.next >= w.list.size()) return nullptr;
+  *count = uint32_t(w.list.size() - w.next);
+  *largest_bytes = uint32_t(w.list[w.next]->ps_size);
+  return w.list[w.next]->name;
+}
+
+// For the log. sum (if any): what the probe did, its counts and times. ref:
+// every program whose pixel shader the device refused, the draw path's
+// refusals included, with what it answered, cut short with "+N more" to fit.
+// Returns how many programs were refused in all.
+uint32_t SwglGpuShaderReport(char* sum, size_t sum_len, char* ref,
+                             size_t ref_len) {
+  using namespace swgl_gpu;
+  GpuBackend* g = ctx ? ctx->gpu : nullptr;
+  if (sum && sum_len) sum[0] = 0;
+  if (ref && ref_len) ref[0] = 0;
+  if (!g) return 0;
+  uint32_t total = uint32_t(g->refused.size());
+  if (sum && sum_len) {
+    const GpuBackend::Warm& w = g->warm;
+    char slowest[96] = "-";
+    if (w.slowest) short_name(w.slowest, slowest, sizeof(slowest));
+    char stopped[32] = "";
+    if (w.stopped != S_OK) {
+      snprintf(stopped, sizeof(stopped), ", stopped 0x%08lx",
+               (unsigned long)w.stopped);
+    }
+    snprintf(sum, sum_len,
+             "%u accepted / %u refused of %u probed (%u made before, %u "
+             "skipped as guarded, %u debug or no flat texture)%s; %u.%u ms "
+             "creating in %u batches, slowest %s %u.%u ms, %u KB bytecode",
+             unsigned(w.accepted), unsigned(w.refused),
+             unsigned(w.accepted + w.refused), unsigned(w.before),
+             unsigned(w.guarded), unsigned(w.skipped), stopped,
+             unsigned(w.total_us / 1000), unsigned(w.total_us % 1000 / 100),
+             unsigned(w.batches), slowest, unsigned(w.slowest_us / 1000),
+             unsigned(w.slowest_us % 1000 / 100),
+             unsigned((w.bytes + 512) / 1024));
+  }
+  if (ref && ref_len > 16) {
+    size_t pos = 0;
+    uint32_t shown = 0;
+    for (auto& r : g->refused) {
+      char name[96];
+      short_name(r.first->name, name, sizeof(name));
+      char item[128];
+      int n = snprintf(item, sizeof(item), "%s%s 0x%08lx", shown ? ", " : "",
+                       name, (unsigned long)r.second);
+      if (n <= 0 || size_t(n) >= sizeof(item) ||
+          pos + size_t(n) >= ref_len - 12) {
+        break;
+      }
+      memcpy(ref + pos, item, size_t(n));
+      pos += size_t(n);
+      ref[pos] = 0;
+      shown++;
+    }
+    if (shown < total) {
+      snprintf(ref + pos, ref_len - pos, " +%u more", unsigned(total - shown));
+    }
+  }
+  return total;
+}
+
+// Pixel shaders the draw path made inside frames since the last call: how
+// many, the microseconds that took in all and for the slowest, whose name
+// goes to *slowest; then how many programs are refused so far. Zeroes the
+// first three.
+void SwglGpuFrameShaderStats(uint32_t* out4, const char** slowest) {
+  GpuBackend* g = ctx ? ctx->gpu : nullptr;
+  if (!g) {
+    memset(out4, 0, 4 * sizeof(uint32_t));
+    *slowest = nullptr;
+    return;
+  }
+  out4[0] = g->frame_made;
+  out4[1] = g->frame_made_us;
+  out4[2] = g->frame_made_max_us;
+  out4[3] = uint32_t(g->refused.size());
+  *slowest = g->frame_made_slowest;
+  g->frame_made = 0;
+  g->frame_made_us = 0;
+  g->frame_made_max_us = 0;
+  g->frame_made_slowest = nullptr;
 }
 
 bool SwglGpuAttach(void* device) {
@@ -2259,6 +2612,22 @@ extern "C" {
 bool SwglGpuAttach(void*) { return false; }
 void SwglGpuDescribe(char* out, size_t size) {
   if (size) out[0] = 0;
+}
+bool SwglGpuWarmup(int, bool, SwglGpuWarmupHook, void*) { return true; }
+const char* SwglGpuWarmupPeek(uint32_t* count, uint32_t* largest_bytes) {
+  *count = 0;
+  *largest_bytes = 0;
+  return nullptr;
+}
+uint32_t SwglGpuShaderReport(char* sum, size_t sum_len, char* ref,
+                             size_t ref_len) {
+  if (sum && sum_len) sum[0] = 0;
+  if (ref && ref_len) ref[0] = 0;
+  return 0;
+}
+void SwglGpuFrameShaderStats(uint32_t* out4, const char** slowest) {
+  memset(out4, 0, 4 * sizeof(uint32_t));
+  *slowest = nullptr;
 }
 bool SwglGpuSetTextureTarget(GLuint, void*, GLsizei, GLsizei, GLint, GLint) {
   return false;

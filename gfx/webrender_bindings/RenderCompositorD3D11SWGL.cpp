@@ -15,7 +15,13 @@
 #include "mozilla/webrender/RenderD3D11TextureHost.h"
 #include "mozilla/widget/CompositorWidget.h"
 #if defined(GECKO_W10M)
+#  include <string.h>
+
+#  include <algorithm>
+
 #  include "mozilla/Sprintf.h"
+#  include "mozilla/StaticPrefs_gfx.h"
+#  include "nsThreadUtils.h"
 #endif
 
 // swgl (gpu_d3d11.h): pixel shading on a Direct3D 11 device.
@@ -25,6 +31,15 @@ extern "C" void SwglGpuMemoryStats(uint32_t* aOut5);
 extern "C" void SwglGpuDescribe(char* aOut, size_t aSize);
 #if defined(GECKO_W10M)
 extern "C" void GeckoW10mNote(const char* aText);
+// The pixel shader probe, and what it and the draws found (gpu_d3d11.h).
+typedef bool (*SwglGpuWarmupHook)(void* aData, const char* aName, int aPhase);
+extern "C" bool SwglGpuWarmup(int aBudgetUs, bool aKeep,
+                              SwglGpuWarmupHook aHook, void* aData);
+extern "C" const char* SwglGpuWarmupPeek(uint32_t* aCount,
+                                         uint32_t* aLargestBytes);
+extern "C" uint32_t SwglGpuShaderReport(char* aSum, size_t aSumLen, char* aRef,
+                                        size_t aRefLen);
+extern "C" void SwglGpuFrameShaderStats(uint32_t* aOut4, const char** aSlowest);
 #endif
 
 namespace mozilla {
@@ -82,10 +97,12 @@ UniquePtr<RenderCompositor> RenderCompositorD3D11SWGL::Create(
                       "targets"
                     : "gfx: SWGL could not take the device -- pixels stay on "
                       "the CPU");
-    if (result->mGpuShading) {
-      char desc[256];
+    // A device reset makes the compositor again, and the line with it.
+    static uint32_t sDeviceNotes = 0;
+    if (result->mGpuShading && sDeviceNotes++ < 4) {
+      char desc[400];
       SwglGpuDescribe(desc, sizeof(desc));
-      char note[320];
+      char note[480];
       SprintfLiteral(note, "gfx: GPU shading device: %s", desc);
       GeckoW10mNote(note);
     }
@@ -107,9 +124,259 @@ RenderCompositorD3D11SWGL::RenderCompositorD3D11SWGL(
   mSyncObject = GetCompositorD3D11()->GetSyncObject();
 }
 
+#if defined(GECKO_W10M)
+// The compositor the pixel shader probe works for, and the serial of the
+// step scheduled last; both are touched only on the render thread. A step
+// runs only if it is still the last one scheduled and its compositor still
+// the one probing, so a step left waiting by a compositor that is gone (a
+// device reset makes a new one) does nothing.
+static RenderCompositorD3D11SWGL* sWarmupOwner = nullptr;
+static uint32_t sWarmupGen = 0;
+// "GPU programs refused" lines, from the probe and from the 300-frame block.
+static uint32_t sRefusedNotes = 0;
+
+// A SWGL program's name without the "_gpuv" its GPU variant's name ends in.
+static int ShortNameLength(const char* aName) {
+  size_t length = strlen(aName);
+  if (length >= 5 && !strcmp(aName + length - 5, "_gpuv")) {
+    length -= 5;
+  }
+  return int(length);
+}
+
+// The probe's crash guard. A draw creates the pixel shaders of the programs
+// its pages use; the probe creates all of them, every run. A driver that
+// dies compiling some rarely used shader would then die every run, a few
+// seconds in, with nothing to be done short of a new build. So while a
+// create runs, swgl-gpu-probe.txt next to the note log names that program on
+// its first line ("-" otherwise), and the lines after it are the programs
+// to leave alone. A run that finds a name there knows the last probe died
+// in that create: the program joins the list, and from then on it is left
+// to its first draw, as before the probe -- never sent to the CPU, so a
+// false alarm (the system ending a suspended app mid-create) costs nothing.
+// The writes are not flushed: what a crashed process wrote is still in the
+// system cache. All of it happens at idle. Without the note log's variable,
+// or the file, the probe runs unguarded.
+static bool GuardListed(const nsCString& aSkip, const char* aName) {
+  size_t length = strlen(aName);
+  const char* line = aSkip.get();
+  while (*line) {
+    const char* end = strchr(line, '\n');
+    size_t n = end ? size_t(end - line) : strlen(line);
+    while (n && (line[n - 1] == '\r' || line[n - 1] == ' ')) {
+      n--;
+    }
+    if (n == length && !memcmp(line, aName, length)) {
+      return true;
+    }
+    if (!end) {
+      break;
+    }
+    line = end + 1;
+  }
+  return false;
+}
+
+static void GuardWrite(GpuWarmupGuard& aGuard, const char* aFirst) {
+  if (aGuard.mFile == INVALID_HANDLE_VALUE) {
+    return;
+  }
+  nsAutoCString text(aFirst);
+  text.Append('\n');
+  text.Append(aGuard.mSkip);
+  ::SetFilePointer(aGuard.mFile, 0, nullptr, FILE_BEGIN);
+  DWORD written = 0;
+  ::WriteFile(aGuard.mFile, text.get(), static_cast<DWORD>(text.Length()),
+              &written, nullptr);
+  ::SetEndOfFile(aGuard.mFile);
+}
+
+static void GuardOpen(GpuWarmupGuard& aGuard) {
+  if (aGuard.mFile != INVALID_HANDLE_VALUE) {
+    return;
+  }
+  wchar_t path[MAX_PATH] = {};
+  DWORD length =
+      ::GetEnvironmentVariableW(L"GECKO_W10M_NOTE_LOG", path, MAX_PATH);
+  if (!length || length >= MAX_PATH) {
+    return;
+  }
+  size_t dir = length;
+  while (dir > 0 && path[dir - 1] != L'\\' && path[dir - 1] != L'/') {
+    dir--;
+  }
+  static const wchar_t kName[] = L"swgl-gpu-probe.txt";
+  if (dir + sizeof(kName) / sizeof(kName[0]) > MAX_PATH) {
+    return;
+  }
+  memcpy(path + dir, kName, sizeof(kName));
+  CREATEFILE2_EXTENDED_PARAMETERS params{};
+  params.dwSize = sizeof(params);
+  params.dwFileAttributes = FILE_ATTRIBUTE_NORMAL;
+  HANDLE file =
+      ::CreateFile2(path, GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    OPEN_ALWAYS, &params);
+  if (file == INVALID_HANDLE_VALUE) {
+    return;
+  }
+  aGuard.mFile = file;
+  char buf[2048];
+  DWORD got = 0;
+  if (!::ReadFile(file, buf, sizeof(buf) - 1, &got, nullptr)) {
+    got = 0;
+  }
+  buf[got] = 0;
+  // The first line: what was being created when the last probe ended.
+  const char* rest = strchr(buf, '\n');
+  nsAutoCString first(buf, rest ? size_t(rest - buf) : strlen(buf));
+  first.Trim(" \r\t");
+  aGuard.mSkip.Assign(rest ? rest + 1 : "");
+  if (!aGuard.mSkip.IsEmpty() && aGuard.mSkip.Last() != '\n') {
+    aGuard.mSkip.Append('\n');
+  }
+  if (!first.IsEmpty() && !first.EqualsLiteral("-")) {
+    if (!GuardListed(aGuard.mSkip, first.get()) &&
+        aGuard.mSkip.Length() < 1900) {
+      aGuard.mSkip.Append(first);
+      aGuard.mSkip.Append('\n');
+    }
+    static uint32_t sSkipNotes = 0;
+    if (sSkipNotes++ < 4) {
+      char note[320];
+      SprintfLiteral(note,
+                     "gfx: GPU program probe skips %.200s: it was being "
+                     "created when the last probe ended",
+                     first.get());
+      GeckoW10mNote(note);
+    }
+  }
+  // Nothing is being created now, and the next run must not count this
+  // one's line again.
+  GuardWrite(aGuard, "-");
+}
+
+static void GuardClose(GpuWarmupGuard& aGuard) {
+  if (aGuard.mFile != INVALID_HANDLE_VALUE) {
+    ::CloseHandle(aGuard.mFile);
+    aGuard.mFile = INVALID_HANDLE_VALUE;
+  }
+}
+
+// SwglGpuWarmup's hook: phase 0 is just before a create, phase 1 just after.
+static bool GuardHook(void* aData, const char* aName, int aPhase) {
+  auto* guard = static_cast<GpuWarmupGuard*>(aData);
+  if (aPhase == 0) {
+    if (GuardListed(guard->mSkip, aName)) {
+      return false;
+    }
+    GuardWrite(*guard, aName);
+  } else {
+    GuardWrite(*guard, "-");
+  }
+  return true;
+}
+#endif
+
 RenderCompositorD3D11SWGL::~RenderCompositorD3D11SWGL() {
   LOG("RenderCompositorD3D11SWGL::~RenderCompositorD3D11SWGL()");
+#if defined(GECKO_W10M)
+  // A probe step still waiting for this compositor will do nothing.
+  if (sWarmupOwner == this) {
+    sWarmupOwner = nullptr;
+    ++sWarmupGen;
+  }
+  GuardClose(mGuard);
+#endif
 }
+
+#if defined(GECKO_W10M)
+void RenderCompositorD3D11SWGL::ScheduleGpuWarmup(uint32_t aDelayMs) {
+  sWarmupOwner = this;
+  const uint32_t gen = ++sWarmupGen;
+  RenderCompositorD3D11SWGL* self = this;
+  (void)NS_DelayedDispatchToCurrentThread(
+      NS_NewRunnableFunction("RenderCompositorD3D11SWGL::GpuWarmupStep",
+                             [self, gen]() {
+                               if (sWarmupOwner == self && sWarmupGen == gen) {
+                                 self->GpuWarmupStep();
+                               }
+                             }),
+      aDelayMs);
+}
+
+// One look at whether the render thread is idle, and if it is, one batch of
+// the probe. It runs on that thread between WebRender's tasks, never inside
+// a frame.
+void RenderCompositorD3D11SWGL::GpuWarmupStep() {
+  if (!mGpuShading || mGpuWarmupDone) {
+    return;
+  }
+  if (FAILED(GetDevice()->GetDeviceRemovedReason())) {
+    return;
+  }
+  // Idle is at most one GPU-shaded frame since the last look -- a caret's
+  // blink or a slow GIF is idle, scrolling, video and animation are not --
+  // and between two batches no frame at all. Busy looks again in half a
+  // second, and a frame between batches waits that long too.
+  const uint32_t frames = mFrameProbes - mWarmupSeenFrames;
+  mWarmupSeenFrames = mFrameProbes;
+  if (frames > (mWarmupBatching ? 0u : 1u)) {
+    mWarmupBatching = false;
+    ScheduleGpuWarmup(500);
+    return;
+  }
+  MakeCurrent();
+  const bool keep =
+      StaticPrefs::
+          gfx_webrender_software_d3d11_gpu_shading_warmup_AtStartup() >= 2;
+  if (!mWarmupBatching && !mWarmupNoted) {
+    mWarmupNoted = true;
+    GuardOpen(mGuard);
+    // Before the first create, so that a crash in one shows in the log.
+    static uint32_t sStartNotes = 0;
+    if (sStartNotes++ < 2) {
+      uint32_t count = 0, largest = 0;
+      const char* name = SwglGpuWarmupPeek(&count, &largest);
+      char note[256];
+      SprintfLiteral(note,
+                     "gfx: GPU program probe starting -- %u programs, largest "
+                     "%.*s (%u KB), %s",
+                     count, name ? ShortNameLength(name) : 1, name ? name : "-",
+                     (largest + 512) / 1024,
+                     keep ? "kept once made" : "released once made (mode 1)");
+      GeckoW10mNote(note);
+    }
+  }
+  if (!SwglGpuWarmup(4000, keep, GuardHook, &mGuard)) {
+    // About four milliseconds a batch, one create at the least; then the
+    // thread is WebRender's again for 32 ms.
+    mWarmupBatching = true;
+    ScheduleGpuWarmup(32);
+    return;
+  }
+  mGpuWarmupDone = true;
+  GuardClose(mGuard);
+  static uint32_t sReports = 0;
+  if (sReports++ < 2) {
+    char sum[400];
+    char ref[400];
+    const uint32_t refused =
+        SwglGpuShaderReport(sum, sizeof(sum), ref, sizeof(ref));
+    char note[480];
+    SprintfLiteral(note,
+                   "gfx: GPU programs -- %s; %u s after the first GPU frame",
+                   sum, unsigned((GetTickCount64() - mGpuWarmupStart) / 1000));
+    GeckoW10mNote(note);
+    if (ref[0] && sRefusedNotes < 3) {
+      sRefusedNotes++;
+      SprintfLiteral(note, "gfx: GPU programs refused: %s", ref);
+      GeckoW10mNote(note);
+    }
+    mRefusedNoted = refused;
+  }
+}
+#endif
 
 void RenderCompositorD3D11SWGL::StartCompositing(
     wr::ColorF aClearColor, const wr::DeviceIntRect* aDirtyRects,
@@ -146,12 +413,55 @@ void RenderCompositorD3D11SWGL::StartCompositing(
         tileBytes += uint64_t(surface->mTiles.size()) *
                      surface->mTileSize.width * surface->mTileSize.height * 4;
       }
-      SprintfLiteral(note, "gfx: compositor tiles -- %u of them, %u MB",
-                     unsigned(tiles), unsigned(tileBytes >> 20));
+      // And how much of the screen a composite covered on average since the
+      // last time -- what partial redraw saves, with a video or without.
+      SprintfLiteral(note,
+                     "gfx: compositor tiles -- %u of them, %u MB; composited "
+                     "%.2f of the screen a frame",
+                     unsigned(tiles), unsigned(tileBytes >> 20),
+                     mW10mCompositedFrames
+                         ? mW10mCompositedSum / mW10mCompositedFrames
+                         : 0.0);
       GeckoW10mNote(note);
+      mW10mCompositedSum = 0;
+      mW10mCompositedFrames = 0;
+      // Pixel shaders the draws made inside frames since the last block --
+      // what the probe is there to take out of them -- and programs refused
+      // since the log last named them, the draws' refusals included, so
+      // both show with the probe off as well.
+      uint32_t f[4];
+      const char* slowest = nullptr;
+      SwglGpuFrameShaderStats(f, &slowest);
+      static uint32_t sMadeNotes = 0;
+      if (f[0] && sMadeNotes < 20) {
+        sMadeNotes++;
+        SprintfLiteral(note,
+                       "gfx: pixel shaders made during frames -- %u, %u.%u ms "
+                       "in all, slowest %.*s %u.%u ms",
+                       f[0], f[1] / 1000, f[1] % 1000 / 100,
+                       slowest ? ShortNameLength(slowest) : 1,
+                       slowest ? slowest : "-", f[2] / 1000, f[2] % 1000 / 100);
+        GeckoW10mNote(note);
+      }
+      if (f[3] > mRefusedNoted && sRefusedNotes < 3) {
+        sRefusedNotes++;
+        mRefusedNoted = f[3];
+        char ref[400];
+        SwglGpuShaderReport(nullptr, 0, ref, sizeof(ref));
+        char refNote[480];
+        SprintfLiteral(refNote, "gfx: GPU programs refused: %s", ref);
+        GeckoW10mNote(refNote);
+      }
     }
 #endif
   }
+#if defined(GECKO_W10M)
+  if (!StaticPrefs::gfx_webrender_gecko_w10m_video_whole_window()) {
+    W10mStartCompositing(aClearColor, aDirtyRects, aNumDirtyRects,
+                         aOpaqueRects, aNumOpaqueRects);
+    return;
+  }
+#endif
   if (mDrewExternalImage) {
     // A video surface changes with every frame of its own, and WebRender
     // does not count that in its dirty rects: composite the whole window,
@@ -163,14 +473,170 @@ void RenderCompositorD3D11SWGL::StartCompositing(
     whole.min.y = 0;
     whole.max.x = size.width;
     whole.max.y = size.height;
+#if defined(GECKO_W10M)
+    W10mCountComposited(&whole, 1);
+#endif
     RenderCompositorLayersSWGL::StartCompositing(aClearColor, &whole, 1,
                                                  aOpaqueRects, aNumOpaqueRects);
     return;
   }
+#if defined(GECKO_W10M)
+  W10mCountComposited(aDirtyRects, aNumDirtyRects);
+#endif
   RenderCompositorLayersSWGL::StartCompositing(aClearColor, aDirtyRects,
                                                aNumDirtyRects, aOpaqueRects,
                                                aNumOpaqueRects);
 }
+
+#if defined(GECKO_W10M)
+// Partial redraw with a video on the screen. The whole-window composite above
+// was there for a video surface's own frames, but WebRender does count them:
+// it puts an external surface into its dirty rect whole every time it
+// composites one (push_compositor_surface), and invalidates where a video
+// moved, shrank or went away; CompositorD3D11 copies what did not change
+// forward from the other buffer. So the whole window was composited on every
+// video frame -- for an inline YouTube player, three times the area that
+// changed, on a GPU that has no fill to spare -- and partial redraw was off
+// whenever a video played. Here the composite is WebRender's dirty area plus,
+// as a second net, where the video is drawn now and where it was drawn last
+// time, worked out the way HandleExternalImage draws it: the host's size
+// through the surface's transform, inside its clip.
+void RenderCompositorD3D11SWGL::W10mStartCompositing(
+    wr::ColorF aClearColor, const wr::DeviceIntRect* aDirtyRects,
+    size_t aNumDirtyRects, const wr::DeviceIntRect* aOpaqueRects,
+    size_t aNumOpaqueRects) {
+  if (!mInFrame || aNumDirtyRects == 0) {
+    // Nothing changed, a video included: there is no composite to make.
+    RenderCompositorLayersSWGL::StartCompositing(aClearColor, aDirtyRects,
+                                                 aNumDirtyRects, aOpaqueRects,
+                                                 aNumOpaqueRects);
+    return;
+  }
+
+  const gfx::IntSize bufferSize = GetBufferSize().ToUnknownSize();
+  const gfx::Rect bounds(0, 0, bufferSize.width, bufferSize.height);
+  gfx::IntRect videoNow;
+  for (const auto& frameSurface : mFrameSurfaces) {
+    auto cursor = mSurfaces.find(frameSurface.mId);
+    if (cursor == mSurfaces.end()) {
+      continue;
+    }
+    Surface* surface = cursor->second.get();
+    if (!surface->mIsExternal || !surface->mExternalImage) {
+      continue;
+    }
+    gfx::IntSize size;
+    if (auto* host = surface->mExternalImage->AsRenderDXGITextureHost()) {
+      size = host->GetSize(0);
+    } else if (auto* host =
+                   surface->mExternalImage->AsRenderDXGIYCbCrTextureHost()) {
+      size = host->GetSize(0);
+    } else {
+      continue;
+    }
+    gfx::Rect drawn = frameSurface.mTransform.TransformBounds(
+        gfx::Rect(0, 0, size.width, size.height));
+    drawn = drawn.Intersect(bounds);
+    drawn.RoundOut();
+    gfx::IntRect drawnInt;
+    if (!drawn.ToIntRect(&drawnInt)) {
+      continue;
+    }
+    videoNow = videoNow.Union(drawnInt.Intersect(frameSurface.mClipRect));
+  }
+
+  if (!videoNow.IsEmpty()) {
+    static bool sModeNoted = false;
+    if (!sModeNoted) {
+      sModeNoted = true;
+      GeckoW10mNote(
+          "gfx: video frames redraw the dirty area and the video, not the "
+          "whole window");
+    }
+    // WebRender rounds its rect and this rounds out: a pixel's difference at
+    // an edge is not a video left out.
+    nsIntRegion webrender;
+    for (size_t i = 0; i < aNumDirtyRects; i++) {
+      const auto& rect = aDirtyRects[i];
+      webrender.OrWith(
+          gfx::IntRect(rect.min.x, rect.min.y, rect.width(), rect.height()));
+    }
+    gfx::IntRect inner = videoNow;
+    inner.Deflate(1);
+    static uint32_t sLeftOutNotes = 0;
+    if (!inner.IsEmpty() && !webrender.Contains(inner) && sLeftOutNotes < 5) {
+      sLeftOutNotes++;
+      char note[200];
+      SprintfLiteral(note,
+                     "gfx: WebRender's dirty rect left out a video surface "
+                     "(%d,%d %dx%d) -- added to the redraw",
+                     videoNow.x, videoNow.y, videoNow.width, videoNow.height);
+      GeckoW10mNote(note);
+    }
+  }
+
+  if (videoNow.IsEmpty() && mW10mPrevVideo.IsEmpty()) {
+    W10mCountComposited(aDirtyRects, aNumDirtyRects);
+    RenderCompositorLayersSWGL::StartCompositing(aClearColor, aDirtyRects,
+                                                 aNumDirtyRects, aOpaqueRects,
+                                                 aNumOpaqueRects);
+    return;
+  }
+
+  AutoTArray<wr::DeviceIntRect, 8> rects;
+  rects.AppendElements(aDirtyRects, aNumDirtyRects);
+  for (const gfx::IntRect* video : {&videoNow, &mW10mPrevVideo}) {
+    if (video->IsEmpty()) {
+      continue;
+    }
+    wr::DeviceIntRect rect;
+    rect.min.x = video->X();
+    rect.min.y = video->Y();
+    rect.max.x = video->XMost();
+    rect.max.y = video->YMost();
+    rects.AppendElement(rect);
+  }
+  if (rects.Length() > 4) {
+    wr::DeviceIntRect all = rects[0];
+    for (const auto& rect : rects) {
+      all.min.x = std::min(all.min.x, rect.min.x);
+      all.min.y = std::min(all.min.y, rect.min.y);
+      all.max.x = std::max(all.max.x, rect.max.x);
+      all.max.y = std::max(all.max.y, rect.max.y);
+    }
+    rects.SetLength(1);
+    rects[0] = all;
+  }
+  mW10mPrevVideo = videoNow;
+  W10mCountComposited(rects.Elements(), rects.Length());
+  RenderCompositorLayersSWGL::StartCompositing(
+      aClearColor, rects.Elements(), rects.Length(), aOpaqueRects,
+      aNumOpaqueRects);
+}
+
+// How much of the screen this composite covers, for the 300-frame note --
+// which only GPU shading writes, so only then.
+void RenderCompositorD3D11SWGL::W10mCountComposited(
+    const wr::DeviceIntRect* aRects, size_t aNumRects) {
+  if (!mGpuShading || !mInFrame || !aNumRects) {
+    return;
+  }
+  const gfx::IntSize size = GetBufferSize().ToUnknownSize();
+  if (size.width <= 0 || size.height <= 0) {
+    return;
+  }
+  nsIntRegion covered;
+  for (size_t i = 0; i < aNumRects; i++) {
+    const auto& rect = aRects[i];
+    covered.OrWith(
+        gfx::IntRect(rect.min.x, rect.min.y, rect.width(), rect.height()));
+  }
+  covered.AndWith(gfx::IntRect(gfx::IntPoint(0, 0), size));
+  mW10mCompositedSum +=
+      double(covered.Area()) / (double(size.width) * size.height);
+  mW10mCompositedFrames++;
+}
+#endif
 
 // Reads one pixel of a texture on the compositor's device (BGRA as stored).
 bool RenderCompositorD3D11SWGL::ProbePixel(ID3D11Texture2D* aTexture, int aX,
@@ -247,6 +713,20 @@ RenderedFrameId RenderCompositorD3D11SWGL::EndFrame(
   }
   if (mGpuShading) {
     mFrameProbes++;
+    // The pixel shader probe counts from the first GPU-shaded frame; after
+    // that this is the one test a frame it costs.
+    if (!mGpuWarmupScheduled) {
+      mGpuWarmupScheduled = true;
+      mGpuWarmupStart = GetTickCount64();
+      mWarmupSeenFrames = mFrameProbes;
+      if (StaticPrefs::
+              gfx_webrender_software_d3d11_gpu_shading_warmup_AtStartup() >
+          0) {
+        ScheduleGpuWarmup(
+            StaticPrefs::
+                gfx_webrender_software_d3d11_gpu_shading_warmup_delay_ms_AtStartup());
+      }
+    }
   }
 #endif
   return RenderCompositorLayersSWGL::EndFrame(aDirtyRects);
@@ -257,7 +737,12 @@ bool RenderCompositorD3D11SWGL::BeginFrame() {
     return false;
   }
 
-  mUploadMode = GetUploadMode();
+  // With GPU shading the mode stays the Upload_Staging that Create() set:
+  // upload-mode 1 would make new tiles Immediate ones, whose texture source
+  // has no Direct3D texture, and Map would hand SWGL a null one to draw into.
+  if (!mGpuShading) {
+    mUploadMode = GetUploadMode();
+  }
   return true;
 }
 
@@ -272,6 +757,57 @@ void RenderCompositorD3D11SWGL::HandleExternalImage(
     if (!host->EnsureD3D11Texture2D(GetDevice())) {
       return;
     }
+
+#if defined(GECKO_W10M)
+    // The frame order check. At feature level 9_3 every conversion leaves a
+    // rising number on its texture (DXVA2Manager.cpp); textures without one
+    // (feature level 11, NV12, software frames) are not counted. A number
+    // lower than the one this surface drew before is a frame older than the
+    // last -- the decoder's order, the compositor going back, or WebRender
+    // mixing up keys. The same texture, with no new image attached since it
+    // was drawn but a different number, was written while still on the
+    // screen: texture reuse, which the code says cannot happen.
+    if (ID3D11Texture2D* tex = host->GetD3D11Texture2D()) {
+      uint32_t seq = 0;
+      UINT seqSize = sizeof(seq);
+      if (FAILED(tex->GetPrivateData(kGeckoW10mFrameSeq, &seqSize, &seq)) ||
+          seqSize != sizeof(seq)) {
+        seq = 0;
+      }
+      auto cursor = mSurfaces.find(aFrameSurface.mId);
+      if (seq && cursor != mSurfaces.end()) {
+        static uint32_t sDraws = 0;
+        static uint32_t sOlder = 0;
+        static uint32_t sRewritten = 0;
+        static uint32_t sNotes = 0;
+        Surface* surface = cursor->second.get();
+        if (seq < surface->mW10mDrawnSeq) {
+          sOlder++;
+        }
+        if (tex == surface->mW10mDrawnTex &&
+            surface->mW10mAttaches == surface->mW10mDrawnAttach &&
+            seq != surface->mW10mDrawnSeq) {
+          sRewritten++;
+        }
+        surface->mW10mDrawnTex = tex;
+        surface->mW10mDrawnAttach = surface->mW10mAttaches;
+        surface->mW10mDrawnSeq = seq;
+        if (++sDraws == 900) {
+          if (sNotes < 20) {
+            sNotes++;
+            char note[256];
+            SprintfLiteral(note,
+                           "video: %u composites drew the video; %u drew an "
+                           "older conversion than the one before, %u drew a "
+                           "texture rewritten since it was attached",
+                           sDraws, sOlder, sRewritten);
+            GeckoW10mNote(note);
+          }
+          sDraws = sOlder = sRewritten = 0;
+        }
+      }
+    }
+#endif
 
     layer = new DataTextureSourceD3D11(GetDevice(), host->GetFormat(),
                                        host->GetD3D11Texture2D());

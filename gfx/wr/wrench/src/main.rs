@@ -380,6 +380,15 @@ fn make_software_context() -> swgl::Context {
     if let Ok(mode) = std::env::var("SWGL_GPU") {
         let ok = ctx.gpu_attach_new_device(0x9300, mode == "warp");
         eprintln!("swgl: GPU pixel shading ({}) {}", mode, if ok { "on" } else { "FAILED" });
+        // SWGL_GPU_WARMUP=1: the pixel shader probe at once, as the phone runs
+        // it at idle -- every GPU variant's shader, debug programs aside.
+        if ok && std::env::var("SWGL_GPU_WARMUP").map_or(false, |v| v == "1") {
+            let (sum, refused) = ctx.gpu_warmup_all();
+            eprintln!("swgl: GPU programs -- {}", sum);
+            if !refused.is_empty() {
+                eprintln!("swgl: GPU programs refused: {}", refused);
+            }
+        }
     }
     ctx
 }

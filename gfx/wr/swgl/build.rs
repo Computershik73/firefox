@@ -49,6 +49,16 @@ fn write_load_shader(shader_keys: &[String], gpu_variants: &[bool]) {
         }
     }
     load_shader.push_str("  return nullptr;\n}\n");
+    // Every GPU variant's pixel shader, for the probe that creates them at
+    // idle before any draw asks (SwglGpuWarmup in gpu_d3d11.h). Ends with a
+    // null, so it is never empty -- in a build without fxc it is only that.
+    load_shader.push_str("static const GpuProgramInfo* (*const swgl_gpu_program_infos[])() = {\n");
+    for (s, &gpu) in shader_keys.iter().zip(gpu_variants) {
+        if gpu {
+            let _ = writeln!(load_shader, "  {}_gpuv_gpu_info,", shader_file(s));
+        }
+    }
+    load_shader.push_str("  nullptr\n};\n");
     std::fs::write(
         std::env::var("OUT_DIR").unwrap() + "/load_shader.h",
         load_shader,

@@ -10,12 +10,25 @@
 #include "mozilla/layers/ScreenshotGrabber.h"
 #include "mozilla/layers/TextureD3D11.h"
 #include "mozilla/webrender/RenderCompositorLayersSWGL.h"
+#if defined(GECKO_W10M)
+#  include "nsString.h"
+#endif
 
 namespace mozilla {
 
 namespace wr {
 
 class SurfaceD3D11SWGL;
+
+#if defined(GECKO_W10M)
+// The pixel shader probe's crash guard (RenderCompositorD3D11SWGL.cpp): a
+// file next to the note log that names the program being created while a
+// create runs, and the programs later probes leave to their first draw.
+struct GpuWarmupGuard {
+  HANDLE mFile = INVALID_HANDLE_VALUE;
+  nsCString mSkip;
+};
+#endif
 
 class RenderCompositorD3D11SWGL : public RenderCompositorLayersSWGL {
  public:
@@ -120,6 +133,44 @@ class RenderCompositorD3D11SWGL : public RenderCompositorLayersSWGL {
   // of its own: its updates are not in WebRender's dirty rects, so the next
   // frame is composited whole.
   bool mDrewExternalImage = false;
+#if defined(GECKO_W10M)
+  // Partial redraw with a video (gfx.webrender.gecko-w10m.video-whole-window
+  // false; mDrewExternalImage above is read only when it is true): where the
+  // video was drawn in the last composite, which this one redraws as well as
+  // where it is now.
+  gfx::IntRect mW10mPrevVideo;
+  // How much of the screen the composites since the last 300-frame note
+  // covered, for that note.
+  double mW10mCompositedSum = 0;
+  uint32_t mW10mCompositedFrames = 0;
+  // Hands WebRender's dirty rects to RenderCompositorLayersSWGL, with the
+  // video's rects added when the pref says so; and counts the area.
+  void W10mStartCompositing(wr::ColorF aClearColor,
+                            const wr::DeviceIntRect* aDirtyRects,
+                            size_t aNumDirtyRects,
+                            const wr::DeviceIntRect* aOpaqueRects,
+                            size_t aNumOpaqueRects);
+  void W10mCountComposited(const wr::DeviceIntRect* aRects, size_t aNumRects);
+
+  // The pixel shader probe (gfx.webrender.software.d3d11.gpu-shading.warmup):
+  // some seconds after the first GPU-shaded frame, at idle, SWGL creates the
+  // pixel shaders no draw has needed yet, a few milliseconds at a time
+  // between frames, so that a program's first draw no longer creates its
+  // shader inside a frame. Idle is read off mFrameProbes, which EndFrame
+  // counts anyway: nothing is added to a frame.
+  void ScheduleGpuWarmup(uint32_t aDelayMs);
+  void GpuWarmupStep();
+  uint64_t mGpuWarmupStart = 0;
+  uint32_t mWarmupSeenFrames = 0;
+  // How many refused programs the log has named so far.
+  uint32_t mRefusedNoted = 0;
+  bool mGpuWarmupScheduled = false;
+  bool mGpuWarmupDone = false;
+  // Between two batches of one idle stretch.
+  bool mWarmupBatching = false;
+  bool mWarmupNoted = false;
+  GpuWarmupGuard mGuard;
+#endif
 };
 
 class SurfaceD3D11SWGL : public RenderCompositorLayersSWGL::Surface {

@@ -88,6 +88,12 @@
 #  include "WGLLibrary.h"
 #endif
 
+#if defined(GECKO_W10M)
+#  include "mozilla/Sprintf.h"
+#  include "mozilla/TimeStamp.h"
+extern "C" void GeckoW10mNote(const char* text);
+#endif
+
 // Generated
 #include "mozilla/dom/WebGLRenderingContextBinding.h"
 
@@ -438,6 +444,32 @@ bool WebGLContext::CreateAndInitGL(
     out_failReasons->push_back(reason);
     return false;
   }
+
+#if defined(GECKO_W10M)
+  {
+    // What a page actually got. At feature level 9_3 the renderer string
+    // reads "... vs_4_0_level_9_3 ...", with 7 varyings and no vertex
+    // textures -- the limits most "my WebGL page is broken" reports there
+    // come down to. alpha:false matters because Gecko then masks alpha on
+    // every clear, which at 9_3 goes through ANGLE's level 9 clear shaders.
+    static uint32_t sNotes = 0;  // CanvasRenderer thread only
+    if (sNotes < 3) {
+      ++sNotes;
+      const auto* const renderer =
+          reinterpret_cast<const char*>(gl->fGetString(LOCAL_GL_RENDERER));
+      char note[256];
+      SprintfLiteral(note,
+                     "webgl: context %ux%u alpha %d, ES %u.%u, varyings %u, "
+                     "vertex textures %u, max texture %u, %.60s",
+                     mRequestedSize.x, mRequestedSize.y, mOptions.alpha ? 1 : 0,
+                     gl->Version() / 100, (gl->Version() % 100) / 10,
+                     mGLMaxFragmentInputVectors, mGLMaxVertexTextureImageUnits,
+                     mLimits ? mLimits->maxTex2dSize : 0u,
+                     renderer ? renderer : "?");
+      GeckoW10mNote(note);
+    }
+  }
+#endif
 
   const auto val = StaticPrefs::webgl_debug_incomplete_tex_color();
   if (val) {
@@ -1424,6 +1456,17 @@ bool WebGLContext::PushRemoteTexture(
     Range<uint8_t> range = {mappedData.data,
                             data->AsBufferTextureData()->GetBufferSize()};
 
+#if defined(GECKO_W10M)
+    // A feature level 9_3 device shares no textures, so every frame a WebGL
+    // page presents there is read back here: a pipeline drain, a staging
+    // copy and a swizzle, on the CanvasRenderer thread. The X3 shares
+    // textures and does not come here for a normal page. Timed only while
+    // there are notes left to write.
+    static uint32_t sReadbackNotes = 0;  // CanvasRenderer thread only
+    const TimeStamp readbackStart =
+        sReadbackNotes < 5 ? TimeStamp::Now() : TimeStamp();
+#endif
+
     // If we have a surface representing the front buffer, then try to snapshot
     // that. Otherwise, when there is no surface, we read back directly from the
     // WebGL framebuffer.
@@ -1444,6 +1487,33 @@ bool WebGLContext::PushRemoteTexture(
                                  gfx::SurfaceFormat::B8G8R8A8, mappedData.size);
       MOZ_RELEASE_ASSERT(rv, "SwizzleData failed!");
     }
+
+#if defined(GECKO_W10M)
+    if (!readbackStart.IsNull()) {
+      // Summed up 600 frames at a time, five lines a run at most.
+      static uint32_t sFrames = 0;
+      static double sSumMs = 0.0;
+      static double sWorstMs = 0.0;
+      const double ms = (TimeStamp::Now() - readbackStart).ToMilliseconds();
+      ++sFrames;
+      sSumMs += ms;
+      if (ms > sWorstMs) {
+        sWorstMs = ms;
+      }
+      if (sFrames >= 600) {
+        ++sReadbackNotes;
+        char note[160];
+        SprintfLiteral(note,
+                       "webgl: last 600 frames read back, %dx%d, %.1f ms "
+                       "average, %.1f ms worst",
+                       size.width, size.height, sSumMs / sFrames, sWorstMs);
+        GeckoW10mNote(note);
+        sFrames = 0;
+        sSumMs = 0.0;
+        sWorstMs = 0.0;
+      }
+    }
+#endif
 
     ownerClient->PushTexture(textureId, ownerId, std::move(data));
     return true;

@@ -1185,6 +1185,16 @@ gl::RangeUI ProgramExecutableD3D::getUsedImageRange(gl::ShaderType type, bool re
 
 bool ProgramExecutableD3D::usesPointSpriteEmulation(RendererD3D *renderer) const
 {
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    // GeckoW10m: the emulation is a geometry shader, and feature level 9_3 (the only level
+    // with a shader model suffix) has none, so every point draw failed there. Without it a
+    // point is drawn one pixel wide, which is what ALIASED_POINT_SIZE_RANGE then says
+    // (GenerateCaps in renderer11_utils.cpp).
+    if (mUsesPointSize && !renderer->getShaderModelSuffix().empty())
+    {
+        return false;
+    }
+#endif
     return mUsesPointSize && renderer->getMajorShaderModel() >= 4;
 }
 

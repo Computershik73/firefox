@@ -497,6 +497,20 @@ Renderer11::Renderer11(egl::Display *display)
             }
         }
 
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+        // GeckoW10m: the Adreno 3xx of the Lumia 550, 650 and 950 stops at feature level 9_3,
+        // and without it here WebGL there has no device at all. Asked last, so a GPU with a
+        // higher level still gets its highest; the list has to stay in descending order for
+        // the E_INVALIDARG retry below. 9_3 means ES 2 only, and Clear11 needs its level 9
+        // shaders for it (shaders/Clear11_FL9.hlsl).
+        if (requestedMajorVersion == EGL_DONT_CARE || requestedMajorVersion > 9 ||
+            (requestedMajorVersion == 9 &&
+             (requestedMinorVersion == EGL_DONT_CARE || requestedMinorVersion >= 3)))
+        {
+            mAvailableFeatureLevels.push_back(D3D_FEATURE_LEVEL_9_3);
+        }
+#endif
+
         EGLint requestedDeviceType = static_cast<EGLint>(attributes.get(
             EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE));
         switch (requestedDeviceType)

@@ -69,6 +69,18 @@ class Clear11 : angle::NonCopyable
         std::array<d3d11::LazyShader<ID3D11PixelShader>, kNumShaders> mPsFloat;
         std::array<d3d11::LazyShader<ID3D11PixelShader>, kNumShaders> mPsUInt;
         std::array<d3d11::LazyShader<ID3D11PixelShader>, kNumShaders> mPsSInt;
+
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+        // GeckoW10m: a feature level 9_3 device refuses the shaders above, which are
+        // vs_4_0/ps_4_0 only. These are built for level 9 (shaders/Clear11_FL9.hlsl) and take
+        // the quad from the vertex buffer Clear11 keeps for that level, through mIl9.
+        constexpr static size_t kNumShadersFL9 = D3D_FL9_3_SIMULTANEOUS_RENDER_TARGET_COUNT;
+
+        d3d11::LazyInputLayout mIl9;
+        d3d11::LazyShader<ID3D11VertexShader> mVs9;
+        d3d11::LazyShader<ID3D11PixelShader> mPs9Depth;
+        std::array<d3d11::LazyShader<ID3D11PixelShader>, kNumShadersFL9> mPs9Float;
+#endif
     };
 
     bool useVertexBuffer() const;

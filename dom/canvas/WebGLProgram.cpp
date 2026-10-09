@@ -20,6 +20,13 @@
 #include "mozilla/gfx/Logging.h"
 #include "nsPrintfCString.h"
 
+#if defined(GECKO_W10M)
+#  include <algorithm>
+
+#  include "mozilla/Sprintf.h"
+extern "C" void GeckoW10mNote(const char* text);
+#endif
+
 namespace mozilla {
 
 static bool IsShadowSampler(const GLenum elemType) {
@@ -1191,7 +1198,30 @@ void WebGLProgram::LinkAndUpdate() {
 
   GLint ok = 0;
   gl->fGetProgramiv(mGLName, LOCAL_GL_LINK_STATUS, &ok);
-  if (!ok) return;
+  if (!ok) {
+#if defined(GECKO_W10M)
+    // ANGLE's Direct3D backend compiles HLSL at link time, so this is where
+    // fxc refuses a shader at feature level 9_3 (shader model 2 limits: about
+    // 512 instructions, 32 temporaries, loops indexed by constants only).
+    // Gecko's own validation passed by now; the log is the driver's. Variants
+    // compiled later at draw time fail as GL errors and are not seen here.
+    static uint32_t sNotes = 0;  // CanvasRenderer thread only
+    if (sNotes < 5) {
+      ++sNotes;
+      char log[101] = {};
+      const size_t len = std::min(mLinkLog.size(), sizeof(log) - 1);
+      for (size_t i = 0; i < len; ++i) {
+        const char c = mLinkLog[i];
+        log[i] = (c == '\n' || c == '\r' || c == '\t') ? ' ' : c;
+      }
+      char note[160];
+      SprintfLiteral(note, "webgl: the driver refused a program: %s",
+                     len ? log : "(no log)");
+      GeckoW10mNote(note);
+    }
+#endif
+    return;
+  }
 
   mMostRecentLinkInfo =
       QueryProgramInfo(this, gl);  // Fallible after context loss.

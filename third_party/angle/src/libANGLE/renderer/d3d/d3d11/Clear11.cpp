@@ -55,6 +55,16 @@
 #include "libANGLE/renderer/d3d/d3d11/shaders/compiled/clearuint11ps7.h"
 #include "libANGLE/renderer/d3d/d3d11/shaders/compiled/clearuint11ps8.h"
 
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+// GeckoW10m: the feature level 9_3 variants, see shaders/Clear11_FL9.hlsl.
+#    include "libANGLE/renderer/d3d/d3d11/shaders/compiled/clear11_fl9vs.h"
+#    include "libANGLE/renderer/d3d/d3d11/shaders/compiled/cleardepth11_fl9ps.h"
+#    include "libANGLE/renderer/d3d/d3d11/shaders/compiled/clearfloat11_fl9ps1.h"
+#    include "libANGLE/renderer/d3d/d3d11/shaders/compiled/clearfloat11_fl9ps2.h"
+#    include "libANGLE/renderer/d3d/d3d11/shaders/compiled/clearfloat11_fl9ps3.h"
+#    include "libANGLE/renderer/d3d/d3d11/shaders/compiled/clearfloat11_fl9ps4.h"
+#endif
+
 namespace rx
 {
 
@@ -62,6 +72,13 @@ namespace
 {
 constexpr uint32_t g_ConstantBufferSize = sizeof(RtvDsvClearInfo<float>);
 constexpr uint32_t g_VertexSize         = sizeof(d3d11::PositionVertex);
+
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+// GeckoW10m: one d3d11::PositionVertex per corner, as ensureVertexBufferCreated writes them.
+const D3D11_INPUT_ELEMENT_DESC g_ClearFL9InputLayout[] = {
+    {"POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+};
+#endif
 
 // Updates color, depth and alpha components of cached CB if necessary.
 // Returns true if any constants are updated, false otherwise.
@@ -124,6 +141,18 @@ Clear11::ShaderManager::ShaderManager()
                CLEARPS(Uint6), CLEARPS(Uint7), CLEARPS(Uint8)}},
       mPsSInt{{CLEARPS(Sint1), CLEARPS(Sint2), CLEARPS(Sint3), CLEARPS(Sint4), CLEARPS(Sint5),
                CLEARPS(Sint6), CLEARPS(Sint7), CLEARPS(Sint8)}}
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+      ,
+      mIl9(g_ClearFL9InputLayout,
+           ArraySize(g_ClearFL9InputLayout),
+           g_VS_Clear_FL9,
+           ArraySize(g_VS_Clear_FL9),
+           "Clear11 IL FL9"),
+      mVs9(g_VS_Clear_FL9, ArraySize(g_VS_Clear_FL9), "Clear11 VS FL9"),
+      mPs9Depth(g_PS_ClearDepth_FL9, ArraySize(g_PS_ClearDepth_FL9), "Clear11 PS Depth FL9"),
+      mPs9Float{{CLEARPS(Float1_FL9), CLEARPS(Float2_FL9), CLEARPS(Float3_FL9),
+                 CLEARPS(Float4_FL9)}}
+#endif
 {}
 
 #undef CLEARPS
@@ -141,6 +170,39 @@ angle::Result Clear11::ShaderManager::getShadersAndLayout(const gl::Context *con
                                                           const d3d11::PixelShader **ps)
 {
     Context11 *context11 = GetImplAs<Context11>(context);
+
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    // GeckoW10m: at feature level 9_3 only the level 9 shaders can be created. ES 2 clears only
+    // to floats and has no multiview, so the float variants and the plain quad are all it needs.
+    if (renderer->getRenderer11DeviceCaps().featureLevel <= D3D_FEATURE_LEVEL_9_3)
+    {
+        ASSERT(clearType == GL_FLOAT);
+        ASSERT(!hasLayeredLayout);
+        if (numRTs > kNumShadersFL9)
+        {
+            // maxDrawBuffers is 4 at this level, so this cannot be reached.
+            ANGLE_HR_UNREACHABLE(context11);
+        }
+
+        ANGLE_TRY(mIl9.resolve(context11, renderer));
+        ANGLE_TRY(mVs9.resolve(context11, renderer));
+        *il = &mIl9.getObj();
+        *vs = &mVs9.getObj();
+        *gs = nullptr;
+
+        if (numRTs == 0)
+        {
+            ANGLE_TRY(mPs9Depth.resolve(context11, renderer));
+            *ps = &mPs9Depth.getObj();
+        }
+        else
+        {
+            ANGLE_TRY(mPs9Float[numRTs - 1].resolve(context11, renderer));
+            *ps = &mPs9Float[numRTs - 1].getObj();
+        }
+        return angle::Result::Continue;
+    }
+#endif
 
     if (!hasLayeredLayout)
     {
@@ -743,6 +805,14 @@ angle::Result Clear11::clearFramebuffer(const gl::Context *context,
     // Apply Shaders
     stateManager->setDrawShaders(vs, gs, ps);
     stateManager->setPixelConstantBuffer(0, &mConstantBuffer);
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    // GeckoW10m: the level 9 vertex shader puts the depth to clear to into the quad's z, so it
+    // reads the same constants as the pixel shader.
+    if (useVertexBuffer())
+    {
+        stateManager->setVertexConstantBuffer(0, &mConstantBuffer);
+    }
+#endif
 
     // Bind IL & VB if needed
     stateManager->setIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);

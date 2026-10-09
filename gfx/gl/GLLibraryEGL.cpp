@@ -46,11 +46,25 @@
 
 #include <mutex>  // for call_once
 
+#if defined(GECKO_W10M)
+#  include "mozilla/Sprintf.h"
+#  include "mozilla/TimeStamp.h"
+extern "C" void GeckoW10mNote(const char* text);
+#endif
+
 namespace mozilla {
 namespace gl {
 
 StaticMutex GLLibraryEGL::sMutex;
 StaticRefPtr<GLLibraryEGL> GLLibraryEGL::sInstance;
+
+#if defined(GECKO_W10M)
+// What the last display creation did about WARP, for the note DefaultDisplay
+// writes when it gets no display. Both run with sMutex held, so a plain
+// static is enough.
+enum class GeckoW10mWarp { NotTried, Failed, Forbidden };
+static GeckoW10mWarp sGeckoW10mWarp = GeckoW10mWarp::NotTried;
+#endif
 
 // should match the order of EGLExtensions, and be null-terminated.
 static const char* sEGLLibraryExtensionNames[] = {
@@ -305,6 +319,32 @@ static std::shared_ptr<EglDisplay> GetAndInitWARPDisplay(
   return EglDisplay::Create(egl, display, true, aProofOfLock);
 }
 
+#if defined(GECKO_W10M)
+// A test hook, off unless webgl.gecko-w10m.angle-fl93-test is set: ANGLE's
+// own D3D11 device capped at feature level 9_3, the level the Lumia 550, 650
+// and 950 run at. ANGLE's internal shaders fail at 9_3 the same way on any
+// GPU, so the level 9 path can be tried on the X3 first. WebRender is not
+// touched by it -- it builds its display from Gecko's own device
+// (RenderThread, CreateDisplay below).
+static std::shared_ptr<EglDisplay> GetAndInitFL93TestDisplay(
+    GLLibraryEGL& egl, const StaticMutexAutoLock& aProofOfLock) {
+  const EGLAttrib attrib_list[] = {
+      LOCAL_EGL_PLATFORM_ANGLE_TYPE_ANGLE,
+      LOCAL_EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE,
+      LOCAL_EGL_PLATFORM_ANGLE_MAX_VERSION_MAJOR_ANGLE,
+      9,
+      LOCAL_EGL_PLATFORM_ANGLE_MAX_VERSION_MINOR_ANGLE,
+      3,
+      LOCAL_EGL_NONE};
+  const EGLDisplay display = egl.fGetPlatformDisplay(
+      LOCAL_EGL_PLATFORM_ANGLE_ANGLE, EGL_DEFAULT_DISPLAY, attrib_list);
+  if (display == EGL_NO_DISPLAY) {
+    return nullptr;
+  }
+  return EglDisplay::Create(egl, display, false, aProofOfLock);
+}
+#endif
+
 std::shared_ptr<EglDisplay> GLLibraryEGL::CreateDisplay(
     ID3D11Device* const d3d11Device) {
   StaticMutexAutoLock lock(sMutex);
@@ -451,7 +491,16 @@ static std::shared_ptr<EglDisplay> GetAndInitDisplayForAccelANGLE(
   }
 
   std::shared_ptr<EglDisplay> ret;
+#if defined(GECKO_W10M)
+  // Ahead of the D3D11 display, which would otherwise give the X3 its own
+  // feature level and never reach the 9_3 path this hook is for.
+  if (StaticPrefs::webgl_gecko_w10m_angle_fl93_test()) {
+    ret = GetAndInitFL93TestDisplay(egl, aProofOfLock);
+  }
+  if (!ret && d3d11ANGLE.IsEnabled()) {
+#else
   if (d3d11ANGLE.IsEnabled()) {
+#endif
     ret = GetAndInitDisplay(egl, LOCAL_EGL_D3D11_ELSE_D3D9_DISPLAY_ANGLE,
                             aProofOfLock);
   }
@@ -944,13 +993,94 @@ EglDisplay::~EglDisplay() {
 
 // -
 
+#if defined(GECKO_W10M)
+// WebGL's display. It lives only as long as some context holds it, so on a
+// phone where nothing else keeps it alive every page that probes for WebGL
+// makes a new one: a D3D11 device, ANGLE's start-up and its caps. How often
+// that happens and what it costs is the measure for leaving WebGL on at
+// feature level 9_3, so the first three creations are written down, then
+// every tenth, eight lines a run at most. Called with sMutex held.
+static void GeckoW10mNoteDefaultDisplay(
+    GLLibraryEGL& aLib, const std::shared_ptr<EglDisplay>& aDisplay,
+    const nsACString& aFailureId, const TimeStamp& aStart) {
+  static uint32_t sCreations = 0;
+  static uint32_t sTotalMs = 0;
+  static uint32_t sNotes = 0;
+  const auto ms =
+      static_cast<uint32_t>((TimeStamp::Now() - aStart).ToMilliseconds());
+  ++sCreations;
+  sTotalMs += ms;
+  if ((sCreations > 3 && sCreations % 10 != 0) || sNotes >= 8) {
+    return;
+  }
+  ++sNotes;
+
+  char note[256];
+  if (aDisplay) {
+    unsigned level = 0;
+    const char* clearView = "unknown";
+#  ifdef XP_WIN
+    // The same query SharedSurfaceANGLE makes for the device behind the
+    // display. ClearView is what ANGLE's scissored clears need to avoid its
+    // shader path.
+    if (aLib.IsExtensionSupported(EGLLibExtension::EXT_device_query)) {
+      EGLDeviceEXT eglDevice = nullptr;
+      ID3D11Device* device = nullptr;
+      if (aDisplay->fQueryDisplayAttribEXT(LOCAL_EGL_DEVICE_EXT,
+                                           (EGLAttrib*)&eglDevice) &&
+          eglDevice &&
+          aLib.fQueryDeviceAttribEXT(eglDevice, LOCAL_EGL_D3D11_DEVICE_ANGLE,
+                                     (EGLAttrib*)&device) &&
+          device) {
+        level = static_cast<unsigned>(device->GetFeatureLevel());
+        D3D11_FEATURE_DATA_D3D11_OPTIONS options = {};
+        if (SUCCEEDED(device->CheckFeatureSupport(
+                D3D11_FEATURE_D3D11_OPTIONS, &options, sizeof(options)))) {
+          clearView = options.ClearView ? "yes" : "no";
+        }
+      }
+    }
+#  endif
+    SprintfLiteral(note,
+                   "webgl: EGL display #%u up in %u ms (total %u ms), device "
+                   "feature level 0x%04x, ClearView %s%s",
+                   sCreations, ms, sTotalMs, level, clearView,
+                   aDisplay->mIsWARP ? ", on WARP" : "");
+  } else {
+    const char* warp = "not tried";
+    switch (sGeckoW10mWarp) {
+      case GeckoW10mWarp::NotTried:
+        break;
+      case GeckoW10mWarp::Failed:
+        warp = "failed";
+        break;
+      case GeckoW10mWarp::Forbidden:
+        warp = "skipped by webgl.forbid-software";
+        break;
+    }
+    const nsCString failureId(aFailureId);
+    SprintfLiteral(note, "webgl: EGL display #%u failed in %u ms (%s), WARP %s",
+                   sCreations, ms,
+                   failureId.IsEmpty() ? "no failure id" : failureId.get(),
+                   warp);
+  }
+  GeckoW10mNote(note);
+}
+#endif
+
 std::shared_ptr<EglDisplay> GLLibraryEGL::DefaultDisplay(
     nsACString* const out_failureId) {
   StaticMutexAutoLock lock(sMutex);
   auto ret = mDefaultDisplay.lock();
   if (ret) return ret;
 
+#if defined(GECKO_W10M)
+  const auto start = TimeStamp::Now();
+#endif
   ret = CreateDisplayLocked({}, out_failureId, lock);
+#if defined(GECKO_W10M)
+  GeckoW10mNoteDefaultDisplay(*this, ret, *out_failureId, start);
+#endif
   mDefaultDisplay = ret;
   return ret;
 }
@@ -986,6 +1116,22 @@ std::shared_ptr<EglDisplay> GLLibraryEGL::CreateDisplayLocked(
       }
     }
 
+#if defined(GECKO_W10M)
+    // webgl.forbid-software (true by default) means "fall back to canvas 2d
+    // rather than to software GL", but only CGL and EAGL ever read it; here
+    // a page whose hardware display failed went straight on to WARP, Direct3D
+    // on the CPU. On four Cortex-A7 cores that holds the whole browser while
+    // the page animates. A display asked for as software, and
+    // webgl.angle.force-warp, still get WARP.
+    sGeckoW10mWarp = GeckoW10mWarp::NotTried;
+    bool warpForbidden = false;
+    if (!aFlags.mForceSoftware && !StaticPrefs::webgl_angle_force_warp() &&
+        StaticPrefs::webgl_forbid_software()) {
+      warpForbidden = shouldTryWARP;
+      shouldTryWARP = false;
+    }
+#endif
+
     // Hardware accelerated ANGLE path (supported or force accel)
     if (shouldTryAccel) {
       ret = GetAndInitDisplayForAccelANGLE(*this, out_failureId, aProofOfLock);
@@ -1008,6 +1154,9 @@ std::shared_ptr<EglDisplay> GLLibraryEGL::CreateDisplayLocked(
     if (!ret && shouldTryWARP) {
       ret = GetAndInitWARPDisplay(*this, EGL_DEFAULT_DISPLAY, aProofOfLock);
       if (!ret) {
+#if defined(GECKO_W10M)
+        sGeckoW10mWarp = GeckoW10mWarp::Failed;
+#endif
         if (out_failureId->IsEmpty()) {
           *out_failureId = "FEATURE_FAILURE_WARP_FALLBACK"_ns;
         }
@@ -1015,6 +1164,18 @@ std::shared_ptr<EglDisplay> GLLibraryEGL::CreateDisplayLocked(
         return nullptr;
       }
     }
+#if defined(GECKO_W10M)
+    if (!ret && warpForbidden) {
+      sGeckoW10mWarp = GeckoW10mWarp::Forbidden;
+      // When the hardware display was never tried (gfxVars refused ANGLE),
+      // its reason sits only in accelAngleFailureId. WARP used to hide that
+      // by succeeding or by setting its own id; with WARP skipped the caller
+      // and DefaultDisplay's note would otherwise get no reason at all.
+      if (out_failureId->IsEmpty()) {
+        *out_failureId = accelAngleFailureId;
+      }
+    }
+#endif
   } else {
     void* nativeDisplay = EGL_DEFAULT_DISPLAY;
 #ifdef MOZ_WIDGET_GTK

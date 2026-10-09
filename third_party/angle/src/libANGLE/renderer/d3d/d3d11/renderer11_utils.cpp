@@ -1410,6 +1410,14 @@ void GenerateCaps(ID3D11Device *device,
     // Choose a reasonable maximum, enforced in the shader.
     caps->minAliasedPointSize = 1.0f;
     caps->maxAliasedPointSize = 1024.0f;
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    // GeckoW10m: wide points are a geometry shader, which feature level 9_3 does not have
+    // (ProgramExecutableD3D::usesPointSpriteEmulation), so points there are one pixel.
+    if (featureLevel <= D3D_FEATURE_LEVEL_9_3)
+    {
+        caps->maxAliasedPointSize = 1.0f;
+    }
+#endif
 
     // Wide lines not supported
     caps->minAliasedLineWidth = 1.0f;

@@ -2704,6 +2704,10 @@ void gfxPlatform::InitWebRenderConfig() {
     say("webrender", Feature::WEBRENDER);
     say("d3d11 hardware angle", Feature::D3D11_HW_ANGLE);
     say("webrender angle", Feature::WEBRENDER_ANGLE);
+    // Whether compiled shader programs are kept in the profile's
+    // shader-cache: with it, a relaunch links them from binaries instead of
+    // compiling them again, which is about a second of the second frame.
+    say("webrender shader cache", Feature::WEBRENDER_SHADER_CACHE);
     say("d3d11 compositing", Feature::D3D11_COMPOSITING);
     say("hardware video decoding", Feature::HARDWARE_VIDEO_DECODING);
     // Not canvas 2d: it is configured a few lines later than this runs, and
@@ -3332,6 +3336,52 @@ void gfxPlatform::InitWebGLConfig() {
       StaticPrefs::webgl_out_of_process_enable_ahardwarebuffer_AtStartup());
 #endif
 
+#if defined(GECKO_W10M) && defined(XP_WIN)
+  {
+    // The Lumia 550, 650 and 950 (Adreno 3xx) stop at Direct3D feature level
+    // 9_3. ANGLE can make a device there for WebGL 1 only -- ES 2, so never
+    // WebGL 2 -- and a 9_3 device shares no textures, so its frames are read
+    // back to the compositor. Every page whose scripts merely probe for WebGL
+    // would also pay for a device and a shader compile on a Cortex-A7. So at
+    // 9_3 WebGL 2 is refused (WebGLContext::CreateAndInitGL checks this before
+    // anything is loaded), and WebGL 1 is offered only when
+    // webgl.gecko-w10m.feature-level-9 says so: without it AllowWebGL is
+    // false and getContext fails in ClientWebGLContext with no IPC and no
+    // ANGLE. The X3 and anything else at 10_0 or above is left alone.
+    static unsigned sNotes = 0;
+    auto* const dm = gfx::DeviceManagerDx::Get();
+    const unsigned level = dm ? dm->GetCompositorFeatureLevel() : 0;
+    const char* note = nullptr;
+    if (!level) {
+      // The device is made before this runs (InitAcceleration). If it is not
+      // there, this gate cannot do anything, and the log has to say so.
+      note =
+          "webgl: compositor feature level not known when WebGL was "
+          "configured";
+    } else if (level < static_cast<unsigned>(D3D_FEATURE_LEVEL_10_0)) {
+      gfxVars::SetAllowWebgl2(false);
+      if (!StaticPrefs::webgl_gecko_w10m_feature_level_9_AtStartup()) {
+        // FeatureState keeps 63 characters of a reason.
+        featureWebGL.Disable(
+            FeatureStatus::Blocked,
+            "Feature level 9_3: off by webgl.gecko-w10m.feature-level-9",
+            "FEATURE_FAILURE_GECKO_W10M_FL9"_ns);
+        note =
+            "webgl: feature level 9_3 -- WebGL off by "
+            "webgl.gecko-w10m.feature-level-9";
+      } else {
+        note =
+            "webgl: feature level 9_3 -- WebGL 1 on ANGLE's own 9_3 device, "
+            "frames read back to the compositor; WebGL 2 not offered";
+      }
+    }
+    if (note && sNotes < 1) {
+      ++sNotes;
+      GeckoW10mNote(note);
+    }
+  }
+#endif
+
   // Until bug 1999136 lands and the GPU process works with headless, we should
   // allow WebGL in the parent process when headless.
   if (!gfxConfig::IsEnabled(Feature::GPU_PROCESS) && !IsHeadless() &&
@@ -3620,17 +3670,40 @@ static void AcceleratedCanvas2DPrefChangeCallback(const char*, void*) {
     feature.Disable(FeatureStatus::Blocklisted, message.get(), failureId);
   }
 
+#if defined(GECKO_W10M) && defined(XP_WIN)
+  {
+    // Accelerated canvas draws through DrawTargetWebgl, which needs WebGL 2
+    // (ES 3), and ANGLE offers only ES 2 at feature level 9_3. Nothing would
+    // use the feature here anyway -- every consumer is remote or content
+    // only -- but about:support and the note below should give the real
+    // reason rather than an "ON" or a WebRender one.
+    auto* const dm = gfx::DeviceManagerDx::Get();
+    const unsigned level = dm ? dm->GetCompositorFeatureLevel() : 0;
+    if (level && level < static_cast<unsigned>(D3D_FEATURE_LEVEL_10_0)) {
+      // FeatureState keeps 63 characters of a reason.
+      feature.ForceDisable(
+          FeatureStatus::Unavailable,
+          "Feature level 9_3: needs WebGL 2 (ES 3), ANGLE has ES 2",
+          "FEATURE_FAILURE_GECKO_W10M_FL9"_ns);
+    }
+  }
+#endif
+
   gfxVars::SetUseAcceleratedCanvas2D(feature.IsEnabled());
 
 #if defined(GECKO_W10M)
   {
     // The feature note near the WebRender ones is printed by
     // InitWebRenderConfig, which runs before this -- so it always said "off",
-    // whatever this then decided. Here is the decision itself.
+    // whatever this then decided. Here is the decision itself. "ON" changes
+    // nothing in a single-process build: CanvasRenderingContext2D only
+    // accelerates in a content process, and there is none.
     const char* why = feature.GetFailureMessage();
+    const bool inert = feature.IsEnabled() && !BrowserTabsRemoteAutostart();
     char note[256];
-    SprintfLiteral(note, "gfx: accelerated canvas 2d is %s%s%s",
+    SprintfLiteral(note, "gfx: accelerated canvas 2d is %s%s%s%s",
                    feature.IsEnabled() ? "ON" : "off",
+                   inert ? " (inert: single process)" : "",
                    (why && *why) ? " -- " : "", (why && *why) ? why : "");
     GeckoW10mNote(note);
   }

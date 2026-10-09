@@ -60,6 +60,11 @@
 #  include "gfxWindowsPlatform.h"
 #endif
 
+#if defined(GECKO_W10M)
+#  include "mozilla/Sprintf.h"
+extern "C" void GeckoW10mNote(const char* text);
+#endif
+
 using namespace mozilla;
 using namespace mozilla::image;
 using namespace mozilla::layers;
@@ -1701,9 +1706,33 @@ void gfxUtils::RemoveShaderCacheFromDiskIfNecessary() {
   if (!wr::remove_program_binary_disk_cache(&path)) {
     // Failed to remove program binary disk cache. The disk cache might have
     // invalid data. Disable program binary disk cache usage.
+#if defined(GECKO_W10M)
+    // Every shader of this run is then compiled from source, on every
+    // launch until the folder can be emptied -- say so, or the slow second
+    // frame looks like a cache that simply has not filled yet.
+    GeckoW10mNote("gfx: shader cache could not be emptied, off this run");
+#endif
     gfxVars::SetUseWebRenderProgramBinaryDisk(false);
     return;
   }
+
+#if defined(GECKO_W10M)
+  {
+    // Emptying the cache is why the first launch of an engine build compiles
+    // every shader again (about a second more on the second frame). Note it,
+    // so a relaunch of the same build that still prints this -- the check
+    // prefs below were not saved before the app was killed -- stands out.
+    // This runs once per process, from InitWebRenderConfig.
+    const bool gpuChanged =
+        !deviceIDChecked.IsEmpty() &&
+        (deviceID != deviceIDChecked || driverVersion != driverVersionChecked);
+    char note[256];
+    SprintfLiteral(note, "gfx: shader cache emptied -- build %s -> %s%s",
+                   buildIDChecked.IsEmpty() ? "none" : buildIDChecked.get(),
+                   buildID.get(), gpuChanged ? ", GPU or driver changed" : "");
+    GeckoW10mNote(note);
+  }
+#endif
 
   Preferences::SetCString(GFX_SHADER_CHECK_BUILD_VERSION_PREF, buildID);
   Preferences::SetInt(GFX_SHADER_CHECK_PTR_SIZE_PREF, ptrSize);

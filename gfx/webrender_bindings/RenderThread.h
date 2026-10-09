@@ -93,8 +93,14 @@ class WebRenderProgramCache final {
 
   wr::WrProgramCache* Raw() { return mProgramCache; }
 
+  // The number of program binaries read from the profile's shader-cache when
+  // this was made. With none, shader warmup has no binary to hand to the
+  // driver and would only make empty program objects.
+  uint32_t StartupPrograms() const { return mStartupPrograms; }
+
  protected:
   wr::WrProgramCache* mProgramCache;
+  uint32_t mStartupPrograms = 0;
 };
 
 class WebRenderShaders final {
@@ -105,11 +111,39 @@ class WebRenderShaders final {
   // Returns true if ResumeWarmup() should be called again
   bool ResumeWarmup();
 
+  // True the first time only. Every chain of warmup steps pops from the same
+  // list of shaders, so a second chain does no extra work -- it only keeps
+  // two steps queued on the render thread instead of one.
+  bool BeginWarmupOnce() {
+    if (mWarmupStarted) {
+      return false;
+    }
+    mWarmupStarted = true;
+    return true;
+  }
+
   wr::WrShaders* RawShaders() { return mShaders; }
+
+#if defined(GECKO_W10M)
+  // Warmup was started from InitDeviceTask, before the window's compositor
+  // exists, rather than when the renderer was made.
+  void SetWarmupEarly() { mWarmupEarly = true; }
+  // Adds one warmup step's render-thread time; after the last step, notes
+  // the total once.
+  void CountWarmupStep(TimeDuration aStep, bool aLast);
+#endif
 
  protected:
   RefPtr<gl::GLContext> mGL;
   wr::WrShaders* mShaders;
+  bool mWarmupStarted = false;
+#if defined(GECKO_W10M)
+  // These live with the shaders, so they start again when SingletonGL()
+  // rebuilds this object after a device reset.
+  TimeDuration mWarmupTime;
+  uint32_t mWarmupSteps = 0;
+  bool mWarmupEarly = false;
+#endif
 };
 
 class WebRenderPipelineInfo final {

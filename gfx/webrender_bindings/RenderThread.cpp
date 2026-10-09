@@ -60,6 +60,12 @@
 #  include "mozilla/webrender/MetalDeviceManager.h"
 #endif
 
+#if defined(GECKO_W10M)
+#  include "mozilla/Sprintf.h"
+#  include "mozilla/StaticPrefs_gfx.h"
+extern "C" void GeckoW10mNote(const char* text);
+#endif
+
 using namespace mozilla;
 
 static already_AddRefed<gl::GLContext> CreateGLContext(nsACString& aError);
@@ -1332,11 +1338,33 @@ void RenderThread::InitDeviceTask() {
   nsAutoCString err;
   CreateSingletonGL(err);
   if (gfx::gfxVars::UseWebRenderProgramBinaryDisk()) {
+#if defined(GECKO_W10M)
+    // The cache's file writes go to the low-priority pool, which only
+    // rasterises low-priority blobs, so they never wait in line with the
+    // glyph rasterisation on the main pool. Shutdown drops the cache before
+    // either pool.
+    mProgramCache = MakeUnique<WebRenderProgramCache>(ThreadPoolLP().Raw());
+#else
     mProgramCache = MakeUnique<WebRenderProgramCache>(ThreadPool().Raw());
+#endif
   }
   // Query the shared GL context to force the
   // lazy initialization to happen now.
   SingletonGL();
+
+#if defined(GECKO_W10M)
+  // Hand the program binaries just read from the profile's shader-cache to
+  // ANGLE now, in the second or more before the window's compositor exists,
+  // rather than once the renderer is made: ANGLE makes the D3D shaders on its
+  // own compile pool, and the second frame's links then find them ready. It
+  // is the same warmup as upstream, only earlier, and it does nothing when
+  // nothing was read. The later call from WebRenderAPI is then a no-op.
+  if (mShaders &&
+      StaticPrefs::gfx_webrender_gecko_w10m_shader_warmup_early_AtStartup()) {
+    mShaders->SetWarmupEarly();
+    BeginShaderWarmupIfNeeded();
+  }
+#endif
 
 #ifdef MOZ_WIDGET_ANDROID
   // On Android we must report the GL context's strings to gfxInfo. This allows
@@ -1365,9 +1393,26 @@ void RenderThread::InitDeviceTask() {
 }
 
 void RenderThread::BeginShaderWarmupIfNeeded() {
-  if (mShaders && gfx::gfxVars::ShouldWarmUpWebRenderProgramBinaries()) {
-    PostResumeShaderWarmupRunnable();
+  if (!mShaders || !gfx::gfxVars::ShouldWarmUpWebRenderProgramBinaries()) {
+    return;
   }
+#if defined(GECKO_W10M)
+  // An asynchronous warmup step only creates the program and hands it a
+  // binary that is already in memory. With no startup binaries read (the
+  // first launch of an engine build), every step would make an empty program
+  // object -- a hundred runnables for nothing. With precache-shaders on, the
+  // steps compile from source, so they are always worth running.
+  if (!StaticPrefs::gfx_webrender_precache_shaders_AtStartup() &&
+      (!mProgramCache || mProgramCache->StartupPrograms() == 0)) {
+    return;
+  }
+  // Called from InitDeviceTask and again for every renderer made; only the
+  // first call starts a chain of steps.
+  if (!mShaders->BeginWarmupOnce()) {
+    return;
+  }
+#endif
+  PostResumeShaderWarmupRunnable();
 }
 
 void RenderThread::PostResumeShaderWarmupRunnable() {
@@ -1379,7 +1424,14 @@ void RenderThread::PostResumeShaderWarmupRunnable() {
 
 void RenderThread::ResumeShaderWarmup() {
   if (mShaders) {
+#if defined(GECKO_W10M)
+    const auto stepStart = TimeStamp::Now();
+#endif
     bool needAnotherWarmupStep = mShaders->ResumeWarmup();
+#if defined(GECKO_W10M)
+    mShaders->CountWarmupStep(TimeStamp::Now() - stepStart,
+                              !needAnotherWarmupStep);
+#endif
     if (needAnotherWarmupStep) {
       PostResumeShaderWarmupRunnable();
     }
@@ -1624,6 +1676,33 @@ bool WebRenderShaders::ResumeWarmup() {
   return wr_shaders_resume_warmup(mShaders);
 }
 
+#if defined(GECKO_W10M)
+void WebRenderShaders::CountWarmupStep(TimeDuration aStep, bool aLast) {
+  mWarmupTime += aStep;
+  mWarmupSteps += 1;
+  if (!aLast) {
+    return;
+  }
+  // How long the render thread spent on warmup, and when it started: with
+  // the early start this time is spent before the compositor exists. Capped
+  // at two, so a warmup run again after a device reset still says so. Only
+  // the render thread gets here.
+  static uint32_t sNoted = 0;
+  if (sNoted >= 2) {
+    return;
+  }
+  sNoted++;
+  char note[200];
+  SprintfLiteral(note,
+                 "gfx: shader warmup done -- %u steps, %u ms on the render "
+                 "thread, started %s",
+                 mWarmupSteps, uint32_t(mWarmupTime.ToMilliseconds()),
+                 mWarmupEarly ? "early, before the compositor"
+                              : "with the renderer");
+  GeckoW10mNote(note);
+}
+#endif
+
 WebRenderThreadPool::WebRenderThreadPool(bool low_priority) {
   mThreadPool = wr_thread_pool_new(low_priority);
 }
@@ -1660,7 +1739,7 @@ WebRenderProgramCache::WebRenderProgramCache(wr::WrThreadPool* aThreadPool) {
   }
   mProgramCache = wr_program_cache_new(&path, aThreadPool);
   if (gfx::gfxVars::UseWebRenderProgramBinaryDisk()) {
-    wr_try_load_startup_shaders_from_disk(mProgramCache);
+    mStartupPrograms = wr_try_load_startup_shaders_from_disk(mProgramCache);
   }
 }
 

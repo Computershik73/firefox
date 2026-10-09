@@ -1340,9 +1340,11 @@ pub unsafe extern "C" fn wr_program_cache_delete(program_cache: *mut WrProgramCa
     mem::drop(Box::from_raw(program_cache));
 }
 
+/// Returns the number of startup programs read into memory: none means the
+/// shader warmup would have no binary to hand to the driver.
 #[no_mangle]
-pub unsafe extern "C" fn wr_try_load_startup_shaders_from_disk(program_cache: *mut WrProgramCache) {
-    (*program_cache).try_load_startup_shaders_from_disk();
+pub unsafe extern "C" fn wr_try_load_startup_shaders_from_disk(program_cache: *mut WrProgramCache) -> u32 {
+    (*program_cache).try_load_startup_shaders_from_disk()
 }
 
 #[no_mangle]

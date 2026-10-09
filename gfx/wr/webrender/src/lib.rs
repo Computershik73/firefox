@@ -233,6 +233,8 @@ pub use crate::composite::{NativeSurfaceId, NativeTileId, NativeSurfaceInfo, Par
 pub use crate::composite::{MappableCompositor, MappedTileInfo, SWGLCompositeSurfaceInfo, WindowVisibility, WindowProperties};
 pub use crate::device::{UploadMethod, VertexUsageHint, get_gl_target, get_unoptimized_shader_source};
 pub use crate::device::{ProgramBinary, ProgramCache, ProgramCacheObserver, FormatDesc, ShaderError};
+// GeckoW10m: the shader-cache notes in webrender_bindings' program_cache.rs.
+pub use crate::device::{gecko_w10m_note_always, gecko_w10m_shader_stats, GeckoW10mShaderStats};
 pub use crate::device::Device;
 pub use crate::profiler::{ProfilerHooks, set_profiler_hooks};
 pub use crate::renderer::{

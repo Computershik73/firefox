@@ -52,6 +52,64 @@ static GECKO_W10M_BLITS: std::sync::atomic::AtomicU32 = std::sync::atomic::Atomi
 static GECKO_W10M_TARGETS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static GECKO_W10M_UPLOADS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static GECKO_W10M_LINKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+// What the program-binary cache did for this run's links: how many programs
+// came from a binary and how many were compiled from source, and how long the
+// render thread waited for each kind. The shader-cache summary in
+// webrender_bindings (program_cache.rs) reads these when it writes the
+// startup list, so one line says whether the cache paid off. Relaxed atomic
+// adds inside link_program only, which runs a few dozen times a run; nothing
+// here is touched per frame.
+#[cfg(windows)]
+static SH_FROM_BINARY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(windows)]
+static SH_FROM_BINARY_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(windows)]
+static SH_COMPILED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(windows)]
+static SH_COMPILED_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(windows)]
+static SH_SLOWEST_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(windows)]
+static SH_REFUSED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(windows)]
+static SH_NO_BINARY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+// The base name of the slowest compile so far. A &'static str from the
+// program's source info, so recording it allocates nothing; the lock is only
+// taken when a compile beats the slowest one.
+#[cfg(windows)]
+static SH_SLOWEST: std::sync::Mutex<&'static str> = std::sync::Mutex::new("");
+
+/// A snapshot of the program-binary cache counters above.
+#[derive(Debug, Copy, Clone, Default)]
+pub struct GeckoW10mShaderStats {
+    pub from_binary: u32,
+    pub from_binary_ms: u32,
+    pub compiled: u32,
+    pub compiled_ms: u32,
+    pub slowest_ms: u32,
+    pub slowest: &'static str,
+    pub refused: u32,
+    pub no_binary: u32,
+}
+
+#[cfg(windows)]
+pub fn gecko_w10m_shader_stats() -> GeckoW10mShaderStats {
+    use std::sync::atomic::Ordering::Relaxed;
+    GeckoW10mShaderStats {
+        from_binary: SH_FROM_BINARY.load(Relaxed),
+        from_binary_ms: SH_FROM_BINARY_MS.load(Relaxed),
+        compiled: SH_COMPILED.load(Relaxed),
+        compiled_ms: SH_COMPILED_MS.load(Relaxed),
+        slowest_ms: SH_SLOWEST_MS.load(Relaxed),
+        slowest: SH_SLOWEST.lock().map(|name| *name).unwrap_or(""),
+        refused: SH_REFUSED.load(Relaxed),
+        no_binary: SH_NO_BINARY.load(Relaxed),
+    }
+}
+#[cfg(not(windows))]
+pub fn gecko_w10m_shader_stats() -> GeckoW10mShaderStats {
+    GeckoW10mShaderStats::default()
+}
 fn gecko_w10m_count(counter: &std::sync::atomic::AtomicU32, first: u32) -> Option<u32> {
     let n = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     GECKO_W10M_PULSE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -2604,6 +2662,12 @@ impl Device {
                 }
             }
 
+            // Set when the driver refuses the binary. GeckoW10m: upstream
+            // leaves the refused entry in `entries`, so the `contains_key`
+            // check after the compile below skips storing the fresh binary
+            // and the refused file stays on disk -- refused, and compiled from
+            // source again, on every launch until the cache is next emptied.
+            let mut refused = false;
             if let Some(entry) = cached_programs.entries.borrow_mut().get_mut(&info.digest) {
                 let mut link_status = [0];
                 unsafe {
@@ -2617,6 +2681,24 @@ impl Device {
                       self.capabilities.renderer_name,
                       error_log
                     );
+                    refused = true;
+                    #[cfg(windows)]
+                    {
+                        // An error path: the first refusal of the run is
+                        // noted, with the start of ANGLE's reason (a device or
+                        // version change says so in it).
+                        if SH_REFUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                            let reason: String = error_log
+                                .chars()
+                                .map(|c| if c.is_control() { ' ' } else { c })
+                                .take(160)
+                                .collect();
+                            gecko_w10m_note_always(&format!(
+                                "gfx: shader cache -- ANGLE refused the binary of {}: {}; compiled from source and saved again",
+                                info.full_name(), reason.trim()
+                            ));
+                        }
+                    }
                     if let Some(ref program_cache_handler) = cached_programs.program_cache_handler {
                         program_cache_handler.notify_program_binary_failed(&entry.binary);
                     }
@@ -2624,6 +2706,24 @@ impl Device {
                     entry.linked = true;
                     build_program = false;
                 }
+            }
+            // With the refused entry gone, the compile below stores its binary
+            // under the same digest, and the save overwrites the file of that
+            // name. Only this error path changes.
+            if refused && cfg!(windows) {
+                cached_programs.entries.borrow_mut().remove(&info.digest);
+            }
+        }
+
+        #[cfg(windows)]
+        {
+            if !build_program {
+                // Linked from a binary: the wait is for ANGLE to finish the
+                // load it started in glProgramBinary (and, for a program not
+                // in the startup list, the read of its file).
+                let ms = gecko_w10m_link_started.elapsed().as_millis() as u32;
+                SH_FROM_BINARY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                SH_FROM_BINARY_MS.fetch_add(ms, std::sync::atomic::Ordering::Relaxed);
             }
         }
 
@@ -2710,12 +2810,37 @@ impl Device {
                 return Err(ShaderError::Link(info.base_filename.to_owned(), error_log));
             }
 
+            #[cfg(windows)]
+            {
+                use std::sync::atomic::Ordering::Relaxed;
+                let ms = gecko_w10m_link_started.elapsed().as_millis() as u32;
+                SH_COMPILED.fetch_add(1, Relaxed);
+                SH_COMPILED_MS.fetch_add(ms, Relaxed);
+                if ms > SH_SLOWEST_MS.fetch_max(ms, Relaxed) {
+                    if let Ok(mut slowest) = SH_SLOWEST.lock() {
+                        *slowest = info.base_filename;
+                    }
+                }
+            }
+
             if let Some(ref cached_programs) = self.cached_programs {
                 if !cached_programs.entries.borrow().contains_key(&info.digest) {
                     let (buffer, format) = self.gl.get_program_binary(program.id);
                     if buffer.len() > 0 {
                         let binary = Arc::new(ProgramBinary::new(buffer, format, info.digest.clone()));
                         cached_programs.add_new_program_binary(binary);
+                    } else {
+                        #[cfg(windows)]
+                        {
+                            // Without a binary this program is compiled from
+                            // source on every launch; the first one is noted.
+                            if SH_NO_BINARY.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                                gecko_w10m_note_always(&format!(
+                                    "gfx: shader cache -- ANGLE gave no binary for {}; nothing can be saved",
+                                    info.full_name()
+                                ));
+                            }
+                        }
                     }
                 }
             }

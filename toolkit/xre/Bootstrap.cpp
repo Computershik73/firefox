@@ -341,6 +341,273 @@ extern "C" void GeckoW10mNote(const char* text) {
   AppendLine(L"GECKO_W10M_NOTE_LOG", line);
 }
 
+// What the process's address space is made of. A 32-bit process on the phone
+// has 2 GB of it, the browser takes about 1.2 GB before any page, and Discord
+// after login could not get 64 MB in one piece with 450 MB free in total: the
+// rest was in hundreds of pieces, the largest 18 MB. This says who holds what:
+// totals by kind, private allocations by size, the largest allocations with
+// the module or file behind them, and a picture of the whole space in 16 MB
+// cells. Twelve a run; from the shell a minute after start and when the
+// system says memory use went up, and from the engine at the first failed JS
+// allocation.
+namespace {
+struct GeckoW10mAlloc {
+  uintptr_t base = 0;
+  size_t size = 0;
+  size_t committed = 0;
+  DWORD type = 0;
+  DWORD protect = 0;
+};
+
+const char* GeckoW10mBaseName(const wchar_t* aPath, char* aOut, size_t aLen) {
+  const wchar_t* name = aPath;
+  for (const wchar_t* c = aPath; *c; ++c) {
+    if (*c == L'\\' || *c == L'/') {
+      name = c + 1;
+    }
+  }
+  size_t i = 0;
+  for (; name[i] && i + 1 < aLen; ++i) {
+    aOut[i] = name[i] < 128 ? static_cast<char>(name[i]) : '?';
+  }
+  aOut[i] = 0;
+  return aOut;
+}
+}  // namespace
+
+static void GeckoW10mNoteAddressSpace(const char* aWhy);
+
+// From the shell: a minute after start, and when memory use goes up. Eight a
+// run.
+extern "C" __declspec(dllexport) void gecko_w10m_note_address_space(
+    const char* aWhy) {
+  static LONG sCalls = 0;
+  if (::InterlockedIncrement(&sCalls) > 8) {
+    return;
+  }
+  GeckoW10mNoteAddressSpace(aWhy);
+}
+
+// From the engine, when an allocation has failed: a budget of its own, so the
+// map of the moment that matters is never the one left out.
+extern "C" void GeckoW10mNoteAddressSpaceOnFailure(const char* aWhy) {
+  static LONG sCalls = 0;
+  if (::InterlockedIncrement(&sCalls) > 3) {
+    return;
+  }
+  GeckoW10mNoteAddressSpace(aWhy);
+}
+
+static void GeckoW10mNoteAddressSpace(const char* aWhy) {
+  // One at a time, each line marked with its map's number: two maps taken at
+  // once would otherwise interleave line by line. Nothing in here allocates,
+  // and the log's own lock is taken and let go inside, line by line.
+  static SRWLOCK sLock = SRWLOCK_INIT;
+  static LONG sSerial = 0;
+  ::AcquireSRWLockExclusive(&sLock);
+  const int serial = int(::InterlockedIncrement(&sSerial));
+  constexpr size_t kMB = 1024 * 1024;
+  constexpr size_t kCell = 16 * kMB;
+  constexpr int kTop = 20;
+  constexpr int kCells = 128;  // 2 GB in 16 MB cells
+  GeckoW10mAlloc top[kTop];
+  int topCount = 0;
+  // image, mapped, private
+  size_t kindSize[3] = {}, kindCommit[3] = {}, kindCount[3] = {};
+  // private allocations: <1, 1-4, 4-16, 16-64, 64+ MB
+  size_t bucketCount[5] = {}, bucketSize[5] = {};
+  size_t freeTotal = 0, freePieces = 0, largest = 0;
+  size_t freeBySize[4] = {};  // 64+, 16-64, 4-16, smaller
+  // Per cell: free, image, mapped, private bytes.
+  size_t cells[kCells][4] = {};
+
+  auto kindOf = [](DWORD aType) {
+    return aType == MEM_IMAGE ? 0 : aType == MEM_MAPPED ? 1 : 2;
+  };
+  auto paint = [&](uintptr_t aStart, size_t aSize, int aSlot) {
+    uintptr_t at = aStart;
+    const uintptr_t end = aStart + aSize;
+    while (at < end) {
+      const size_t cell = at / kCell;
+      if (cell >= size_t(kCells)) {
+        break;
+      }
+      const uintptr_t cellEnd = (cell + 1) * kCell;
+      const uintptr_t stop = end < cellEnd ? end : cellEnd;
+      cells[cell][aSlot] += stop - at;
+      at = stop;
+    }
+  };
+  auto flush = [&](const GeckoW10mAlloc& a) {
+    const int kind = kindOf(a.type);
+    kindSize[kind] += a.size;
+    kindCommit[kind] += a.committed;
+    ++kindCount[kind];
+    if (kind == 2) {
+      const int b = a.size < kMB ? 0 : a.size < 4 * kMB ? 1 : a.size < 16 * kMB ? 2
+                  : a.size < 64 * kMB ? 3 : 4;
+      ++bucketCount[b];
+      bucketSize[b] += a.size;
+    }
+    // Keep the largest, sorted.
+    int slot = topCount < kTop ? topCount : kTop - 1;
+    if (topCount == kTop && a.size <= top[kTop - 1].size) {
+      return;
+    }
+    while (slot > 0 && top[slot - 1].size < a.size) {
+      top[slot] = top[slot - 1];
+      --slot;
+    }
+    top[slot] = a;
+    if (topCount < kTop) {
+      ++topCount;
+    }
+  };
+
+  GeckoW10mAlloc cur;
+  bool haveCur = false;
+  MEMORY_BASIC_INFORMATION info;
+  uintptr_t at = 0x10000;
+  while (::VirtualQuery(reinterpret_cast<void*>(at), &info, sizeof(info)) ==
+         sizeof(info)) {
+    const uintptr_t base = uintptr_t(info.BaseAddress);
+    if (info.State == MEM_FREE) {
+      if (haveCur) {
+        flush(cur);
+        haveCur = false;
+      }
+      freeTotal += info.RegionSize;
+      ++freePieces;
+      if (info.RegionSize > largest) {
+        largest = info.RegionSize;
+      }
+      ++freeBySize[info.RegionSize >= 64 * kMB   ? 0
+                   : info.RegionSize >= 16 * kMB ? 1
+                   : info.RegionSize >= 4 * kMB  ? 2
+                                                 : 3];
+      paint(base, info.RegionSize, 0);
+    } else {
+      const uintptr_t allocation = uintptr_t(info.AllocationBase);
+      if (!haveCur || allocation != cur.base) {
+        if (haveCur) {
+          flush(cur);
+        }
+        cur = GeckoW10mAlloc();
+        cur.base = allocation;
+        cur.type = info.Type;
+        cur.protect = info.AllocationProtect;
+        haveCur = true;
+      }
+      cur.size += info.RegionSize;
+      if (info.State == MEM_COMMIT) {
+        cur.committed += info.RegionSize;
+      }
+      paint(base, info.RegionSize, 1 + kindOf(info.Type));
+    }
+    const uintptr_t next = base + info.RegionSize;
+    if (next <= at) {
+      break;
+    }
+    at = next;
+  }
+  if (haveCur) {
+    flush(cur);
+  }
+
+  char note[512];
+  snprintf(note, sizeof(note),
+           "vm%d (%s): images %zu MB in %zu, mapped files %zu MB in %zu, private "
+           "%zu MB in %zu (%zu MB of it committed); free %zu MB in %zu pieces, "
+           "the largest %zu MB -- %zu of 64 MB or more, %zu of 16-64, %zu of "
+           "4-16, %zu smaller",
+           serial, aWhy ? aWhy : "asked", kindSize[0] / kMB, kindCount[0],
+           kindSize[1] / kMB, kindCount[1], kindSize[2] / kMB, kindCount[2],
+           kindCommit[2] / kMB, freeTotal / kMB, freePieces, largest / kMB,
+           freeBySize[0], freeBySize[1], freeBySize[2], freeBySize[3]);
+  GeckoW10mNote(note);
+  snprintf(note, sizeof(note),
+           "vm%d: private allocations -- under 1 MB: %zu (%zu MB), 1-4 MB: %zu "
+           "(%zu MB), 4-16 MB: %zu (%zu MB), 16-64 MB: %zu (%zu MB), 64 MB or "
+           "more: %zu (%zu MB)",
+           serial, bucketCount[0], bucketSize[0] / kMB, bucketCount[1],
+           bucketSize[1] / kMB, bucketCount[2], bucketSize[2] / kMB,
+           bucketCount[3], bucketSize[3] / kMB, bucketCount[4],
+           bucketSize[4] / kMB);
+  GeckoW10mNote(note);
+
+  using MappedNameFn = DWORD(WINAPI*)(HANDLE, LPVOID, LPWSTR, DWORD);
+  static const auto mappedName = [] {
+    for (const wchar_t* dll : {L"kernelbase.dll", L"kernel32.dll"}) {
+      if (HMODULE module = ::GetModuleHandleW(dll)) {
+        if (FARPROC fn = ::GetProcAddress(module, "K32GetMappedFileNameW")) {
+          return reinterpret_cast<MappedNameFn>(fn);
+        }
+      }
+    }
+    return MappedNameFn(nullptr);
+  }();
+  for (int i = 0; i < topCount; ++i) {
+    const GeckoW10mAlloc& a = top[i];
+    wchar_t path[MAX_PATH] = L"";
+    char name[64] = "";
+    if (a.type == MEM_IMAGE) {
+      if (::GetModuleFileNameW(reinterpret_cast<HMODULE>(a.base), path,
+                               MAX_PATH)) {
+        GeckoW10mBaseName(path, name, sizeof(name));
+      }
+    } else if (a.type == MEM_MAPPED && mappedName) {
+      if (mappedName(::GetCurrentProcess(), reinterpret_cast<void*>(a.base),
+                     path, MAX_PATH)) {
+        GeckoW10mBaseName(path, name, sizeof(name));
+      }
+    }
+    const DWORD p = a.protect & 0xff;
+    snprintf(note, sizeof(note),
+             "vm%d: %2d. 0x%08x %6.1f MB %s, %.1f MB committed, %s%s%s",
+             serial, i + 1,
+             unsigned(a.base), double(a.size) / kMB,
+             a.type == MEM_IMAGE ? "image" : a.type == MEM_MAPPED ? "mapped"
+                                                                  : "private",
+             double(a.committed) / kMB,
+             p == PAGE_EXECUTE_READWRITE || p == PAGE_EXECUTE_WRITECOPY ? "rwx"
+             : p == PAGE_EXECUTE_READ || p == PAGE_EXECUTE              ? "rx"
+             : p == PAGE_READWRITE || p == PAGE_WRITECOPY               ? "rw"
+             : p == PAGE_READONLY                                       ? "r"
+             : p == PAGE_NOACCESS                                       ? "reserved"
+                                                                        : "other",
+             name[0] ? " " : "", name);
+    GeckoW10mNote(note);
+  }
+
+  // The picture: '.' a free cell, ',' half free or more, else who holds most
+  // of it -- I an image, M a mapped file, P private memory. 64 cells a line,
+  // a gigabyte.
+  for (int half = 0; half < 2; ++half) {
+    char picture[kCells / 2 + 1];
+    for (int c = 0; c < kCells / 2; ++c) {
+      const size_t* cell = cells[half * (kCells / 2) + c];
+      char mark;
+      if (cell[0] >= kCell) {
+        mark = '.';
+      } else if (cell[0] * 2 >= kCell) {
+        mark = ',';
+      } else if (cell[1] >= cell[2] && cell[1] >= cell[3]) {
+        mark = 'I';
+      } else if (cell[2] >= cell[3]) {
+        mark = 'M';
+      } else {
+        mark = 'P';
+      }
+      picture[c] = mark;
+    }
+    picture[kCells / 2] = 0;
+    snprintf(note, sizeof(note), "vm%d: %s GB |%s|", serial,
+             half ? "1-2" : "0-1", picture);
+    GeckoW10mNote(note);
+  }
+  ::ReleaseSRWLockExclusive(&sLock);
+}
+
 // The hook is const -- it was made so deliberately, a writable global function
 // pointer being an obvious thing to attack -- so it is defined here rather than
 // assigned at run time. delayimp.lib supplies a null default only when nothing

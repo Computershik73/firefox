@@ -683,6 +683,7 @@ js::HashNumber JSRuntime::randomHashCode() {
 #  include "jsapi.h"
 #  include "mozilla/Sprintf.h"
 #  include "util/WindowsWrapper.h"
+extern "C" void GeckoW10mNoteAddressSpaceOnFailure(const char* aWhy);
 extern "C" void GeckoW10mNote(const char* text);
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
@@ -696,7 +697,8 @@ static void GeckoW10mNoteMallocFailure(JSRuntime* aRuntime,
                                        AllocFunction aFunc, size_t aBytes,
                                        void* aCaller, JSContext* aCx) {
   static mozilla::Atomic<uint32_t> sNotes{0};
-  if (sNotes++ >= 8) {
+  const uint32_t drawn = sNotes++;
+  if (drawn >= 8) {
     return;
   }
   size_t freeBytes = 0, largest = 0, pieces = 0;
@@ -728,6 +730,10 @@ static void GeckoW10mNoteMallocFailure(JSRuntime* aRuntime,
                  unsigned((uintptr_t(aCaller) & ~uintptr_t(1)) -
                           uintptr_t(&__ImageBase)));
   GeckoW10mNote(note);
+  // The first one: what the address space was made of when it happened.
+  if (drawn == 0) {
+    GeckoW10mNoteAddressSpaceOnFailure("a JS allocation failed");
+  }
 
   // The direct caller is a vector's allocation policy, which says nothing.
   // The script running at the time does -- a page's own, or the browser's --

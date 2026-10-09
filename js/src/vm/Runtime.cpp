@@ -684,6 +684,7 @@ js::HashNumber JSRuntime::randomHashCode() {
 #  include "mozilla/Sprintf.h"
 #  include "util/WindowsWrapper.h"
 extern "C" void GeckoW10mNoteAddressSpaceOnFailure(const char* aWhy);
+extern "C" void GeckoW10mMemoryPressureOnFailure(const char* aWhy);
 extern "C" void GeckoW10mNote(const char* text);
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
@@ -730,9 +731,16 @@ static void GeckoW10mNoteMallocFailure(JSRuntime* aRuntime,
                  unsigned((uintptr_t(aCaller) & ~uintptr_t(1)) -
                           uintptr_t(&__ImageBase)));
   GeckoW10mNote(note);
-  // The first one: what the address space was made of when it happened.
+  // The first one: what the address space was made of when it happened. And
+  // then the engine is asked to let go -- a fresh "low-memory", a shrinking
+  // GC and a cycle collection -- which nothing asked for before: a run that
+  // had been told about memory once already only ever heard "ongoing" again,
+  // and the JS engine ignores that
+  // (widget/headless/GeckoW10mMemoryPressure.cpp). After the map, so that
+  // the map is of the moment it failed.
   if (drawn == 0) {
     GeckoW10mNoteAddressSpaceOnFailure("a JS allocation failed");
+    GeckoW10mMemoryPressureOnFailure("a JS allocation failed");
   }
 
   // The direct caller is a vector's allocation policy, which says nothing.

@@ -14365,6 +14365,33 @@
   value: 180000
   mirror: always
 
+#if defined(GECKO_W10M)
+# The process's own address space, watched from a background task queue
+# (widget/headless/GeckoW10mMemoryPressure.cpp): a 32-bit process has 2 GB of
+# it, and on the phones it runs out in pieces before memory runs out -- the
+# HP Elite x3 had 300-400 MB free and nothing over 17 MB in one piece. When
+# the largest free piece falls below this many MB the engine is put under
+# memory pressure (a shrinking GC, a cycle collection, the caches) until the
+# piece is back above one and a half times this. Walked every 5 s, every
+# second within twice this. 0 turns the watcher off.
+- name: memory.gecko-w10m.address-space.low-mb
+  type: RelaxedAtomicUint32
+  value: 96
+  mirror: always
+
+# While the engine is under serious memory pressure -- the phone at High or
+# over its limit, the address space low, an allocation that failed -- it is
+# told again this often: memory-pressure-stop and then a fresh low-memory,
+# which runs another shrinking GC and cycle collection, instead of
+# low-memory-ongoing, which the JS engine ignores. Medium gets one fresh
+# low-memory when it comes on and the cheap ongoing after that. 0 tells it
+# once per spell of pressure, as upstream does.
+- name: memory.gecko-w10m.pressure-rearm-ms
+  type: RelaxedAtomicUint32
+  value: 30000
+  mirror: always
+#endif
+
 #---------------------------------------------------------------------------
 # Prefs starting with "middlemouse."
 #---------------------------------------------------------------------------

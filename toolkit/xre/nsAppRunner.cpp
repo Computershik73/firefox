@@ -49,6 +49,8 @@
 // first chrome manifest with nothing in between to say where; these marks
 // split them by phase.
 extern "C" void GeckoW10mNote(const char* aText);
+// widget/headless/GeckoW10mMemoryPressure.cpp
+extern "C" void GeckoW10mMemoryStart();
 #  include "nsPrintfCString.h"
 // A mark with the CPU time spent so far, by this thread and by the process.
 // The second launch of 155.12 took seventy seconds to restore its session
@@ -6420,6 +6422,12 @@ nsresult XREMain::XRE_mainRun() {
   // We're entering the main run loop now, so we don't need to keep holding onto
   // the `nsICommandLineRunner` anymore.
   cmdLine = nullptr;
+
+#if defined(GECKO_W10M)
+  // Memory pressure under the port's own rules from here on, and the watcher
+  // of the address space: the browser is up and its prefs are read.
+  GeckoW10mMemoryStart();
+#endif
 
   {
     rv = appStartup->Run();

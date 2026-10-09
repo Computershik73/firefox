@@ -27,6 +27,14 @@ UNIFIED_SOURCES += [
     "HeadlessWidget.cpp",
 ]
 
+if CONFIG["MOZ_UWP"]:
+    # Windows 10 Mobile: when the engine is told to let go of memory -- the
+    # phone's word from the shell, and a watcher of the process's own address
+    # space. Windows calls, kept out of the unified build.
+    SOURCES += [
+        "GeckoW10mMemoryPressure.cpp",
+    ]
+
 if widget_dir == "gtk":
     UNIFIED_SOURCES += [
         "HeadlessLookAndFeelGTK.cpp",

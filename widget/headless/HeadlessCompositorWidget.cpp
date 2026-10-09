@@ -658,10 +658,6 @@ extern "C" __declspec(dllexport) void gecko_w10m_app_state(int32_t aForeground) 
       }));
 }
 
-// The phone says memory is tight. It says so per app, against a ceiling it
-// set from the device's class, and past the ceiling the app is simply gone;
-// the engine's own low-memory machinery is what drops caches, minimises the
-// heap and unloads background tabs, and this is how it hears.
 // A message channel between chrome script and the shell, for what the
 // engine cannot do and the shell can: the phone's PlayReady, for one.
 //
@@ -732,11 +728,9 @@ extern "C" __declspec(dllexport) void gecko_w10m_bridge_reply(const char* aJson)
       }));
 }
 
-extern "C" __declspec(dllexport) void gecko_w10m_memory_pressure(int32_t aLevel) {
-  GeckoW10mNote(aLevel >= 2 ? "mem: the phone says memory is CRITICAL"
-                          : "mem: the phone says memory is tight");
-  NS_NotifyOfEventualMemoryPressure(MemoryPressureState::LowMemory);
-}
+// gecko_w10m_memory_pressure, the phone's word on memory, is in
+// GeckoW10mMemoryPressure.cpp with the rest of what decides when the engine
+// lets go.
 
 extern "C" __declspec(dllexport) void gecko_w10m_set_screen(int32_t aWidth,
                                                          int32_t aHeight) {

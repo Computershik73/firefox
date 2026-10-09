@@ -11,6 +11,12 @@
 #include "mozilla/SyncRunnable.h"
 #include "mozilla/TaskQueue.h"
 #include "nsTArray.h"
+#if defined(GECKO_W10M)
+#  include "mozilla/Atomics.h"
+#  include "nsPrintfCString.h"
+// The shell's diagnostics log.
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
 
 #define LOG(...) MOZ_LOG_FMT(sPDMLog, mozilla::LogLevel::Debug, __VA_ARGS__)
 
@@ -60,6 +66,18 @@ RefPtr<MediaDataDecoder::DecodePromise> WMFMediaDataDecoder::ProcessError(
       GetDescriptionName().get(), aReason);
   LOG("{}", markerString.get());
   PROFILER_MARKER_TEXT("WMFDecoder Error", MEDIA_PLAYBACK, {}, markerString);
+#if defined(GECKO_W10M)
+  // Upstream keeps decoder errors to MOZ_LOG and the profiler; the note log
+  // keeps the first few of a run. Their HRESULTs are what would say whether
+  // retrying a failed output (media.wmf.gecko-w10m.output-error-retries) is
+  // worth turning on.
+  static Atomic<uint32_t> sNotes(0);
+  if (++sNotes <= 8) {
+    nsPrintfCString note("media: decoder error in %s: %lx (%s)", aReason,
+                         aError, GetDescriptionName().get());
+    GeckoW10mNote(note.get());
+  }
+#endif
 
   // TODO: For the error DXGI_ERROR_DEVICE_RESET, we could return
   // NS_ERROR_DOM_MEDIA_NEED_NEW_DECODER to get the latest device. Maybe retry

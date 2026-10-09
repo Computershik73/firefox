@@ -138,6 +138,15 @@ class RenderCompositorLayersSWGL : public RenderCompositor {
     bool mIsExternal = false;
     std::unordered_map<TileKey, UniquePtr<Tile>, Tile::KeyHashFn> mTiles;
     RefPtr<RenderTextureHost> mExternalImage;
+#if defined(GECKO_W10M)
+    // For the video frame order check (RenderCompositorD3D11SWGL.cpp): how
+    // many images have been attached, and which attach, conversion number
+    // and texture the last composite drew.
+    uint32_t mW10mAttaches = 0;
+    uint32_t mW10mDrawnAttach = 0;
+    uint32_t mW10mDrawnSeq = 0;
+    void* mW10mDrawnTex = nullptr;
+#endif
 
     struct IdHashFn {
       std::size_t operator()(const wr::NativeSurfaceId& aId) const {

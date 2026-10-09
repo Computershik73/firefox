@@ -69,6 +69,11 @@ class MFTDecoder final {
   //  the first sample is decoded.
   HRESULT GetOutputMediaType(RefPtr<IMFMediaType>& aMediaType);
   const GUID& GetOutputMediaSubType() const { return mOutputSubType; }
+#  if defined(GECKO_W10M)
+  // Whether the MFT allocates its output samples itself (a DXVA decoder does,
+  // on the GPU), as the output stream info said when the output type was set.
+  bool ProvidesOutputSamples() const { return mMFTProvidesOutputSamples; }
+#  endif
 
   // Submits data into the MFT for processing.
   //

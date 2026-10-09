@@ -35,6 +35,19 @@ namespace layers {
 
 class FenceD3D11;
 
+#if defined(GECKO_W10M)
+// Private data on a video frame's BGRA texture at feature level 9_3: the
+// number of the conversion that last wrote it, a uint32_t rising for the whole
+// process. The decoder sets it (DXVA2Manager.cpp), the compositor reads it
+// when it draws the frame (RenderCompositorD3D11SWGL.cpp), to tell an older
+// frame or a rewritten texture on the screen from a GPU that had not finished.
+static const GUID kGeckoW10mFrameSeq = {
+    0x8917cc22,
+    0x3861,
+    0x49ca,
+    {0x8a, 0x1a, 0xbb, 0x20, 0x61, 0x2d, 0x2f, 0x58}};
+#endif
+
 gfx::DeviceResetReason DXGIErrorToDeviceResetReason(HRESULT aError);
 
 already_AddRefed<TextureHost> CreateTextureHostD3D11(

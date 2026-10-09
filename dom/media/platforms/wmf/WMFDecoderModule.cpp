@@ -30,6 +30,14 @@
 #include "nsServiceManagerUtils.h"
 #include "nsWindowsHelpers.h"
 #include "prsystem.h"
+#if defined(GECKO_W10M)
+#  include "DXVA2Manager.h"
+#  include "H264.h"
+#  include "mozilla/layers/KnowsCompositor.h"
+#  include "nsPrintfCString.h"
+// The shell's diagnostics log.
+extern "C" void GeckoW10mNote(const char* aText);
+#endif
 
 #define LOG(...) MOZ_LOG_FMT(sPDMLog, mozilla::LogLevel::Debug, __VA_ARGS__)
 
@@ -366,6 +374,38 @@ media::DecodeSupportSet WMFDecoderModule::Supports(
     return media::DecodeSupportSet{};
   }
 
+#if defined(GECKO_W10M)
+  // A page asking (isTypeSupported, canPlayType, the support step of
+  // decodingInfo -- none of them pass a compositor, decoder creation does) is
+  // told no for H.264 at or above the smallest size the GPU's decoder had no
+  // configuration for, so that a player picks a rung the phone can decode
+  // instead of one that falls to four ARM cores. Sizes between the largest
+  // accepted and the smallest refused are never refused, and decoder creation
+  // keeps upstream's software fallback.
+  if (type == WMFStreamType::H264 && videoInfo && !aParams.mKnowsCompositor &&
+      sDXVAEnabled && StaticPrefs::media_wmf_gecko_w10m_h264_query_size_cap()) {
+    const DXVA2Manager::GeckoW10mDxvaCaps caps =
+        DXVA2Manager::GeckoW10mDxvaCapsNow();
+    const int32_t width = videoInfo->mImage.width;
+    const int32_t height = videoInfo->mImage.height;
+    if (caps.known && caps.h264 && caps.minFailedW && width > 0 &&
+        height > 0 &&
+        int64_t(width) * height >=
+            int64_t(caps.minFailedW) * int64_t(caps.minFailedH)) {
+      static Atomic<uint32_t> sNotes(0);
+      if (++sNotes <= 3) {
+        nsPrintfCString note(
+            "media: H.264 %dx%d reported unsupported to the page -- this "
+            "GPU's decoder refused %ux%u "
+            "(media.wmf.gecko-w10m.h264-query-size-cap)",
+            width, height, caps.minFailedW, caps.minFailedH);
+        GeckoW10mNote(note.get());
+      }
+      return media::DecodeSupportSet{};
+    }
+  }
+#endif
+
   if (CanCreateMFTDecoder(type)) {
     if (StreamTypeIsVideo(type)) {
       return sDXVAEnabled ? media::DecodeSupport::HardwareDecode
@@ -380,6 +420,65 @@ media::DecodeSupportSet WMFDecoderModule::Supports(
              ? media::DecodeSupport::UnsureDueToLackOfExtension
              : media::DecodeSupportSet{};
 }
+
+#if defined(GECKO_W10M)
+// mediaCapabilities.decodingInfo for H.264, answered without building a
+// decoder (MediaCapabilities.cpp): whether this config would be decoded in
+// hardware, from what the DXVA probe found (DXVA2Manager.cpp). Returns false
+// -- and the caller builds a decoder, as upstream does -- for anything the
+// answer could differ on: a profile other than Baseline, Main or High, not
+// 4:2:0 or 8-bit (upstream's decoder creation refuses those), past the
+// Microsoft decoder's 4096x2304, or before the probe has run. The DXVA slot
+// is left out on purpose: the answer is what the GPU can do, not whether
+// another video holds the slot right now.
+bool GeckoW10mH264DecodingInfo(const VideoInfo& aInfo,
+                               layers::KnowsCompositor* aCompositor,
+                               bool* aHardware) {
+  if (!StaticPrefs::media_wmf_gecko_w10m_capabilities_from_probe() ||
+      !WMFDecoderModule::CanCreateMFTDecoder(WMFStreamType::H264)) {
+    return false;
+  }
+  const int32_t width = aInfo.mImage.width;
+  const int32_t height = aInfo.mImage.height;
+  if (width <= 0 || height <= 0 || width > 4096 || height > 4096 ||
+      int64_t(width) * height > int64_t(4096) * 2304) {
+    return false;
+  }
+  SPSData sps;
+  if (!H264::DecodeSPSFromExtraData(aInfo.mExtraData, sps) ||
+      (sps.profile_idc != 66 && sps.profile_idc != 77 &&
+       sps.profile_idc != 100) ||
+      sps.chroma_format_idc != 1 || sps.bit_depth_luma_minus8 != 0 ||
+      aInfo.mColorDepth != gfx::ColorDepth::COLOR_8) {
+    return false;
+  }
+  bool hardware = false;
+  if (sDXVAEnabled && StaticPrefs::media_wmf_dxva_d3d11_enabled() &&
+      aCompositor && aCompositor->SupportsD3D11()) {
+    const DXVA2Manager::GeckoW10mDxvaCaps caps =
+        DXVA2Manager::GeckoW10mDxvaCapsNow();
+    if (!caps.known) {
+      // The first query builds a decoder, and that decoder runs the probe.
+      return false;
+    }
+    // Below 132x132 the decoder goes to software (WMFVideoMFTManager).
+    hardware = caps.h264 && width >= 132 && height >= 132 &&
+               (!caps.minFailedW ||
+                int64_t(width) * height <
+                    int64_t(caps.minFailedW) * int64_t(caps.minFailedH));
+  }
+  *aHardware = hardware;
+  static Atomic<bool> sNoted(false);
+  if (!sNoted.exchange(true)) {
+    nsPrintfCString note(
+        "media: H.264 capability queries answered from the DXVA probe, no "
+        "decoder built (first: %dx%d -> hardware %s)",
+        width, height, hardware ? "yes" : "no");
+    GeckoW10mNote(note.get());
+  }
+  return true;
+}
+#endif
 
 nsresult WMFDecoderModule::Startup() {
   return wmf::MediaFoundationInitializer::HasInitialized() ? NS_OK

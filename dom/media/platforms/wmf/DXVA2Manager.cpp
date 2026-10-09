@@ -322,6 +322,121 @@ static const char* DecoderGUIDToStr(const GUID& aGuid) {
   return "none";
 }
 
+#if defined(GECKO_W10M)
+// What the GPU's video decoder can do with H.264, asked once per process.
+// YouTube asks mediaCapabilities about half a dozen sizes on every watch page,
+// and upstream answers each by building a whole decoder -- an MFT, a device
+// manager, a video processor and a throwaway ID3D11VideoDecoder -- on the
+// device the compositor is drawing with at feature level 9_3, each taking the
+// one DXVA slot this phone has while it lives. The answers come from here
+// instead (GeckoW10mH264DecodingInfo, WMFDecoderModule.cpp).
+//
+// The probe runs inside the first hardware H.264 decoder's SupportsConfig: on
+// the device that really decodes (CreateDecoderDevice does not always hand out
+// the compositor's), on the MTA thread decoders are set up on, after
+// CheckVideoDecoderFormat has picked the H.264 GUID. It only asks the video
+// device -- profiles and decoder configuration counts, no decoder and no video
+// processor is made, no immediate context touched -- and stops at the first
+// size refused. Before it has run, queries build a decoder as upstream does.
+enum : uint32_t { kGeckoW10mProbeUnknown = 0, kGeckoW10mProbeDone = 1 };
+static Atomic<uint32_t> sGeckoW10mProbeState(kGeckoW10mProbeUnknown);
+static StaticMutex sGeckoW10mProbeMutex MOZ_UNANNOTATED;
+// Written once, under the mutex, before the state turns to done; never again.
+static DXVA2Manager::GeckoW10mDxvaCaps sGeckoW10mProbeCaps;
+
+static void GeckoW10mProbeDxvaOnce(ID3D11Device* aDevice,
+                                   ID3D11VideoDevice* aVideoDevice,
+                                   const GUID& aH264, uint32_t aVendorID,
+                                   uint32_t aDeviceID) {
+  if (sGeckoW10mProbeState == kGeckoW10mProbeDone) {
+    return;
+  }
+  StaticMutexAutoLock lock(sGeckoW10mProbeMutex);
+  if (sGeckoW10mProbeState == kGeckoW10mProbeDone) {
+    return;
+  }
+  const TimeStamp start = TimeStamp::Now();
+  DXVA2Manager::GeckoW10mDxvaCaps caps;
+  caps.h264 = aH264 != GUID_NULL;
+
+  // The decoder profiles the GPU lists, by the first field of their GUIDs:
+  // for the log only.
+  nsAutoCString profiles;
+  const UINT profileCount =
+      std::min<UINT>(aVideoDevice->GetVideoDecoderProfileCount(), 16);
+  for (UINT i = 0; i < profileCount; i++) {
+    GUID profile;
+    if (SUCCEEDED(aVideoDevice->GetVideoDecoderProfile(i, &profile))) {
+      profiles.AppendPrintf("%s%08lx", profiles.IsEmpty() ? "" : " ",
+                            profile.Data1);
+    }
+  }
+
+  // Smallest first; a GPU that refuses a size refuses the larger ones too,
+  // and a driver that has never been asked about 4K is not asked now.
+  static const uint32_t kSizes[4][2] = {
+      {1280, 720}, {1920, 1088}, {2560, 1440}, {3840, 2160}};
+  UINT configs[4] = {};
+  for (size_t i = 0; i < 4 && caps.h264; i++) {
+    D3D11_VIDEO_DECODER_DESC desc = {aH264, kSizes[i][0], kSizes[i][1],
+                                     DXGI_FORMAT_NV12};
+    UINT count = 0;
+    HRESULT hr = aVideoDevice->GetVideoDecoderConfigCount(&desc, &count);
+    configs[i] = SUCCEEDED(hr) ? count : 0;
+    if (FAILED(hr) || !count) {
+      caps.minFailedW = kSizes[i][0];
+      caps.minFailedH = kSizes[i][1];
+      break;
+    }
+    caps.maxW = kSizes[i][0];
+    caps.maxH = kSizes[i][1];
+  }
+
+  // For the log as well: whether NV12 could be a texture of its own and be
+  // sampled by a shader, which decides whether frames could ever skip the
+  // video processor here.
+  UINT nv12 = 0;
+  if (FAILED(aDevice->CheckFormatSupport(DXGI_FORMAT_NV12, &nv12))) {
+    nv12 = 0;
+  }
+
+  caps.known = true;
+  sGeckoW10mProbeCaps = caps;
+  sGeckoW10mProbeState = kGeckoW10mProbeDone;
+
+  // No %f: integers only, as in the decoder's own line.
+  const uint32_t tenths =
+      uint32_t((TimeStamp::Now() - start).ToMicroseconds() / 100);
+  nsAutoCString refused;
+  if (caps.minFailedW) {
+    refused.AppendPrintf("refused from %ux%u", caps.minFailedW,
+                         caps.minFailedH);
+  } else {
+    refused.AssignLiteral("nothing refused");
+  }
+  nsPrintfCString note(
+      "media: DXVA H.264 on this GPU %04x:%04x: %s; decoder configs 1280x720 "
+      "%u, 1920x1088 %u, 2560x1440 %u, 3840x2160 %u -> %s; probed in %u.%u ms",
+      aVendorID, aDeviceID, caps.h264 ? "yes" : "no", configs[0], configs[1],
+      configs[2], configs[3], refused.get(), tenths / 10, tenths % 10);
+  GeckoW10mNote(note.get());
+  nsPrintfCString note2(
+      "media: DXVA decoder profiles [%.300s]; NV12 textures %s, NV12 shader "
+      "sampling %s",
+      profiles.get(), (nv12 & D3D11_FORMAT_SUPPORT_TEXTURE2D) ? "yes" : "no",
+      (nv12 & D3D11_FORMAT_SUPPORT_SHADER_SAMPLE) ? "yes" : "no");
+  GeckoW10mNote(note2.get());
+}
+
+/* static */
+DXVA2Manager::GeckoW10mDxvaCaps DXVA2Manager::GeckoW10mDxvaCapsNow() {
+  if (sGeckoW10mProbeState != kGeckoW10mProbeDone) {
+    return GeckoW10mDxvaCaps{};
+  }
+  return sGeckoW10mProbeCaps;
+}
+#endif
+
 // Count of the number of DXVAManager's we've created. This is also the
 // number of videos we're decoding with DXVA. Use on main thread only.
 static Atomic<uint32_t> sDXVAVideosCount(0);
@@ -446,6 +561,22 @@ class D3D11DXVA2Manager : public DXVA2Manager {
   double mWaitMaxMs = 0;
   uint32_t mWaitLong = 0;
   uint32_t mWaitGaveUp = 0;
+  // The same wait, before the conversion: for the decode into the NV12
+  // surface the video processor is about to read
+  // (media.wmf.gecko-w10m.frame-sync 2).
+  void WaitForDecodedFrame();
+  RefPtr<ID3D11Query> mDecodedQuery;
+  bool mDecodedQueryFailed = false;
+  uint32_t mDecWaitFrames = 0;
+  double mDecWaitTotalMs = 0;
+  double mDecWaitMaxMs = 0;
+  uint32_t mDecWaitLong = 0;
+  uint32_t mDecWaitGaveUp = 0;
+  // The adapter's device id, for the DXVA probe's line.
+  uint32_t mDeviceID = 0;
+  // Whether the first decoded frame since the last reconfigure has been
+  // checked for being a decoder surface (CopyTextureToImage).
+  bool mCheckedDecoderSurface = false;
 #endif
   uint32_t mWidth = 0;
   uint32_t mHeight = 0;
@@ -510,6 +641,16 @@ bool D3D11DXVA2Manager::SupportsConfig(const VideoInfo& aInfo,
         break;
       }
     }
+#if defined(GECKO_W10M)
+    // Once per process, on the device that decodes; after that one atomic
+    // load. Both prefs off switch the probe off.
+    if (videoDevice &&
+        (StaticPrefs::media_wmf_gecko_w10m_capabilities_from_probe() ||
+         StaticPrefs::media_wmf_gecko_w10m_h264_query_size_cap())) {
+      GeckoW10mProbeDxvaOnce(mDevice, videoDevice, desc.Guid, mVendorID,
+                             mDeviceID);
+    }
+#endif
   } else if (subtype == MFVideoFormat_VP80) {
     NS_ENSURE_TRUE(aInfo.mColorDepth == ColorDepth::COLOR_8, false);
     desc.Guid = DXVA2_ModeVP8_VLD;
@@ -803,6 +944,9 @@ D3D11DXVA2Manager::InitInternal(layers::KnowsCompositor* aKnowsCompositor,
   }
 
   mVendorID = adapterDesc.VendorId;
+#if defined(GECKO_W10M)
+  mDeviceID = adapterDesc.DeviceId;
+#endif
 
   if ((adapterDesc.VendorId == 0x1022 || adapterDesc.VendorId == 0x1002) &&
       !StaticPrefs::media_wmf_skip_blacklist()) {
@@ -1132,6 +1276,9 @@ D3D11DXVA2Manager::ConfigureForSize(IMFMediaType* aInputType,
   NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
 
   const bool isSizeChanged = (mWidth != aWidth) || (mHeight != aHeight);
+#if defined(GECKO_W10M)
+  mCheckedDecoderSurface = false;
+#endif
   mWidth = aWidth;
   mHeight = aHeight;
   mInputType = inputType;
@@ -1175,6 +1322,9 @@ D3D11DXVA2Manager::ConfigureForSize(gfx::SurfaceFormat aSurfaceFormat,
   }
 
   const bool isSizeChanged = (mWidth != aWidth) || (mHeight != aHeight);
+#if defined(GECKO_W10M)
+  mCheckedDecoderSurface = false;
+#endif
   mWidth = aWidth;
   mHeight = aHeight;
   mYUVColorSpace = aColorSpace;
@@ -1305,6 +1455,25 @@ HRESULT D3D11DXVA2Manager::CopyTextureToImage(
   D3D11_TEXTURE2D_DESC inDesc;
   aInTexture.mTexture->GetDesc(&inDesc);
 
+#if defined(GECKO_W10M)
+  // The H.264 MFT falls back to decoding on the CPU, and uploads, when the GPU
+  // cannot take the stream -- even with DXVA negotiated -- and its textures
+  // then need not be decoder surfaces. A missing D3D11_BIND_DECODER proves
+  // that; the flag being there proves nothing, the MFT asks for it either way.
+  // Once per reconfigure.
+  if (!mCheckedDecoderSurface) {
+    mCheckedDecoderSurface = true;
+    static Atomic<uint32_t> sNotes(0);
+    if (!(inDesc.BindFlags & D3D11_BIND_DECODER) && ++sNotes <= 2) {
+      nsPrintfCString note(
+          "media: decoded frames are not decoder surfaces (bind %x, array %u, "
+          "%ux%u) -- the MFT decodes on the CPU and uploads",
+          inDesc.BindFlags, inDesc.ArraySize, inDesc.Width, inDesc.Height);
+      GeckoW10mNote(note.get());
+    }
+  }
+#endif
+
   LOG("CopyTextureToImage, inDesc.Format={}, mYUVColorSpace={}, "
       "mColorRange={}, mColorDepth={}",
       static_cast<int>(inDesc.Format), static_cast<int>(mYUVColorSpace),
@@ -1336,6 +1505,34 @@ HRESULT D3D11DXVA2Manager::CopyTextureToImage(
 
   RefPtr<IDXGIKeyedMutex> mutex;
   texture->QueryInterface((IDXGIKeyedMutex**)getter_AddRefs(mutex));
+
+#if defined(GECKO_W10M)
+  // Frames that stay on the GPU at feature level 9_3: decoded and converted on
+  // the compositor's own device, nothing shared, nothing between the decoder,
+  // the video processor and the compositor to order their work (see the wait
+  // below). media.wmf.gecko-w10m.frame-sync says how much the decoder's
+  // thread waits for: 1 for the conversion, 2 for the decode as well, 0 for
+  // nothing (a diagnostic; the old frames come back). Everywhere else it is 1
+  // and nothing here acts.
+  const bool w10mOnGpu =
+      !mutex && !DeviceManagerDx::Get()->TextureSharingWorks() &&
+      mDevice == DeviceManagerDx::Get()->GetCompositorDevice();
+  const int32_t w10mSync =
+      w10mOnGpu ? StaticPrefs::media_wmf_gecko_w10m_frame_sync() : 1;
+  if (w10mSync != 1) {
+    static Atomic<bool> sSyncNoted(false);
+    if (!sSyncNoted.exchange(true)) {
+      nsPrintfCString note(
+          "media: frame sync %d -- %s", int(w10mSync),
+          w10mSync == 2 ? "converted frames wait for the decode and for the "
+                          "conversion"
+          : w10mSync == 0
+              ? "converted frames are not waited for (diagnostic)"
+              : "an unknown mode, converted frames wait for the conversion");
+      GeckoW10mNote(note.get());
+    }
+  }
+#endif
 
   HRESULT hr;
   {
@@ -1375,6 +1572,19 @@ HRESULT D3D11DXVA2Manager::CopyTextureToImage(
       VideoProcessorD3D11::InputTextureInfo info(
           ToColorSpace2(mYUVColorSpace), mColorRange, mTransferFunction,
           aInTexture.mIndex, aInTexture.mTexture);
+#if defined(GECKO_W10M)
+      // The MFT hands the sample over as soon as it has submitted the decode,
+      // and on this driver nothing orders the video processor's read of the
+      // NV12 surface after the decoder's write -- the same driver that did not
+      // order the compositor's read after the conversion. What the surface
+      // still holds then is a frame from some reference cycles ago: an old
+      // frame on the screen now and then. Waiting for the decode costs
+      // nothing when it is done already, which with the decoder a few frames
+      // ahead is most of the time.
+      if (w10mOnGpu && w10mSync == 2) {
+        WaitForDecodedFrame();
+      }
+#endif
       if (!processor->CallVideoProcessorBlt(info, texture.get())) {
         LOG("Failed on CallVideoProcessorBlt!");
         return E_FAIL;
@@ -1394,9 +1604,19 @@ HRESULT D3D11DXVA2Manager::CopyTextureToImage(
     // fell to 45 frames a second whenever the GPU had anything else to do.
     // Those frames carry no fence either; they need none, the compositor
     // reads them through the same device and immediate context.
-    if (!mutex && !DeviceManagerDx::Get()->TextureSharingWorks() &&
-        mDevice == DeviceManagerDx::Get()->GetCompositorDevice()) {
-      WaitForConvertedFrame();
+    //
+    // Each conversion also leaves a number on its texture, rising for the
+    // whole process, which the compositor reads back when it draws the frame
+    // (RenderCompositorD3D11SWGL::HandleExternalImage): an older number than
+    // the one drawn before, or a texture whose number changed while it was
+    // still attached, would show where old frames come from.
+    if (w10mOnGpu) {
+      static Atomic<uint32_t, Relaxed> sSeq(0);
+      const uint32_t seq = ++sSeq;
+      texture->SetPrivateData(kGeckoW10mFrameSeq, sizeof(seq), &seq);
+      if (w10mSync != 0) {
+        WaitForConvertedFrame();
+      }
     }
 #endif
     perfRecorder.Record();
@@ -1430,27 +1650,20 @@ HRESULT D3D11DXVA2Manager::CopyTextureToImage(
 }
 
 #if defined(GECKO_W10M)
-void D3D11DXVA2Manager::WaitForConvertedFrame() {
-  if (mConvertedQueryFailed) {
-    return;
-  }
-  if (!mConvertedQuery) {
-    CD3D11_QUERY_DESC desc(D3D11_QUERY_EVENT);
-    if (FAILED(mDevice->CreateQuery(&desc, getter_AddRefs(mConvertedQuery)))) {
-      mConvertedQueryFailed = true;
-      GeckoW10mNote(
-          "media: no event query -- converted frames are not waited for");
-      return;
-    }
-  }
+// Marks how far the GPU has got with this context's work so far, sends the
+// work off and waits until the GPU is past the mark. Returns whether it gave
+// up (a second without an answer); aWaitedMs is how long it took, the End and
+// the Flush included.
+static bool GeckoW10mPollQuery(ID3D11DeviceContext* aContext,
+                               ID3D11Query* aQuery, double* aWaitedMs) {
   const TimeStamp start = TimeStamp::Now();
-  mContext->End(mConvertedQuery);
-  mContext->Flush();
+  aContext->End(aQuery);
+  aContext->Flush();
   double waitedMs = 0;
   bool gaveUp = false;
   for (;;) {
     BOOL done = FALSE;
-    HRESULT hr = mContext->GetData(mConvertedQuery, &done, sizeof(done),
+    HRESULT hr = aContext->GetData(aQuery, &done, sizeof(done),
                                    D3D11_ASYNC_GETDATA_DONOTFLUSH);
     waitedMs = (TimeStamp::Now() - start).ToMilliseconds();
     if (hr != S_FALSE) {
@@ -1468,6 +1681,25 @@ void D3D11DXVA2Manager::WaitForConvertedFrame() {
       Sleep(1);
     }
   }
+  *aWaitedMs = waitedMs;
+  return gaveUp;
+}
+
+void D3D11DXVA2Manager::WaitForConvertedFrame() {
+  if (mConvertedQueryFailed) {
+    return;
+  }
+  if (!mConvertedQuery) {
+    CD3D11_QUERY_DESC desc(D3D11_QUERY_EVENT);
+    if (FAILED(mDevice->CreateQuery(&desc, getter_AddRefs(mConvertedQuery)))) {
+      mConvertedQueryFailed = true;
+      GeckoW10mNote(
+          "media: no event query -- converted frames are not waited for");
+      return;
+    }
+  }
+  double waitedMs = 0;
+  const bool gaveUp = GeckoW10mPollQuery(mContext, mConvertedQuery, &waitedMs);
   mWaitFrames++;
   mWaitTotalMs += waitedMs;
   mWaitMaxMs = std::max(mWaitMaxMs, waitedMs);
@@ -1478,18 +1710,69 @@ void D3D11DXVA2Manager::WaitForConvertedFrame() {
     mWaitGaveUp++;
   }
   if (mWaitFrames == 300) {
-    nsPrintfCString note(
-        "media: %ux%u, 300 frames converted; waiting for the GPU to finish "
-        "one took %.1f ms on average, %.1f ms at most, over a frame's 33 ms "
-        "%u times, gave up %u times",
-        mWidth, mHeight, mWaitTotalMs / mWaitFrames, mWaitMaxMs, mWaitLong,
-        mWaitGaveUp);
-    GeckoW10mNote(note.get());
+    // Every ten seconds of 30 fps video; the first twenty of a run say what
+    // there is to say.
+    static Atomic<uint32_t> sNotes(0);
+    if (++sNotes <= 20) {
+      nsPrintfCString note(
+          "media: %ux%u, 300 frames converted; waiting for the GPU to finish "
+          "one took %.1f ms on average, %.1f ms at most, over a frame's 33 ms "
+          "%u times, gave up %u times",
+          mWidth, mHeight, mWaitTotalMs / mWaitFrames, mWaitMaxMs, mWaitLong,
+          mWaitGaveUp);
+      GeckoW10mNote(note.get());
+    }
     mWaitFrames = 0;
     mWaitTotalMs = 0;
     mWaitMaxMs = 0;
     mWaitLong = 0;
     mWaitGaveUp = 0;
+  }
+}
+
+void D3D11DXVA2Manager::WaitForDecodedFrame() {
+  if (mDecodedQueryFailed) {
+    return;
+  }
+  if (!mDecodedQuery) {
+    CD3D11_QUERY_DESC desc(D3D11_QUERY_EVENT);
+    if (FAILED(mDevice->CreateQuery(&desc, getter_AddRefs(mDecodedQuery)))) {
+      mDecodedQueryFailed = true;
+      static Atomic<bool> sNoted(false);
+      if (!sNoted.exchange(true)) {
+        GeckoW10mNote("media: no event query for the decode -- not waiting "
+                      "for it");
+      }
+      return;
+    }
+  }
+  double waitedMs = 0;
+  const bool gaveUp = GeckoW10mPollQuery(mContext, mDecodedQuery, &waitedMs);
+  mDecWaitFrames++;
+  mDecWaitTotalMs += waitedMs;
+  mDecWaitMaxMs = std::max(mDecWaitMaxMs, waitedMs);
+  if (waitedMs > 33) {
+    mDecWaitLong++;
+  }
+  if (gaveUp) {
+    mDecWaitGaveUp++;
+  }
+  if (mDecWaitFrames == 300) {
+    static Atomic<uint32_t> sNotes(0);
+    if (++sNotes <= 20) {
+      nsPrintfCString note(
+          "media: %ux%u, 300 frames; waiting for the decode before converting "
+          "took %.1f ms on average, %.1f ms at most, over 33 ms %u times, "
+          "gave up %u times",
+          mWidth, mHeight, mDecWaitTotalMs / mDecWaitFrames, mDecWaitMaxMs,
+          mDecWaitLong, mDecWaitGaveUp);
+      GeckoW10mNote(note.get());
+    }
+    mDecWaitFrames = 0;
+    mDecWaitTotalMs = 0;
+    mDecWaitMaxMs = 0;
+    mDecWaitLong = 0;
+    mDecWaitGaveUp = 0;
   }
 }
 #endif

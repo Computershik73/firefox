@@ -48,11 +48,20 @@ using mozilla::layers::LayersBackend;
 using mozilla::media::TimeUnit;
 
 #if defined(GECKO_W10M)
+#  include "mozilla/Atomics.h"
 #  include "nsPrintfCString.h"
 extern "C" void GeckoW10mNote(const char* aText);
 #endif
 
 namespace mozilla {
+
+#if defined(GECKO_W10M)
+// Set when a decoder with CODECAPI_AVLowLatencyMode put frames out of order
+// (Output()): Microsoft's desktop H.264 MFT keeps display order in that mode,
+// the phone's is unverified. Later decoders of this run then go without it,
+// unless they were asked for low latency explicitly (WebRTC).
+static Atomic<bool> sGeckoW10mLowLatencyBroken(false);
+#endif
 
 LayersBackend GetCompositorBackendType(
     layers::KnowsCompositor* aKnowsCompositor) {
@@ -92,6 +101,11 @@ WMFVideoMFTManager::WMFVideoMFTManager(
 {
   MOZ_COUNT_CTOR(WMFVideoMFTManager);
 
+#if defined(GECKO_W10M)
+  mHwNotAllowed =
+      aOptions.contains(CreateDecoderParams::Option::HardwareDecoderNotAllowed);
+#endif
+
   // The V and U planes are stored 16-row-aligned, so we need to add padding
   // to the row heights to ensure the Y'CbCr planes are referenced properly.
   // This value is only used with software decoder.
@@ -128,6 +142,22 @@ bool WMFVideoMFTManager::InitializeDXVA() {
   // readback of decoded video frames from GPU to CPU memory grinds painting
   // to a halt, and makes playback performance *worse*.
   if (!mDXVAEnabled) {
+#if defined(GECKO_W10M)
+    // Say why, rather than "disabled or blacklisted" for every case: after a
+    // decode error the reader (and WebRTC) asks for a decoder without
+    // hardware, as does WebCodecs when the page prefers software; and after
+    // SupportsConfig said no InitInternal runs again with DXVA off -- the
+    // reason it set for that is the one to keep.
+    if (mHwNotAllowed) {
+      mDXVAFailureReason.AssignLiteral(
+          "hardware decoding not allowed for this decoder (a decode error "
+          "with it before, or software asked for)");
+      return false;
+    }
+    if (!mDXVAFailureReason.IsEmpty()) {
+      return false;
+    }
+#endif
     mDXVAFailureReason.AssignLiteral(
         "Hardware video decoding disabled or blacklisted");
     return false;
@@ -233,6 +263,9 @@ MediaResult WMFVideoMFTManager::InitInternal() {
 
   mUseHwAccel = false;  // default value; changed if D3D setup succeeds.
   mDXVAReadback = false;
+#if defined(GECKO_W10M)
+  mLowLatencySet = false;
+#endif
   bool useDxva = true;
 
   if (mStreamType == WMFStreamType::H264 &&
@@ -261,13 +294,22 @@ MediaResult WMFVideoMFTManager::InitInternal() {
     attr->SetUINT32(CODECAPI_AVDecNumWorkerThreads,
                     WMFDecoderModule::GetNumDecoderThreads());
     bool lowLatency = StaticPrefs::media_wmf_low_latency_enabled();
+#if defined(GECKO_W10M)
+    // Not after an earlier decoder of this run put frames out of order in
+    // low-latency mode (Output()); an explicit request is always kept.
+    if (mLowLatency || (lowLatency && !sGeckoW10mLowLatencyBroken)) {
+#else
     if (mLowLatency || lowLatency) {
+#endif
       HRESULT hr = attr->SetUINT32(CODECAPI_AVLowLatencyMode, TRUE);
       if (SUCCEEDED(hr)) {
         LOG("Enabling Low Latency Mode");
       } else {
         LOG("Couldn't enable Low Latency Mode");
       }
+#if defined(GECKO_W10M)
+      mLowLatencySet = SUCCEEDED(hr);
+#endif
     }
 
     // TODO(https://bugzilla.mozilla.org/show_bug.cgi?id=2008886)
@@ -378,6 +420,10 @@ MediaResult WMFVideoMFTManager::InitInternal() {
     LOG("DXVA manager determined that the input type was unsupported in "
         "hardware, retrying init without DXVA.");
     mDXVAEnabled = false;
+#if defined(GECKO_W10M)
+    // Kept by InitializeDXVA on the second pass, for the note below.
+    mDXVAFailureReason.AssignLiteral("the GPU's decoder refused this stream");
+#endif
     // DXVA initialization with current decoder actually failed,
     // re-do initialization.
     return InitInternal();
@@ -387,6 +433,16 @@ MediaResult WMFVideoMFTManager::InitInternal() {
       (mUseHwAccel ? "Yes" : "No"));
 
 #if defined(GECKO_W10M)
+  if (mUseHwAccel && !mDecoder->ProvidesOutputSamples()) {
+    // A DXVA MFT allocates its own output samples, on the GPU; one that asks
+    // for them is handing frames out in memory.
+    static Atomic<uint32_t> sNotes(0);
+    if (++sNotes <= 2) {
+      GeckoW10mNote(
+          "media: DXVA accepted but the MFT does not hand out its own samples "
+          "-- frames will arrive in memory");
+    }
+  }
   {
     // Into the note log, which survives a restart -- the MOZ_LOG file does not,
     // and a video that only misbehaves at 60 fps is hard to catch in the one
@@ -400,7 +456,12 @@ MediaResult WMFVideoMFTManager::InitInternal() {
       fps = int((numerator + denominator / 2) / denominator);
     }
     // No %f here either; see the note in APZEventState.
-    nsPrintfCString note("media: %s %dx%d at %d fps, DXVA %s%s%s",
+    // Decoders mediaCapabilities builds only to answer a page are tagged:
+    // once the DXVA probe has run they should not show up any more.
+    const bool capabilityQuery =
+        mTrackingId &&
+        mTrackingId->mSource == TrackingId::Source::MediaCapabilities;
+    nsPrintfCString note("media: %s %dx%d at %d fps, DXVA %s%s%s%s",
                          EnumValueToString(mStreamType),
                          mVideoInfo.ImageRect().width,
                          mVideoInfo.ImageRect().height, fps,
@@ -409,7 +470,8 @@ MediaResult WMFVideoMFTManager::InitInternal() {
                          mUseHwAccel ? (mDXVAReadback
                                             ? " (frames read back to memory)"
                                             : " (frames stay on the GPU)")
-                                     : mDXVAFailureReason.get());
+                                     : mDXVAFailureReason.get(),
+                         capabilityQuery ? " [capability query]" : "");
     GeckoW10mNote(note.get());
   }
 #endif
@@ -1001,6 +1063,16 @@ WMFVideoMFTManager::Output(int64_t aStreamOffset, RefPtr<MediaData>& aOutData) {
       // Catch infinite loops, but some decoders perform at least 2 stream
       // changes on consecutive calls, so be permissive.
       // 100 is arbitrarily > 2.
+#if defined(GECKO_W10M)
+      if (typeChangeCount >= 100) {
+        static Atomic<uint32_t> sNotes(0);
+        if (++sNotes <= 3) {
+          GeckoW10mNote(
+              "media: the decoder changed its output type 100 times without a "
+              "frame -- giving up on it");
+        }
+      }
+#endif
       NS_ENSURE_TRUE(typeChangeCount < 100, MF_E_TRANSFORM_STREAM_CHANGE);
       // Loop back and try decoding again...
       ++typeChangeCount;
@@ -1018,10 +1090,31 @@ WMFVideoMFTManager::Output(int64_t aStreamOffset, RefPtr<MediaData>& aOutData) {
         // counting with a local variable (like typeChangeCount does) may
         // not work in this situation.
         ++mNullOutputCount;
+#if defined(GECKO_W10M)
+        // A quirk upstream only logs; the note log keeps it.
+        if (!mNotedNullOutput) {
+          mNotedNullOutput = true;
+          static Atomic<uint32_t> sNotes(0);
+          if (++sNotes <= 4) {
+            GeckoW10mNote(
+                "media: the decoder returned success without a frame");
+          }
+        }
+#endif
         if (mNullOutputCount > 250) {
           LOG("Excessive Video MFTDecoder returning success but no output; "
               "giving up");
           mGotExcessiveNullOutput = true;
+#if defined(GECKO_W10M)
+          static Atomic<uint32_t> sGiveUpNotes(0);
+          if (++sGiveUpNotes <= 2) {
+            nsPrintfCString note(
+                "media: %u successes without a frame -- giving up on this "
+                "decoder",
+                mNullOutputCount);
+            GeckoW10mNote(note.get());
+          }
+#endif
           return E_FAIL;
         }
         continue;
@@ -1062,9 +1155,104 @@ WMFVideoMFTManager::Output(int64_t aStreamOffset, RefPtr<MediaData>& aOutData) {
         }
         mSeekTargetThreshold.reset();
       }
+#if defined(GECKO_W10M)
+      // Frames should come out in display order. One that comes out less
+      // than a second before a frame already handed out is out of order: the
+      // video sink drops it when it arrives with the later one, but shows it
+      // -- an old frame -- when it is the only one queued, which is what a
+      // phone that barely keeps up has. A flush or a seek resets this, and a
+      // jump back of a second or more is taken as the stream starting over.
+      // WebCodecs keeps its own timestamps (mKeepOriginalPts) and is left
+      // alone. Dropping the frame here also saves its conversion and the
+      // wait for it.
+      if (!mKeepOriginalPts) {
+        const bool backwards = mLastOutputPts.IsValid() &&
+                               pts < mLastOutputPts &&
+                               mLastOutputPts - pts < TimeUnit::FromSeconds(1);
+        if (backwards) {
+          ++mBackwardFrames;
+          ++mW10mBackwards;
+        }
+        if (++mW10mOut == 300) {
+          // The first 300 frames of every decoder are reported even when all
+          // were in order, after that only when some were not.
+          static Atomic<uint32_t> sOrderNotes(0);
+          if ((!mW10mNoted || mW10mBackwards) && ++sOrderNotes <= 10) {
+            nsPrintfCString note(
+                "media: %u of the last 300 decoded frames came out earlier "
+                "than one before them (low latency %s)",
+                mW10mBackwards, mLowLatencySet ? "on" : "off");
+            GeckoW10mNote(note.get());
+          }
+          mW10mNoted = true;
+          mW10mOut = 0;
+          mW10mBackwards = 0;
+        }
+        if (backwards && StaticPrefs::media_wmf_gecko_w10m_reorder_guard()) {
+          static Atomic<uint32_t> sDropNotes(0);
+          if (++sDropNotes <= 3) {
+            nsPrintfCString note(
+                "media: decoder output went back in time (%d ms after %d ms) "
+                "-- frame dropped, %u this video",
+                int(pts.ToMilliseconds()), int(mLastOutputPts.ToMilliseconds()),
+                mBackwardFrames);
+            GeckoW10mNote(note.get());
+          }
+          if (mBackwardFrames == 3 && mLowLatencySet && !mLowLatency &&
+              !sGeckoW10mLowLatencyBroken.exchange(true)) {
+            nsPrintfCString note(
+                "media: the %s decoder puts frames out of order in "
+                "low-latency mode -- later videos decode without it",
+                EnumValueToString(mStreamType));
+            GeckoW10mNote(note.get());
+          }
+          // As with the frames before the seek target: release the buffer.
+          sample = nullptr;
+          continue;
+        }
+        if (!mLastOutputPts.IsValid() || pts > mLastOutputPts ||
+            mLastOutputPts - pts >= TimeUnit::FromSeconds(1)) {
+          mLastOutputPts = pts;
+        }
+      }
+#endif
       break;
     }
     // Else unexpected error so bail.
+#if defined(GECKO_W10M)
+    // Retried only when output-error-retries says so (0, upstream's
+    // behaviour, by default), only on a hardware decoder, and never for the
+    // errors that mean the device or the memory is gone.
+    if (mUseHwAccel &&
+        mOutputErrorsInARow <
+            StaticPrefs::media_wmf_gecko_w10m_output_error_retries() &&
+        hr != E_OUTOFMEMORY && hr != DXGI_ERROR_DEVICE_REMOVED &&
+        hr != DXGI_ERROR_DEVICE_RESET && hr != DXGI_ERROR_DEVICE_HUNG) {
+      ++mOutputErrorsInARow;
+      ++mOutputErrorsTotal;
+      static Atomic<uint32_t> sRetryNotes(0);
+      if (++sRetryNotes <= 5) {
+        nsPrintfCString note(
+            "media: %s output failed (%lx); retrying, %u in a row, %u this "
+            "video",
+            EnumValueToString(mStreamType), hr, mOutputErrorsInARow,
+            mOutputErrorsTotal);
+        GeckoW10mNote(note.get());
+      }
+      sample = nullptr;
+      continue;
+    }
+    if (mOutputErrorsInARow) {
+      static Atomic<uint32_t> sFailNotes(0);
+      if (++sFailNotes <= 3) {
+        nsPrintfCString note(
+            "media: %s output failed %u times in a row (%lx) -- handing the "
+            "error on",
+            EnumValueToString(mStreamType), mOutputErrorsInARow + 1, hr);
+        GeckoW10mNote(note.get());
+      }
+    }
+#endif
     NS_WARNING("WMFVideoMFTManager::Output() unexpected error");
     return hr;
   }
@@ -1121,6 +1309,17 @@ WMFVideoMFTManager::Output(int64_t aStreamOffset, RefPtr<MediaData>& aOutData) {
 
   aOutData = frame;
 
+#if defined(GECKO_W10M)
+  mOutputErrorsInARow = 0;
+  if (mNullOutputCount && !mGotValidOutputAfterNullOutput) {
+    static Atomic<uint32_t> sNotes(0);
+    if (++sNotes <= 2) {
+      nsPrintfCString note("media: frames again after %u empty successes",
+                           mNullOutputCount);
+      GeckoW10mNote(note.get());
+    }
+  }
+#endif
   if (mNullOutputCount) {
     mGotValidOutputAfterNullOutput = true;
   }
@@ -1131,6 +1330,11 @@ WMFVideoMFTManager::Output(int64_t aStreamOffset, RefPtr<MediaData>& aOutData) {
 void WMFVideoMFTManager::Flush() {
   MFTManager::Flush();
   mPerformanceRecorder.Record(std::numeric_limits<int64_t>::max());
+#if defined(GECKO_W10M)
+  // A seek or a flush is a legitimate jump back.
+  mLastOutputPts = TimeUnit::Invalid();
+  mOutputErrorsInARow = 0;
+#endif
 }
 
 void WMFVideoMFTManager::Shutdown() {

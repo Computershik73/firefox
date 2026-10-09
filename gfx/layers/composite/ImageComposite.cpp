@@ -258,10 +258,19 @@ bool ImageComposite::UpdateCompositedFrame(
   {
     // Every ten seconds of video: frames the compositor showed and frames it
     // skipped because a newer one was already due -- what YouTube's "dropped
-    // frames" counts.
+    // frames" counts. And how often the frame it picked was older than the
+    // one it showed before, from the same producer: frame ids rise in the
+    // order the decoder handed frames out, so this tells a step back here
+    // from one in the decoder or further down. The first sixty lines of a run.
     static TimeStamp sVideoStart;
     static uint32_t sVideoShown = 0;
     static uint32_t sVideoDropped = 0;
+    static uint32_t sVideoWentBack = 0;
+    static uint32_t sVideoNotes = 0;
+    if (image.mProducerID == mLastProducerID &&
+        image.mFrameID < mLastFrameID) {
+      ++sVideoWentBack;
+    }
     const TimeStamp now = TimeStamp::Now();
     if (sVideoStart.IsNull()) {
       sVideoStart = now;
@@ -270,15 +279,17 @@ bool ImageComposite::UpdateCompositedFrame(
     sVideoDropped += std::max(dropped, 0);
     const double span = (now - sVideoStart).ToSeconds();
     if (span >= 10) {
-      if (sVideoShown >= 50) {
+      if (sVideoShown >= 50 && sVideoNotes < 60) {
+        sVideoNotes++;
         nsPrintfCString note(
             "video: %u frames shown in %.1f s (%.1f a second), %u dropped by "
-            "the compositor",
-            sVideoShown, span, sVideoShown / span, sVideoDropped);
+            "the compositor, %u times back to an older frame",
+            sVideoShown, span, sVideoShown / span, sVideoDropped,
+            sVideoWentBack);
         GeckoW10mNote(note.get());
       }
       sVideoStart = now;
-      sVideoShown = sVideoDropped = 0;
+      sVideoShown = sVideoDropped = sVideoWentBack = 0;
     }
   }
 #endif

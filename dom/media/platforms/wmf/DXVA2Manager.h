@@ -96,6 +96,24 @@ class DXVA2Manager {
 
   virtual ID3D11Device* GetD3D11Device() { return nullptr; }
 
+#  if defined(GECKO_W10M)
+  // What the GPU's video decoder said about H.264 when the first hardware
+  // H.264 decoder of this process was set up (DXVA2Manager.cpp): whether it
+  // decodes H.264 at all, the largest of the probed sizes it has decoder
+  // configurations for, and the smallest it had none for (0 when it took
+  // every size). Page queries are answered from this instead of building a
+  // decoder for each of them.
+  struct GeckoW10mDxvaCaps {
+    bool known = false;
+    bool h264 = false;
+    uint32_t maxW = 0, maxH = 0;
+    uint32_t minFailedW = 0, minFailedH = 0;
+  };
+  // One atomic load and a copy; it never probes, and is safe on any thread.
+  // known is false until the probe has run.
+  static GeckoW10mDxvaCaps GeckoW10mDxvaCapsNow();
+#  endif
+
  protected:
   Mutex mLock MOZ_UNANNOTATED;
   DXVA2Manager();

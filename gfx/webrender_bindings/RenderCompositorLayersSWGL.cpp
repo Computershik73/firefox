@@ -301,6 +301,9 @@ void RenderCompositorLayersSWGL::AttachExternalImage(
 
   Surface* surface = surfaceCursor->second.get();
   surface->mExternalImage = image;
+#if defined(GECKO_W10M)
+  surface->mW10mAttaches++;
+#endif
   MOZ_RELEASE_ASSERT(surface->mTiles.empty());
   MOZ_RELEASE_ASSERT(surface->mIsExternal);
 }

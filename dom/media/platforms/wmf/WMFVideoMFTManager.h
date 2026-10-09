@@ -141,6 +141,30 @@ class WMFVideoMFTManager : public MFTManager {
   // Sorted array of pts of input frames, from the encoded input packets, for
   // error recovery.
   nsTArray<int64_t> mPTSQueue;
+
+#  if defined(GECKO_W10M)
+  // The latest time of a frame handed out since the last flush, for the
+  // out-of-order check in Output() (media.wmf.gecko-w10m.reorder-guard).
+  media::TimeUnit mLastOutputPts = media::TimeUnit::Invalid();
+  // Frames that came out before that time: in this decoder's life, and in
+  // the current 300 decoded frames counted in mW10mOut.
+  uint32_t mBackwardFrames = 0;
+  uint32_t mW10mBackwards = 0;
+  uint32_t mW10mOut = 0;
+  // Whether this decoder has written its first 300-frame order line.
+  bool mW10mNoted = false;
+  // Unexpected ProcessOutput failures retried on a hardware decoder
+  // (media.wmf.gecko-w10m.output-error-retries): in a row, and in all.
+  uint32_t mOutputErrorsInARow = 0;
+  uint32_t mOutputErrorsTotal = 0;
+  // Made with hardware decoding refused: after a decode error with it, or
+  // because the caller asked for software (WebCodecs).
+  bool mHwNotAllowed = false;
+  // Whether CODECAPI_AVLowLatencyMode was set on the MFT.
+  bool mLowLatencySet = false;
+  // Whether this decoder has noted its first success without a frame.
+  bool mNotedNullOutput = false;
+#  endif
 };
 
 }  // namespace mozilla

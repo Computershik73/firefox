@@ -38,6 +38,16 @@
 #include "nsContentUtils.h"
 #include "nsIPrincipal.h"
 
+#if defined(GECKO_W10M) && defined(MOZ_WMF)
+namespace mozilla {
+// WMFDecoderModule.cpp: H.264 decodingInfo from the DXVA probe, without
+// building a decoder; false when a decoder has to answer.
+bool GeckoW10mH264DecodingInfo(const VideoInfo& aInfo,
+                               layers::KnowsCompositor* aCompositor,
+                               bool* aHardware);
+}  // namespace mozilla
+#endif
+
 namespace mozilla::dom {
 enum class CodecSupport : uint8_t { Supported, Unsupported, Unknown };
 static const char* EnumValueToString(const CodecSupport& aEnum) {
@@ -1179,6 +1189,22 @@ MediaCapabilities::CheckVideoDecodingInfo(
        frameRate = aFrameRate,
        shouldResistFingerprinting = aShouldResistFingerprinting,
        config = std::move(aConfig)]() mutable -> RefPtr<CapabilitiesPromise> {
+#if defined(GECKO_W10M) && defined(MOZ_WMF)
+        // H.264 is answered from the DXVA probe once it has run: no MFT, no
+        // video processor, no throwaway decoder on the compositor's device
+        // and no turn at the one DXVA slot for each of the half dozen sizes a
+        // YouTube page asks about.
+        if (MP4Decoder::IsH264(config->mMimeType)) {
+          bool hardware = false;
+          if (mozilla::GeckoW10mH264DecodingInfo(*config->GetAsVideoInfo(),
+                                                 compositor, &hardware)) {
+            return CapabilitiesPromise::CreateAndResolve(
+                CreateVideoDecodingInfo(*config, shouldResistFingerprinting,
+                                        hardware),
+                __func__);
+          }
+        }
+#endif
         // MediaDataDecoder keeps a reference to the config object, so we must
         // keep it alive until the decoder has been shutdown.
         static Atomic<uint32_t> sTrackingIdCounter(0);

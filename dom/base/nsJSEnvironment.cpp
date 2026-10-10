@@ -1998,6 +1998,15 @@ void nsJSContext::EnsureStatics() {
 
   nsIObserver* observer = new nsJSEnvironmentObserver();
   obs->AddObserver(observer, "memory-pressure", false);
+#if defined(GECKO_W10M)
+  // The observer has a branch for "memory-pressure-stop" that takes the JS
+  // engine out of its low-memory state, and was never registered for the
+  // topic: after the first "low-memory" of a run the nursery stayed at its
+  // minimum (256 KB) until the end of it, whatever was sent. On Windows 10
+  // Mobile the pressure does end (widget/headless/GeckoW10mMemoryPressure.cpp)
+  // and a 1 GB phone meets its first "low-memory" seconds after it starts.
+  obs->AddObserver(observer, "memory-pressure-stop", false);
+#endif
   obs->AddObserver(observer, "user-interaction-inactive", false);
   obs->AddObserver(observer, "user-interaction-active", false);
   obs->AddObserver(observer, "quit-application", false);

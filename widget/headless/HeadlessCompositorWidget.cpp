@@ -43,6 +43,10 @@
 #  include "nsThreadUtils.h"
 
 extern "C" void GeckoW10mNote(const char* text);
+// GeckoW10mMemoryPressure.cpp
+extern "C" void GeckoW10mMemoryBackground();
+extern "C" uint32_t GeckoW10mMemoryAwayToken();
+extern "C" void GeckoW10mMemoryForeground(uint32_t aToken);
 
 namespace {
 
@@ -645,12 +649,27 @@ extern "C" __declspec(dllexport) void gecko_w10m_set_dpi(int32_t aDpi) {
 // it comes back. Chrome script listens and flushes what Firefox otherwise
 // saves on a shutdown that never comes here.
 extern "C" __declspec(dllexport) void gecko_w10m_app_state(int32_t aForeground) {
-  NS_DispatchToMainThread(
-      NS_NewRunnableFunction("gecko_w10m_app_state", [aForeground]() {
+  uint32_t awayToken = 0;
+  if (!aForeground) {
+    // At once, on the caller's thread: the runnable below may not get its
+    // turn before the app is suspended, and the memory-pressure clocks must
+    // not be read as if the time away had been time running.
+    GeckoW10mMemoryBackground();
+  } else {
+    // Which going to the background this return answers: by the time the
+    // runnable runs the app may have gone again.
+    awayToken = GeckoW10mMemoryAwayToken();
+  }
+  NS_DispatchToMainThread(NS_NewRunnableFunction(
+      "gecko_w10m_app_state", [aForeground, awayToken]() {
         const char* topic =
             aForeground ? "application-foreground" : "application-background";
         GeckoW10mNote(aForeground ? "app: foreground -- telling chrome"
                                 : "app: background -- telling chrome to flush");
+        if (aForeground) {
+          // The memory-pressure clocks ran on while the app was suspended.
+          GeckoW10mMemoryForeground(awayToken);
+        }
         if (nsCOMPtr<nsIObserverService> obs =
                 mozilla::services::GetObserverService()) {
           obs->NotifyObservers(nullptr, topic, nullptr);

@@ -384,6 +384,13 @@ class CompositorBridgeParent final : public CompositorBridgeParentBase {
   static void ScheduleForcedComposition(const LayersId& aLayersId,
                                         wr::RenderReasons aReasons);
 
+#if defined(GECKO_W10M)
+  // One whole new frame from every window, on the compositor thread. Asked
+  // for by RenderCompositorEGL when ANGLE could not give its surface the size
+  // the window has: only a frame makes it try again.
+  static void GeckoW10mForceComposite();
+#endif
+
   static void DisconnectWrBridge(WebRenderBridgeParent* aWrBridge);
 
   static void DisconnectApzcTreeManager(APZCTreeManagerParent* aTreeManager);

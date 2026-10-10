@@ -12,6 +12,10 @@
 #include "mozilla/gfx/Logging.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/layers/BuildConstants.h"
+#if defined(GECKO_W10M)
+#  include "mozilla/layers/CompositorBridgeParent.h"
+#  include "mozilla/layers/CompositorThread.h"
+#endif
 #include "mozilla/webrender/RenderThread.h"
 #include "mozilla/widget/CompositorWidget.h"
 
@@ -213,8 +217,76 @@ RenderCompositorEGL::RenderCompositorEGL(
 #endif
 }
 
+#if defined(GECKO_W10M)
+// Render thread only.
+static RenderCompositorEGL* sRetryOwner = nullptr;
+static uint32_t sRetryGen = 0;
+
+// ANGLE looks at the panel's size, and makes again a swap chain it had to
+// give up, only inside a present. When it could not give the surface the size
+// the window has -- refused for want of address space -- the next try needs a
+// frame to carry it, and a page that is standing still sends none: the
+// picture would stay cut to the old size until the user touched something.
+// So one frame is asked for a while later, and later still each time the
+// sizes go on disagreeing. A post that failed outright -- no chain at all --
+// asks again in half a second every time: ANGLE spaces its own tries at
+// making one, a frame that finds it not yet due costs it nothing, and the
+// frame that does make the chain shows nothing itself, so the one after it
+// should not be long.
+void RenderCompositorEGL::ScheduleRetryFrame() {
+  // One at a time -- but a post that failed does not wait behind a retry set
+  // for sizes that disagreed, which can be half a minute away: that one is
+  // put aside (its generation is no longer the current one) for the quick
+  // one.
+  if (mRetryPending && (!mPostFailed || mRetryQuick)) {
+    return;
+  }
+  mRetryPending = true;
+  mRetryQuick = mPostFailed;
+  sRetryOwner = this;
+  const uint32_t gen = ++sRetryGen;
+  RenderCompositorEGL* self = this;
+  uint32_t delayMs = 500;
+  if (!mPostFailed) {
+    delayMs = mRetryDelayMs;
+    mRetryDelayMs = std::min<uint32_t>(mRetryDelayMs * 2, 30000);
+  }
+  (void)NS_DelayedDispatchToCurrentThread(
+      NS_NewRunnableFunction(
+          "RenderCompositorEGL::RetryFrame",
+          [self, gen]() {
+            if (sRetryOwner != self || sRetryGen != gen) {
+              return;
+            }
+            self->mRetryPending = false;
+            if (self->mEGLSurface == EGL_NO_SURFACE) {
+              return;
+            }
+            if (!self->mPostFailed &&
+                self->SurfaceSize() == self->GetBufferSize().ToUnknownSize()) {
+              // They agree by now -- the usual case, the window's own resize
+              // having caught up with the panel's.
+              self->mRetryDelayMs = 1000;
+              return;
+            }
+            if (nsCOMPtr<nsISerialEventTarget> thread =
+                    layers::CompositorThread()) {
+              thread->Dispatch(NS_NewRunnableFunction(
+                  "GeckoW10mForceComposite",
+                  []() { layers::CompositorBridgeParent::GeckoW10mForceComposite(); }));
+            }
+          }),
+      delayMs);
+}
+#endif
+
 RenderCompositorEGL::~RenderCompositorEGL() {
   LOG("RenderCompositorEGL::~RenderCompositorEGL()");
+#if defined(GECKO_W10M)
+  if (sRetryOwner == this) {
+    sRetryOwner = nullptr;
+  }
+#endif
 #ifdef MOZ_WIDGET_ANDROID
   java::GeckoSurfaceTexture::DestroyUnused((int64_t)gl());
 #endif
@@ -291,7 +363,15 @@ RenderedFrameId RenderCompositorEGL::EndFrame(
                                          right - left, bottom - top));
     }
     if (whole) {
-      bounds = gfx::IntRect(0, 0, bufferSize.width, bufferSize.height);
+      // The surface's own rectangle, not the window's. The two differ while
+      // ANGLE has not (or not yet) given the surface the window's size, and
+      // ANGLE counts this rectangle's rows from the bottom of its own height:
+      // the window's, on a taller surface, named the rows at the wrong edge
+      // as changed and left the ones that were drawn as stale.
+      const gfx::IntSize surfaceSize = SurfaceSize();
+      bounds = surfaceSize.IsEmpty()
+                   ? gfx::IntRect(0, 0, bufferSize.width, bufferSize.height)
+                   : gfx::IntRect(0, 0, surfaceSize.width, surfaceSize.height);
     }
 
     ++mPresentFrames;
@@ -313,6 +393,19 @@ RenderedFrameId RenderCompositorEGL::EndFrame(
           (TimeStamp::Now() - presentStart).ToMilliseconds();
       mPresentMs += presentMs;
       mPresentMaxMs = std::max(mPresentMaxMs, presentMs);
+      mPostFailed = !posted;
+      if (!posted || SurfaceSize() != bufferSize.ToUnknownSize()) {
+        ScheduleRetryFrame();
+      } else {
+        // All is well again. A retry still waiting -- up to half a minute
+        // away, after a long refusal -- is dropped with it, so that the next
+        // trouble starts from one second and not from behind that one.
+        mRetryDelayMs = 1000;
+        if (mRetryPending) {
+          mRetryPending = false;
+          ++sRetryGen;
+        }
+      }
       if (posted) {
         mPresentedSize = bufferSize;
         // ANGLE resizes its buffers after a present, when it sees that the
@@ -326,7 +419,24 @@ RenderedFrameId RenderCompositorEGL::EndFrame(
       } else {
         // Present the next frame whole, whatever went wrong with this one.
         mFullRender = true;
-        GeckoW10mNote("gfx: eglPostSubBufferNV failed, next frame whole");
+        // Said at most once a second: a surface whose buffers cannot be made
+        // (ANGLE's SwapChain11, out of address space) fails at every frame
+        // until they can.
+        static TimeStamp sLastSaid;
+        static uint32_t sFailedSince = 0;
+        ++sFailedSince;
+        const TimeStamp failedAt = TimeStamp::Now();
+        if (sLastSaid.IsNull() ||
+            (failedAt - sLastSaid).ToMilliseconds() >= 1000) {
+          char note[112];
+          SprintfLiteral(note,
+                         "gfx: eglPostSubBufferNV failed (%u since last said), "
+                         "next frame whole",
+                         sFailedSince);
+          GeckoW10mNote(note);
+          sLastSaid = failedAt;
+          sFailedSince = 0;
+        }
       }
       if (whole) {
         ++mPresentWhole;

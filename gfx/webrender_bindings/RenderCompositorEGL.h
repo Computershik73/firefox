@@ -103,6 +103,14 @@ class RenderCompositorEGL : public RenderCompositor {
   gfx::IntSize mPresentedSurfaceSize;
   // What RequestFullRender decided for the frame being drawn.
   bool mWholeFrame = true;
+  // One more frame a while after a post that failed, or one that left
+  // ANGLE's surface a different size from the window: see ScheduleRetryFrame.
+  void ScheduleRetryFrame();
+  bool mRetryPending = false;
+  // The one pending is the quick kind, for a post that failed.
+  bool mRetryQuick = false;
+  bool mPostFailed = false;
+  uint32_t mRetryDelayMs = 1000;
   // The surface's rows run top down: WebRender draws into the swap chain's
   // back buffer directly, with no ANGLE offscreen texture in between.
   bool mTopLeftOrigin = false;

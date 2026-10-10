@@ -894,6 +894,28 @@ void CompositorBridgeParent::ScheduleForcedComposition(
   }
 }
 
+#if defined(GECKO_W10M)
+/* static */ void CompositorBridgeParent::GeckoW10mForceComposite() {
+  MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
+  // Found under the lock, called without it: a root bridge is in the table
+  // from the moment it is made, and for one that is not initialised yet
+  // ScheduleForcedGenerateFrame goes through EnsureInitialized, which takes
+  // this lock itself.
+  AutoTArray<RefPtr<WebRenderBridgeParent>, 4> roots;
+  {
+    StaticMonitorAutoLock lock(sIndirectLayerTreesLock);
+    ForEachWebRenderBridgeParent([&](WebRenderBridgeParent* wrBridge) -> void {
+      if (wrBridge->IsRootWebRenderBridgeParent()) {
+        roots.AppendElement(wrBridge);
+      }
+    });
+  }
+  for (const auto& root : roots) {
+    root->ScheduleForcedGenerateFrame(wr::RenderReasons::WIDGET);
+  }
+}
+#endif
+
 /* static */ void CompositorBridgeParent::DisconnectWrBridge(
     WebRenderBridgeParent* aWrBridge) {
   auto layersId = wr::AsLayersId(aWrBridge->PipelineId());

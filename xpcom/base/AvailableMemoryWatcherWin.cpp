@@ -392,11 +392,22 @@ nsAvailableMemoryWatcher::Observe(nsISupports* aSubject, const char* aTopic,
 }
 
 already_AddRefed<nsAvailableMemoryWatcherBase> CreateAvailableMemoryWatcher() {
+#if defined(GECKO_W10M)
+  // Not on Windows 10 Mobile. What this watcher does when the system runs
+  // short of commit is unload a background tab, which in a single process
+  // never succeeds (tabbrowser discards remote browsers only), and failing
+  // that tell the engine "low-memory", and later that it is over. There the
+  // engine is told both by one place that rations what a "low-memory" costs
+  // on the only main thread (widget/headless/GeckoW10mMemoryPressure.cpp,
+  // from the phone's own limit on the app); a second voice would undo it.
+  return do_AddRef(new nsAvailableMemoryWatcherBase);
+#else
   RefPtr watcher(new nsAvailableMemoryWatcher);
   if (NS_FAILED(watcher->Init())) {
     return do_AddRef(new nsAvailableMemoryWatcherBase);  // fallback
   }
   return watcher.forget();
+#endif
 }
 
 }  // namespace mozilla

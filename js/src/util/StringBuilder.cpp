@@ -39,12 +39,25 @@ static CharT* ExtractWellSized(Buffer& cb) {
   constexpr size_t minCharsToReclaim = 80 / sizeof(CharT);
   if (capacity - length >= minCharsToReclaim &&
       capacity - length > capacity / 4) {
+#if defined(GECKO_W10M)
+    // On Windows 10 Mobile a shrink that fails leaves the string in the
+    // buffer it was built in. For a large block mozjemalloc shrinks by making
+    // a new one and copying, and in an address space in pieces there is often
+    // no room for the smaller copy beside the larger original -- which threw
+    // away a finished string of 35 MB for want of a place to put 35 MB while
+    // 64 MB were held. The quiet realloc: the other one reports out of memory
+    // and collects before it gives up.
+    if (CharT* tmp = allocPolicy.maybe_pod_realloc<CharT>(buf, capacity, length)) {
+      buf = tmp;
+    }
+#else
     CharT* tmp = allocPolicy.pod_realloc<CharT>(buf, capacity, length);
     if (!tmp) {
       allocPolicy.free_(buf);
       return nullptr;
     }
     buf = tmp;
+#endif
   }
 
   return buf;

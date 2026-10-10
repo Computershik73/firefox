@@ -29,7 +29,17 @@ namespace detail {
 // avoid very expensive memcpys for large strings (eg giant toJSON output for
 // sessionstore.js). Drop back to the normal expansion policy once the buffer
 // hits 128MB.
+#if defined(GECKO_W10M)
+// On Windows 10 Mobile once it hits 4 million characters. A 32-bit process has
+// 2 GB of address space, and on the phones it is in pieces: the largest free
+// one was 13-200 MB at the 33 failed allocations a uBlock Origin made there,
+// which this policy had turned into single requests of 64, 128 and 256 MB for
+// strings of 4-15 million characters. Doubling asks for a quarter to an
+// eighth of that, at the price of one more copy of at most the final size.
+static constexpr size_t AggressiveLimit = 4 << 20;
+#else
 static constexpr size_t AggressiveLimit = 128 << 20;
+#endif
 
 template <size_t EltSize>
 inline size_t GrowEltsAggressively(size_t aOldElts, size_t aIncr) {

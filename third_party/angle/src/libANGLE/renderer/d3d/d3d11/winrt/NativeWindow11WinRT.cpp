@@ -309,7 +309,7 @@ HRESULT NativeWindow11WinRT::createSwapChain(ID3D11Device *device,
     if (FAILED(result))
     {
         char note[128];
-        snprintf(note, sizeof(note), "angle: the swap chain was refused, 0x%08lx",
+        snprintf(note, sizeof(note), "angle: making the swap chain failed, 0x%08lx",
                  static_cast<unsigned long>(result));
         Note(note);
         return result;
@@ -334,7 +334,7 @@ HRESULT NativeWindow11WinRT::createSwapChain(ID3D11Device *device,
     if (FAILED(result))
     {
         char note[128];
-        snprintf(note, sizeof(note), "angle: the panel would not take it, 0x%08lx",
+        snprintf(note, sizeof(note), "angle: giving the swap chain to the panel failed, 0x%08lx",
                  static_cast<unsigned long>(result));
         Note(note);
         SafeRelease(swapChain1);

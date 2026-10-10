@@ -12,6 +12,8 @@
 
 #include "libANGLE/renderer/d3d/d3d11/SwapChain11.h"
 
+#include <algorithm>
+
 #include <cstdio>
 
 #if defined(ANGLE_ENABLE_WINDOWS_UWP)
@@ -142,12 +144,76 @@ void SwapChain11::release()
     mPassThroughVS.reset();
     mPassThroughOrResolvePS.reset();
     mPassThroughRS.reset();
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    // They are made again with the chain, if it is (remakeAfterFailure).
+    mPassThroughResourcesInit = false;
+#endif
 
     if (!mAppCreatedShareHandle)
     {
         mShareHandle = nullptr;
     }
 }
+
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+namespace
+{
+constexpr ULONGLONG kFirstBackoffMs = 1000;
+constexpr ULONGLONG kMaxBackoffMs   = 30000;
+}  // anonymous namespace
+
+// The chain of a window's surface was given up after a failure and is made
+// again here -- not more often than the back-off allows, which doubles while
+// it keeps failing. Stock ANGLE never made it again: the surface stayed
+// without buffers, said every present had succeeded, and read through the
+// null chain at the next change of size.
+EGLint SwapChain11::remakeAfterFailure(DisplayD3D *displayD3D, EGLint width, EGLint height)
+{
+    const ULONGLONG now = ::GetTickCount64();
+    if (mRemakeTriedAt != 0 && now - mRemakeTriedAt < mRemakeBackoffMs)
+    {
+        return EGL_BAD_ALLOC;
+    }
+    mRemakeTriedAt = now;
+
+    // The notes say "reset" and "failed": the shell's quiet log lets only
+    // such lines of ANGLE's through.
+    const EGLint result = reset(displayD3D, width, height, mSwapInterval);
+    char note[160];
+    if (result == EGL_SUCCESS && mSwapChain != nullptr)
+    {
+        snprintf(note, sizeof(note), "angle: swap chain reset after its failure, at %dx%d",
+                 width, height);
+        mRemakeTriedAt   = 0;
+        mRemakeBackoffMs = kFirstBackoffMs;
+        if (width == mRefusedWidth && height == mRefusedHeight)
+        {
+            // The size that had been refused is the one it has now.
+            mRefusedAt        = 0;
+            mRefusedBackoffMs = kFirstBackoffMs;
+        }
+        else if (mRefusedAt != 0)
+        {
+            // Any other stays refused, and its wait starts again from here:
+            // the surface asks for it at its next swap, and it ran out while
+            // there was no chain, so without this the chain just made would
+            // get one present before that size was tried on it, and thrown
+            // away again if it failed.
+            mRefusedAt = ::GetTickCount64();
+        }
+    }
+    else
+    {
+        mRemakeBackoffMs = std::min<ULONGLONG>(mRemakeBackoffMs * 2, kMaxBackoffMs);
+        snprintf(note, sizeof(note),
+                 "angle: swap chain reset failed at %dx%d (0x%04x), next try in %llu s", width,
+                 height, static_cast<unsigned>(result),
+                 static_cast<unsigned long long>(mRemakeBackoffMs / 1000));
+    }
+    AngleUwpNote(note);
+    return result;
+}
+#endif
 
 void SwapChain11::releaseOffscreenColorBuffer()
 {
@@ -481,6 +547,9 @@ EGLint SwapChain11::resetOffscreenDepthBuffer(DisplayD3D *displayD3D,
 EGLint SwapChain11::resize(DisplayD3D *displayD3D, EGLint backbufferWidth, EGLint backbufferHeight)
 {
     ANGLE_TRACE_EVENT0("gpu.angle", "SwapChain11::resize");
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    mResizeRefused = false;
+#endif
     ID3D11Device *device = mRenderer->getDevice();
 
     if (device == nullptr)
@@ -499,6 +568,24 @@ EGLint SwapChain11::resize(DisplayD3D *displayD3D, EGLint backbufferWidth, EGLin
     {
         return EGL_SUCCESS;
     }
+
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    if (mSwapChain == nullptr)
+    {
+        // Given up after a failure. The code below would read through it.
+        return remakeAfterFailure(displayD3D, backbufferWidth, backbufferHeight);
+    }
+    if (mRefusedAt != 0 && backbufferWidth == mRefusedWidth &&
+        backbufferHeight == mRefusedHeight &&
+        ::GetTickCount64() - mRefusedAt < mRefusedBackoffMs)
+    {
+        // This size was refused a moment ago, and every try at it destroys the
+        // buffers that work. Not yet; the surface keeps its size and asks
+        // again at its next swap.
+        mResizeRefused = true;
+        return EGL_SUCCESS;
+    }
+#endif
 
     // Can only call resize if we have already created our swap buffer and resources
     ASSERT(mSwapChain && mBackBufferTexture.valid() && mBackBufferRTView.valid() &&
@@ -536,12 +623,70 @@ EGLint SwapChain11::resize(DisplayD3D *displayD3D, EGLint backbufferWidth, EGLin
                  backbufferWidth, backbufferHeight, static_cast<unsigned long>(hr));
         AngleUwpNote(note);
     }
+    // Refused for want of memory: on these phones that is address space, three
+    // buffers of 13-14 MB each wanted in one piece apiece when the largest
+    // free piece is 27 MB. Stock ANGLE gave the whole chain up here and then
+    // read through the null pointer at the next present. Instead:
+    bool refused = false;
+    if (FAILED(hr) && !d3d11::isDeviceLostError(hr))
+    {
+        // Once more. The old buffers went with the first try (the maps of the
+        // address space show them gone), so there is more room now than there
+        // was a moment ago.
+        hr = mSwapChain->ResizeBuffers(desc.BufferCount, backbufferWidth, backbufferHeight,
+                                       getSwapChainNativeFormat(), 0);
+        if (SUCCEEDED(hr))
+        {
+            AngleUwpNote("angle: swap chain resize that failed was taken on the second try");
+        }
+        else if (mWidth > 0 && mHeight > 0)
+        {
+            // Then back to the size it had, which fitted; the new size is
+            // asked for again later.
+            const HRESULT back = mSwapChain->ResizeBuffers(desc.BufferCount, mWidth, mHeight,
+                                                           getSwapChainNativeFormat(), 0);
+            char note[160];
+            snprintf(note, sizeof(note),
+                     "angle: swap chain resize failed twice, back to %dx%d -> 0x%08lx; %dx%d "
+                     "will be asked for again",
+                     mWidth, mHeight, static_cast<unsigned long>(back), backbufferWidth,
+                     backbufferHeight);
+            AngleUwpNote(note);
+            if (SUCCEEDED(back))
+            {
+                refused = true;
+                hr      = back;
+            }
+        }
+    }
 #endif
 
     if (FAILED(hr))
     {
         ERR() << "Error resizing swap chain buffers, " << gl::FmtHR(hr);
         release();
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+        // Made again by remakeAfterFailure, from the next present on -- at
+        // the size it had. The size that was asked for is refused as it is
+        // below when the buffers could be put back, so that the chain made
+        // again is kept and presented to while that size waits.
+        {
+            const ULONGLONG now = ::GetTickCount64();
+            mRemakeTriedAt      = now;
+            mRemakeBackoffMs    = kFirstBackoffMs;
+            // Doubled for the same size refused again -- while that refusal is
+            // recent: one from an hour ago starts from the beginning.
+            mRefusedBackoffMs =
+                (mRefusedAt != 0 && backbufferWidth == mRefusedWidth &&
+                 backbufferHeight == mRefusedHeight &&
+                 now - mRefusedAt < mRefusedBackoffMs + kMaxBackoffMs)
+                    ? std::min<ULONGLONG>(mRefusedBackoffMs * 2, kMaxBackoffMs)
+                    : kFirstBackoffMs;
+            mRefusedAt     = now;
+            mRefusedWidth  = backbufferWidth;
+            mRefusedHeight = backbufferHeight;
+        }
+#endif
 
         if (d3d11::isDeviceLostError(hr))
         {
@@ -577,10 +722,45 @@ EGLint SwapChain11::resize(DisplayD3D *displayD3D, EGLint backbufferWidth, EGLin
         ASSERT(result != angle::Result::Stop);
         mBackBufferSRView.setInternalName("BackBufferSRV");
     }
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    else
+    {
+        // Resized, and no buffer to be had from it: as good as not resized.
+        char note[128];
+        snprintf(note, sizeof(note), "angle: swap chain GetBuffer failed -> 0x%08lx",
+                 static_cast<unsigned long>(hr));
+        AngleUwpNote(note);
+        release();
+        mRemakeTriedAt   = ::GetTickCount64();
+        mRemakeBackoffMs = kFirstBackoffMs;
+        return EGL_BAD_ALLOC;
+    }
+#endif
 
     mFirstSwap = true;
 
 #if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    if (refused)
+    {
+        // The buffers are the old size again, and empty: the caller is told
+        // the resize failed, so that the next frame is drawn whole. The
+        // offscreen buffers were not touched. The same size is not tried
+        // again before the back-off is over, which doubles each time.
+        const ULONGLONG now = ::GetTickCount64();
+        mRefusedBackoffMs =
+            (mRefusedAt != 0 && backbufferWidth == mRefusedWidth &&
+             backbufferHeight == mRefusedHeight &&
+             now - mRefusedAt < mRefusedBackoffMs + kMaxBackoffMs)
+                ? std::min<ULONGLONG>(mRefusedBackoffMs * 2, kMaxBackoffMs)
+                : kFirstBackoffMs;
+        mRefusedAt     = now;
+        mRefusedWidth  = backbufferWidth;
+        mRefusedHeight = backbufferHeight;
+        return EGL_BAD_ALLOC;
+    }
+    mRefusedAt        = 0;
+    mRefusedBackoffMs = kFirstBackoffMs;
+
     const EGLint offscreenResult =
         resetOffscreenBuffers(displayD3D, backbufferWidth, backbufferHeight);
     {
@@ -698,6 +878,20 @@ EGLint SwapChain11::reset(DisplayD3D *displayD3D,
         hr                             = mSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D),
                                                                reinterpret_cast<LPVOID *>(&backbufferTex));
         ASSERT(SUCCEEDED(hr));
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+        if (FAILED(hr) || backbufferTex == nullptr)
+        {
+            // This runs again and again now, when memory is at its shortest
+            // (remakeAfterFailure); the lines below read the texture's
+            // description through the pointer.
+            char note[128];
+            snprintf(note, sizeof(note), "angle: new swap chain, GetBuffer failed -> 0x%08lx",
+                     static_cast<unsigned long>(hr));
+            AngleUwpNote(note);
+            release();
+            return EGL_BAD_ALLOC;
+        }
+#endif
         const auto &format =
             d3d11::Format::Get(mOffscreenRenderTargetFormat, mRenderer->getRenderer11DeviceCaps());
         mBackBufferTexture.set(backbufferTex, format);
@@ -948,6 +1142,16 @@ EGLint SwapChain11::present(DisplayD3D *displayD3D, EGLint x, EGLint y, EGLint w
 {
     if (!mSwapChain)
     {
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+        if (mNativeWindow->getNativeWindow() && mWidth > 0 && mHeight > 0)
+        {
+            // A window's chain, given up after a failure. This frame went
+            // nowhere, and saying it succeeded would leave the picture on the
+            // screen frozen for good; the caller draws the next one whole.
+            remakeAfterFailure(displayD3D, mWidth, mHeight);
+            return EGL_BAD_ALLOC;
+        }
+#endif
         return EGL_SUCCESS;
     }
 

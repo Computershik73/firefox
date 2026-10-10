@@ -235,6 +235,13 @@ egl::Error SurfaceD3D::resizeSwapChain(DisplayD3D *displayD3D,
         return egl::Error(status);
     }
 
+    if (mSwapChain->resizeRefused())
+    {
+        // The buffers are still the size they were; so is the surface, which
+        // makes the next swap ask for this size again.
+        return egl::NoError();
+    }
+
     mWidth  = backbufferWidth;
     mHeight = backbufferHeight;
 

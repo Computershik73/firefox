@@ -60,6 +60,11 @@ class SwapChainD3D : angle::NonCopyable
                             EGLint height)       = 0;
     virtual void recreate()                      = 0;
 
+    // True when the last resize() left the buffers at the size they had and
+    // said EGL_SUCCESS all the same: the surface keeps its size, and asks
+    // again at its next swap. (Windows 10 Mobile, SwapChain11.)
+    virtual bool resizeRefused() const { return false; }
+
     virtual RenderTargetD3D *getColorRenderTarget()        = 0;
     virtual RenderTargetD3D *getDepthStencilRenderTarget() = 0;
 

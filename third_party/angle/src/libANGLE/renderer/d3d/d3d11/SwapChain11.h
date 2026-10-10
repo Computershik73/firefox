@@ -42,6 +42,9 @@ class SwapChain11 final : public SwapChainD3D
                     EGLint width,
                     EGLint height) override;
     void recreate() override;
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    bool resizeRefused() const override { return mResizeRefused; }
+#endif
 
     RenderTargetD3D *getColorRenderTarget() override;
     RenderTargetD3D *getDepthStencilRenderTarget() override;
@@ -85,6 +88,9 @@ class SwapChain11 final : public SwapChainD3D
                                      EGLint height);
     EGLint present(DisplayD3D *displayD3D, EGLint x, EGLint y, EGLint width, EGLint height);
     UINT getD3DSamples() const;
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    EGLint remakeAfterFailure(DisplayD3D *displayD3D, EGLint width, EGLint height);
+#endif
 
     Renderer11 *mRenderer;
     EGLint mWidth;
@@ -128,6 +134,21 @@ class SwapChain11 final : public SwapChainD3D
 
     EGLint mEGLSamples;
     LONGLONG mQPCFrequency;
+
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    // A resize the system refused for want of memory (on a phone, of address
+    // space in pieces large enough) does not end the surface: the buffers go
+    // back to the size they had, and the new size is asked for again later.
+    // See resize().
+    bool mResizeRefused         = false;
+    EGLint mRefusedWidth        = 0;
+    EGLint mRefusedHeight       = 0;
+    ULONGLONG mRefusedAt        = 0;
+    ULONGLONG mRefusedBackoffMs = 1000;
+    // The same for a chain that had to be given up altogether (release()).
+    ULONGLONG mRemakeTriedAt   = 0;
+    ULONGLONG mRemakeBackoffMs = 1000;
+#endif
 };
 
 }  // namespace rx

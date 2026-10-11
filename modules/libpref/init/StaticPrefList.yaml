@@ -13026,6 +13026,14 @@
     value: 2
     mirror: always
 
+# How long after one hardware video decoder has ended the next may be made
+# (DXVA2Manager::CreateD3D11DXVA waits out the rest). The Adreno driver
+# overflowed its stack when one followed the other at once. 0: no wait.
+-   name: media.wmf.gecko-w10m.dxva-settle-ms
+    type: RelaxedAtomicUint32
+    value: 1000
+    mirror: always
+
 # H.264 mediaCapabilities.decodingInfo answered from what the GPU's video
 # decoder said once per process (DXVA2Manager.cpp), instead of building a
 # decoder for every query. Configs the probe cannot answer for -- a profile

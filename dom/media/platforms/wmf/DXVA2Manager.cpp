@@ -440,6 +440,10 @@ DXVA2Manager::GeckoW10mDxvaCaps DXVA2Manager::GeckoW10mDxvaCapsNow() {
 // Count of the number of DXVAManager's we've created. This is also the
 // number of videos we're decoding with DXVA. Use on main thread only.
 static Atomic<uint32_t> sDXVAVideosCount(0);
+#if defined(GECKO_W10M)
+// When a DXVA manager was last destroyed (GetTickCount64), 0 for never.
+static Atomic<uint64_t> sLastDXVAEndedAt(0);
+#endif
 
 // This class's functions are not thread-safe, please use them carefully.
 // TODO : make this class better in bug1932998.
@@ -1395,8 +1399,45 @@ DXVA2Manager* DXVA2Manager::CreateD3D11DXVA(
 
   if (sDXVAVideosCount == dxvaLimit && aUsage == DXVA2Usage::Playback) {
     aFailureReason.AssignLiteral("Too many DXVA videos playing");
+#if defined(GECKO_W10M)
+    GeckoW10mNote(
+        "media: a hardware decoder is in use, this video is decoded on the "
+        "CPU (media.wmf.dxva.max-videos)");
+#endif
     return nullptr;
   }
+#if defined(GECKO_W10M)
+  if (aUsage == DXVA2Usage::Playback) {
+    // One at a time was not enough. On vkvideo.ru the player drops the
+    // video's decoder and makes the advertisement's (or the other way round)
+    // in the same breath: the count above is back to zero, both get the GPU,
+    // and 2 ms after the second was set up the system's H.264 decoder, on a
+    // thread of its own, went through d3d11 into the Adreno driver and that
+    // recursed until the stack ran out (0xc00000fd, qcdx11um8996.dll, builds
+    // 147, 184 and 185). The first session is gone as far as this class
+    // knows and plainly not as far as the driver does. So the next one waits
+    // until the last has been gone for a while. This is a decoder's own
+    // thread, not the main one, and the wait is at the start of a video.
+    const uint32_t settleMs =
+        StaticPrefs::media_wmf_gecko_w10m_dxva_settle_ms();
+    const uint64_t endedAt = sLastDXVAEndedAt;
+    const uint64_t now = ::GetTickCount64();
+    uint32_t waited = 0;
+    if (settleMs && endedAt && now - endedAt < settleMs) {
+      waited = uint32_t(settleMs - (now - endedAt));
+      ::Sleep(waited);
+    }
+    nsPrintfCString note(
+        "media: hardware decoder asked for %u ms after the last one ended, "
+        "waited %u ms first",
+        endedAt ? unsigned(std::min<uint64_t>(now - endedAt, 0xffffffffu))
+                : 0u,
+        waited);
+    GeckoW10mNote(endedAt ? note.get()
+                          : "media: hardware decoder asked for, the first of "
+                            "this run");
+  }
+#endif
 
   UniquePtr<D3D11DXVA2Manager> manager(new D3D11DXVA2Manager());
   HRESULT hr = manager->Init(aKnowsCompositor, aFailureReason, aDevice);
@@ -1407,7 +1448,12 @@ DXVA2Manager* DXVA2Manager::CreateD3D11DXVA(
 
 DXVA2Manager::DXVA2Manager() : mLock("DXVA2Manager") { ++sDXVAVideosCount; }
 
-DXVA2Manager::~DXVA2Manager() { --sDXVAVideosCount; }
+DXVA2Manager::~DXVA2Manager() {
+  --sDXVAVideosCount;
+#if defined(GECKO_W10M)
+  sLastDXVAEndedAt = ::GetTickCount64();
+#endif
+}
 
 bool DXVA2Manager::IsUnsupportedResolution(const uint32_t& aWidth,
                                            const uint32_t& aHeight,

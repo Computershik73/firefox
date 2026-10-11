@@ -90,6 +90,10 @@ class SwapChain11 final : public SwapChainD3D
     UINT getD3DSamples() const;
 #if defined(ANGLE_ENABLE_WINDOWS_UWP)
     EGLint remakeAfterFailure(DisplayD3D *displayD3D, EGLint width, EGLint height);
+    void bufferSizeFor(EGLint width,
+                       EGLint height,
+                       EGLint *bufferWidth,
+                       EGLint *bufferHeight) const;
 #endif
 
     Renderer11 *mRenderer;
@@ -148,6 +152,25 @@ class SwapChain11 final : public SwapChainD3D
     // The same for a chain that had to be given up altogether (release()).
     ULONGLONG mRemakeTriedAt   = 0;
     ULONGLONG mRemakeBackoffMs = 1000;
+
+    // The buffers made once (AngleUwpCapacityMode in NativeWindow11WinRT.h).
+    // mWidth and mHeight above stay the surface's size, which is all GL, EGL
+    // and present() ever see; these are the size of the chain's buffers, which
+    // may be larger, with the surface their top-left part, and 0 while there
+    // is no chain. The mode is read when the chain is made and is 0 for
+    // anything but a window drawn into directly.
+    EGLint mBufferWidth  = 0;
+    EGLint mBufferHeight = 0;
+    int mCapacityMode    = 0;
+    // A chain of this surface would not take a source size. None is asked to
+    // again: the chains made after that have mode 0.
+    bool mSourceSizeBroken = false;
+    // Buffers at the capacity are not asked for any more: a source size
+    // failed on them, or a chain could not be made with them.
+    bool mAvoidCapacity = false;
+    // The surface's size is not yet the source size of the chain; it is set
+    // right before the next present, see present().
+    bool mSourceSizeDirty = false;
 #endif
 };
 

@@ -56,6 +56,34 @@ namespace rx
 int AngleUwpMode();
 void AngleUwpNote(const char *text);
 
+// The swap chain's buffers made once. The keyboard and the system's bars
+// change the panel's size many times a minute, and stock ANGLE answers each
+// change with ResizeBuffers: three new buffers of 13-14 MB each, wanted in one
+// piece apiece, which a phone's address space may not have. The shell hands
+// over the largest size the panel can have while the phone is held as it is
+// (the window's), the buffers are made that size, and a smaller panel is shown
+// through IDXGISwapChain2::SetSourceSize, which presents the top-left of them.
+//
+//   0  buffers the size of the panel, resized with it -- as it was
+//   1  buffers at the capacity, the panel's part shown by source size
+//   2  the same, and with every source size a transform that undoes a stretch
+//      of the shown part to the buffers' size, should Windows do that
+//
+// The mode is 0 for as long as no capacity has been handed over.
+int AngleUwpCapacityMode();
+// False when there is none.
+bool AngleUwpPanelCapacity(LONG *width, LONG *height);
+// Shows width x height of the chain's buffers, and reads back what the chain
+// then says its source size is. E_NOINTERFACE without IDXGISwapChain2.
+HRESULT AngleUwpSetSourceSize(IDXGISwapChain *chain,
+                              UINT width,
+                              UINT height,
+                              UINT bufferWidth,
+                              UINT bufferHeight,
+                              int mode,
+                              UINT *readBackWidth,
+                              UINT *readBackHeight);
+
 class NativeWindow11WinRT : public NativeWindow11
 {
   public:

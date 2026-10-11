@@ -535,6 +535,17 @@ angle::Result Clear11::clearFramebuffer(const gl::Context *context,
 
         const auto &framebufferRTV = renderTarget->getRenderTargetView();
         ASSERT(framebufferRTV.valid());
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+        if (!framebufferRTV.valid())
+        {
+            // A window's surface whose swap chain was given up after a failure
+            // and has not been made again yet (SwapChain11::remakeAfterFailure
+            // keeps trying). The frames drawn meanwhile go nowhere: a draw
+            // binds no target and is harmless, but a clear would hand
+            // Direct3D the null view, which it reads through.
+            continue;
+        }
+#endif
 
         bool canClearView = mRenderer->getRenderer11DeviceCaps().supportsClearView;
         if (canClearView &&
@@ -664,7 +675,14 @@ angle::Result Clear11::clearFramebuffer(const gl::Context *context,
             const FLOAT depthClear   = gl::clamp01(clearParams.depthValue);
             const UINT8 stencilClear = clearParams.stencilValue & 0xFF;
 
-            deviceContext->ClearDepthStencilView(dsv, clearFlags, depthClear, stencilClear);
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+            // The depth buffer of a surface without a swap chain is gone with
+            // it; see the colour buffers above.
+            if (dsv != nullptr)
+#endif
+            {
+                deviceContext->ClearDepthStencilView(dsv, clearFlags, depthClear, stencilClear);
+            }
 
             dsv = nullptr;
         }

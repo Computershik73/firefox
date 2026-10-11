@@ -29,15 +29,42 @@ namespace
 // The size of the panel, which belongs to the UI thread while everything here
 // runs on the renderer's. So it is handed over rather than asked for: the shell
 // already measures the room it has and tells the engine, and this is the same
-// number arriving by a shorter road. Written rarely, read every resize.
-std::atomic<LONG> sPanelWidth{0};
-std::atomic<LONG> sPanelHeight{0};
+// number arriving by a shorter road. Written rarely, read every resize. One
+// value, the width in its upper half: as two, a read between the two stores
+// when the phone is turned gave a size as wide as the new one and as tall as
+// the old, larger than the window either way up, and buffers made that size
+// hold every size after it and are kept (SwapChain11::resize).
+std::atomic<int64_t> sPanelSize{0};
 // The panel's composition scale, times 1000. XAML shows a swap chain's pixels
 // as logical units unless told otherwise; on a 350% phone that is a picture
 // three and a half times too big. The shell reads the scale from the panel
 // and it goes onto the chain as an inverse matrix transform.
 std::atomic<int> sPanelScaleX{1000};
 std::atomic<int> sPanelScaleY{1000};
+// The largest size the panel can have while the phone is held as it is, which
+// is the window's, and what the shell wants done with it (AngleUwpCapacityMode
+// in the header). One value like the panel's above: read between two stores
+// when the phone turns it would be 2560x2560, which covers every panel and
+// would be taken for the capacity -- three buffers of 25 MB.
+std::atomic<int64_t> sPanelCapacity{0};
+std::atomic<int> sCapacityMode{0};
+
+// A size as one value, and 0 for a size that is not one.
+int64_t PackSize(int32_t width, int32_t height)
+{
+    if (width <= 0 || height <= 0)
+    {
+        return 0;
+    }
+    return (static_cast<int64_t>(width) << 32) | static_cast<uint32_t>(height);
+}
+
+bool UnpackSize(int64_t size, LONG *width, LONG *height)
+{
+    *width  = static_cast<LONG>(size >> 32);
+    *height = static_cast<LONG>(size & 0xffffffff);
+    return *width > 0 && *height > 0;
+}
 
 // Where this says what it did. The notes Gecko writes live in xul, which this
 // library is not linked against, so the shell hands over somewhere to write --
@@ -117,14 +144,24 @@ HRESULT RunOnUIThread(std::function<HRESULT()> &&work,
 extern "C" __declspec(dllexport) void angle_uwp_set_panel_size(int32_t width,
                                                                int32_t height)
 {
-    sPanelWidth  = width;
-    sPanelHeight = height;
+    sPanelSize = PackSize(width, height);
 }
 
 extern "C" __declspec(dllexport) void angle_uwp_set_panel_scale(float x, float y)
 {
     sPanelScaleX = static_cast<int>((x > 0 ? x : 1.0f) * 1000.0f + 0.5f);
     sPanelScaleY = static_cast<int>((y > 0 ? y : 1.0f) * 1000.0f + 0.5f);
+}
+
+// The window's size, at the start and each time the phone is turned, and the
+// mode with it. A shell that does not know of this never calls it, and then
+// there is no capacity and nothing here differs from what it was.
+extern "C" __declspec(dllexport) void angle_uwp_set_panel_capacity(int32_t width,
+                                                                   int32_t height,
+                                                                   int32_t mode)
+{
+    sPanelCapacity = PackSize(width, height);
+    sCapacityMode  = (mode == 1 || mode == 2) ? mode : 0;
 }
 
 extern "C" __declspec(dllexport) void angle_uwp_set_mode(int32_t mode)
@@ -158,6 +195,112 @@ int AngleUwpMode()
 void AngleUwpNote(const char *text)
 {
     Note(text);
+}
+
+bool AngleUwpPanelCapacity(LONG *width, LONG *height)
+{
+    LONG capacityWidth  = 0;
+    LONG capacityHeight = 0;
+    if (!UnpackSize(sPanelCapacity.load(), &capacityWidth, &capacityHeight))
+    {
+        return false;
+    }
+    if (width)
+    {
+        *width = capacityWidth;
+    }
+    if (height)
+    {
+        *height = capacityHeight;
+    }
+    return true;
+}
+
+int AngleUwpCapacityMode()
+{
+    // Without a capacity there is nothing for a mode to act on, and a chain
+    // made then has to be exactly the chain it always was.
+    return AngleUwpPanelCapacity(nullptr, nullptr) ? sCapacityMode.load() : 0;
+}
+
+HRESULT AngleUwpSetSourceSize(IDXGISwapChain *chain,
+                              UINT width,
+                              UINT height,
+                              UINT bufferWidth,
+                              UINT bufferHeight,
+                              int mode,
+                              UINT *readBackWidth,
+                              UINT *readBackHeight)
+{
+    if (readBackWidth)
+    {
+        *readBackWidth = 0;
+    }
+    if (readBackHeight)
+    {
+        *readBackHeight = 0;
+    }
+    if (chain == nullptr || width == 0 || height == 0 || bufferWidth == 0 || bufferHeight == 0)
+    {
+        return E_INVALIDARG;
+    }
+
+    IDXGISwapChain2 *chain2 = nullptr;
+    if (FAILED(chain->QueryInterface(__uuidof(IDXGISwapChain2),
+                                     reinterpret_cast<void **>(&chain2))) ||
+        !chain2)
+    {
+        return E_NOINTERFACE;
+    }
+
+    // Like the matrix in createSwapChain, this is a call on the chain and not
+    // on the panel, so it is made on the renderer's thread. Whether Windows
+    // takes it there is one of the things the result is noted for.
+    HRESULT result = chain2->SetSourceSize(width, height);
+    if (SUCCEEDED(result) && mode == 2)
+    {
+        // A swap chain made with DXGI_SCALING_STRETCH may have its shown part
+        // stretched to the size of the buffers; a composition chain has no
+        // other size to stretch to. If that is what Windows does, the picture
+        // is as much too large as the buffers are larger than the part, and
+        // this takes that off again, on top of the composition scale. The
+        // matrix replaces the one set when the chain was made; where the part
+        // is all of the buffers it is the same matrix.
+        const float scaleX          = sPanelScaleX.load() / 1000.0f;
+        const float scaleY          = sPanelScaleY.load() / 1000.0f;
+        DXGI_MATRIX_3X2_F transform = {};
+        transform._11               = (static_cast<float>(width) / bufferWidth) / scaleX;
+        transform._22               = (static_cast<float>(height) / bufferHeight) / scaleY;
+        result                      = chain2->SetMatrixTransform(&transform);
+        if (FAILED(result))
+        {
+            // The caller's note has only the one result, so which of the two
+            // calls it came from is said here.
+            char note[256];
+            snprintf(note, sizeof(note),
+                     "angle: source size %ux%u was taken, its transform %.4fx%.4f failed -> "
+                     "0x%08lx",
+                     width, height, transform._11, transform._22,
+                     static_cast<unsigned long>(result));
+            Note(note);
+        }
+    }
+
+    UINT sourceWidth  = 0;
+    UINT sourceHeight = 0;
+    if (SUCCEEDED(chain2->GetSourceSize(&sourceWidth, &sourceHeight)))
+    {
+        if (readBackWidth)
+        {
+            *readBackWidth = sourceWidth;
+        }
+        if (readBackHeight)
+        {
+            *readBackHeight = sourceHeight;
+        }
+    }
+    chain2->Release();
+    return result;
 }
 
 NativeWindow11WinRT::NativeWindow11WinRT(EGLNativeWindowType window, bool hasAlpha)
@@ -222,9 +365,9 @@ bool NativeWindow11WinRT::getClientRect(LPRECT rect) const
     {
         return false;
     }
-    const LONG width  = sPanelWidth.load();
-    const LONG height = sPanelHeight.load();
-    if (width <= 0 || height <= 0)
+    LONG width  = 0;
+    LONG height = 0;
+    if (!UnpackSize(sPanelSize.load(), &width, &height))
     {
         return false;
     }

@@ -1476,6 +1476,31 @@ void nsJSContext::MaybePokeCC() {
                           nsCycleCollector_suspectedCount());
 }
 
+#if defined(GECKO_W10M)
+// The figures of nsJSContext::GeckoW10mGCCost (nsJSEnvironment.h), and
+// whether the collection now running has had a forced slice. Nothing in the
+// logs timed an ordinary collection: javascript.options.mem.log formats a
+// console line for every slice, which on this port is also a line appended
+// to the note file, and so costs what it is there to measure. These are a
+// comparison and an addition or two per slice, on the main thread only.
+static nsJSContext::GeckoW10mGCCost sGeckoW10mGCCost;
+static bool sGeckoW10mGCForced = false;
+
+// A slice of a shrinking (or shutdown) collection, or one run because
+// memory ran short: the browser or the allocator asked for it, the size of
+// the heap did not. A "low-memory", or the engine's last try before an
+// allocation fails, that meets an ordinary incremental collection keeps
+// that collection's Normal options (GCRuntime::gc sets options only when
+// none is in progress): the running one is wound up and a whole one is run
+// in the same call, both with the request's reason, which is what tells
+// them apart. Such a request then counts as two forced collections.
+static bool GeckoW10mIsForcedGCSlice(const JS::GCDescription& aDesc) {
+  return aDesc.options_ != JS::GCOptions::Normal ||
+         aDesc.reason_ == JS::GCReason::MEM_PRESSURE ||
+         aDesc.reason_ == JS::GCReason::LAST_DITCH;
+}
+#endif
+
 static void DOMGCSliceCallback(JSContext* aCx, JS::GCProgress aProgress,
                                const JS::GCDescription& aDesc) {
   NS_ASSERTION(NS_IsMainThread(), "GCs must run on the main thread");
@@ -1487,11 +1512,27 @@ static void DOMGCSliceCallback(JSContext* aCx, JS::GCProgress aProgress,
       // Prevent cycle collections and shrinking during incremental GC.
       sScheduler->NoteGCBegin(aDesc.reason_);
       sCurrentGCStartTime = TimeStamp::Now();
+#if defined(GECKO_W10M)
+      sGeckoW10mGCForced = GeckoW10mIsForcedGCSlice(aDesc);
+      // The heap is at its largest when a collection begins, and a reading
+      // taken once a minute misses that: this is the peak a tighter growth
+      // profile is meant to lower. One counter read per collection.
+      sGeckoW10mGCCost.peakBytes = std::max(sGeckoW10mGCCost.peakBytes,
+                                            JS_GetGCParameter(aCx, JSGC_BYTES));
+#endif
       break;
     }
 
     case JS::GC_CYCLE_END: {
       TimeDuration delta = GetCollectionTimeDelta();
+
+#if defined(GECKO_W10M)
+      if (sGeckoW10mGCForced) {
+        ++sGeckoW10mGCCost.forced;
+      } else {
+        ++sGeckoW10mGCCost.ordinary;
+      }
+#endif
 
       if (StaticPrefs::javascript_options_mem_log()) {
         nsString gcstats;
@@ -1563,6 +1604,33 @@ static void DOMGCSliceCallback(JSContext* aCx, JS::GCProgress aProgress,
       sScheduler->NoteGCSliceEnd(aDesc.lastSliceStart(aCx),
                                  aDesc.lastSliceEnd(aCx));
 
+#if defined(GECKO_W10M)
+      {
+        // A long slice is the pause somebody feels, and totals alone hide
+        // it. A forced collection under memory pressure is one slice of a
+        // second or more whatever the growth settings are, and would be the
+        // longest of every minute it falls in, so forced slices only add up
+        // -- the short ones of the collection made after the user has gone
+        // idle among them.
+        const double sliceMs =
+            (aDesc.lastSliceEnd(aCx) - aDesc.lastSliceStart(aCx))
+                .ToMilliseconds();
+        if (GeckoW10mIsForcedGCSlice(aDesc)) {
+          sGeckoW10mGCForced = true;
+          sGeckoW10mGCCost.forcedMs += sliceMs;
+        } else {
+          sGeckoW10mGCCost.longestSliceMs =
+              std::max(sGeckoW10mGCCost.longestSliceMs, sliceMs);
+          if (sliceMs >= 50.0) {
+            ++sGeckoW10mGCCost.slicesOf50Ms;
+          }
+          if (sliceMs >= 250.0) {
+            ++sGeckoW10mGCCost.slicesOf250Ms;
+          }
+        }
+      }
+#endif
+
       if (sShuttingDown) {
         sScheduler->KillGCRunner();
       } else {
@@ -1602,6 +1670,16 @@ static void DOMGCSliceCallback(JSContext* aCx, JS::GCProgress aProgress,
     (*sPrevGCSliceCallback)(aCx, aProgress, aDesc);
   }
 }
+
+#if defined(GECKO_W10M)
+// static
+nsJSContext::GeckoW10mGCCost nsJSContext::GeckoW10mTakeGCCost() {
+  MOZ_ASSERT(NS_IsMainThread());
+  GeckoW10mGCCost cost = sGeckoW10mGCCost;
+  sGeckoW10mGCCost = GeckoW10mGCCost();
+  return cost;
+}
+#endif
 
 void nsJSContext::SetWindowProxy(JS::Handle<JSObject*> aWindowProxy) {
   mWindowProxy = aWindowProxy;

@@ -90,6 +90,32 @@ class nsJSContext : public nsIScriptContext {
   static uint32_t GetMaxCCSliceTimeSinceClear();
   static void ClearMaxCCSliceTime();
 
+#if defined(GECKO_W10M)
+  // What the main thread's major collections have cost since this was last
+  // asked, kept by the slice callback (nsJSEnvironment.cpp) and written to
+  // the note log once a minute, so that two runs with different heap growth
+  // settings can be compared. A collection that is forced -- a shrinking
+  // one, or one asked for because memory ran short -- is asked for by the
+  // browser and not by the size of the heap, so no growth setting changes
+  // how many of them a run has; the page and the phone do. They are counted
+  // apart, and the ordinary ones are what the comparison is made by. The
+  // ones under memory pressure run in one piece for a second or more; the
+  // one made after the user has gone idle runs in slices like any other,
+  // and its slices are added to the forced total all the same. peakBytes is
+  // the largest JS heap any collection began with.
+  struct GeckoW10mGCCost {
+    uint32_t ordinary = 0;
+    double longestSliceMs = 0;
+    uint32_t slicesOf50Ms = 0;
+    uint32_t slicesOf250Ms = 0;
+    uint32_t forced = 0;
+    double forcedMs = 0;
+    uint32_t peakBytes = 0;
+  };
+  // Returns the figures and starts them again from zero. Main thread only.
+  static GeckoW10mGCCost GeckoW10mTakeGCCost();
+#endif
+
   // If there is some pending CC or GC timer/runner, this will run it.
   static void RunNextCollectorTimer(
       JS::GCReason aReason,

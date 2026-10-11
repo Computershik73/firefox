@@ -2227,7 +2227,31 @@ nsXPCComponents_Utils::GetJSEngineTelemetryValue(JSContext* cx,
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
+#if defined(GECKO_W10M)
+  // The object was empty and nothing in the browser reads it, so it carries
+  // what the main thread's major collections cost since the last call
+  // (nsJSContext::GeckoW10mGCCost) to the autoconfig, which writes it to the
+  // note log once a minute. Reading starts the figures again from zero: the
+  // caller is the only reader there is.
+  nsJSContext::GeckoW10mGCCost cost = nsJSContext::GeckoW10mTakeGCCost();
+  if (!JS_DefineProperty(cx, obj, "gcOrdinary", cost.ordinary,
+                         JSPROP_ENUMERATE) ||
+      !JS_DefineProperty(cx, obj, "gcLongestSliceMs", cost.longestSliceMs,
+                         JSPROP_ENUMERATE) ||
+      !JS_DefineProperty(cx, obj, "gcSlicesOf50Ms", cost.slicesOf50Ms,
+                         JSPROP_ENUMERATE) ||
+      !JS_DefineProperty(cx, obj, "gcSlicesOf250Ms", cost.slicesOf250Ms,
+                         JSPROP_ENUMERATE) ||
+      !JS_DefineProperty(cx, obj, "gcForced", cost.forced, JSPROP_ENUMERATE) ||
+      !JS_DefineProperty(cx, obj, "gcForcedMs", cost.forcedMs,
+                         JSPROP_ENUMERATE) ||
+      !JS_DefineProperty(cx, obj, "gcPeakBytes", cost.peakBytes,
+                         JSPROP_ENUMERATE)) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+#else
   // No JS engine telemetry in use at the moment.
+#endif
 
   rval.setObject(*obj);
   return NS_OK;

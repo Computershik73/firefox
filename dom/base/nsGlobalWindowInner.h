@@ -1353,6 +1353,9 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
 
   // Indicates whether this window wants gamepad input events
   bool mHasGamepad : 1;
+#if defined(GECKO_W10M)
+  bool mGamepadHelpRequested = false;
+#endif
 
   // Indicates whether this window has content that has an XR session
   // An XR session results in enumeration and activation of XR devices.

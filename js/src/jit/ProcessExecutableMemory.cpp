@@ -52,6 +52,17 @@ using namespace js::jit;
 // Defined in toolkit/xre/Bootstrap.cpp: one line to a file the shell names,
 // for when there is no debugger, no console and no MOZ_LOG yet.
 extern "C" void GeckoW10mNote(const char* text);
+extern "C" void GeckoW10mAllocationFailure(const char*, uint64_t, uint32_t);
+static mozilla::Atomic<uint64_t> sJitCommitted{0};
+static mozilla::Atomic<uint64_t> sJitAllocatedTotal{0};
+static mozilla::Atomic<uint64_t> sJitFreedTotal{0};
+extern "C" void GeckoW10mGetJitMemoryLedger(uint64_t* committed,
+    uint64_t* allocated, uint64_t* freed) {
+  *committed = sJitCommitted;
+  *allocated = sJitAllocatedTotal;
+  *freed = sJitFreedTotal;
+}
+extern "C" void GeckoW10mMemoryPressureOnFailure(const char* aWhy);
 #endif
 
 #if defined(XP_WIN) && defined(GECKO_W10M)
@@ -399,6 +410,53 @@ static DWORD ProtectionSettingToFlags(ProtectionSetting protection) {
   MOZ_CRASH();
 }
 
+#if defined(GECKO_W10M)
+static void NoteExecutableCommit(size_t bytes, DWORD error) {
+  GeckoW10mAllocationFailure("jit-commit-or-protect", bytes, error);
+  static mozilla::Atomic<uint32_t> snapshots{0};
+  if (snapshots++ >= 32) {
+    return;
+  }
+  using GetProcessInformationFn = BOOL(WINAPI*)(
+      HANDLE, PROCESS_INFORMATION_CLASS, LPVOID, DWORD);
+  HMODULE kernel = ::GetModuleHandleW(L"kernelbase.dll");
+  auto query = kernel ? reinterpret_cast<GetProcessInformationFn>(
+                            ::GetProcAddress(kernel, "GetProcessInformation"))
+                      : nullptr;
+  if (!query) {
+    kernel = ::GetModuleHandleW(L"kernel32.dll");
+    query = kernel ? reinterpret_cast<GetProcessInformationFn>(
+                         ::GetProcAddress(kernel, "GetProcessInformation"))
+                   : nullptr;
+  }
+  APP_MEMORY_INFORMATION app = {};
+  const bool appRead = query && query(::GetCurrentProcess(), ProcessAppMemoryInfo,
+                                     &app, sizeof(app));
+  const DWORD appError =
+      appRead ? 0 : query ? ::GetLastError() : ERROR_PROC_NOT_FOUND;
+  MEMORYSTATUSEX system = {};
+  system.dwLength = sizeof(system);
+  const bool systemRead = ::GlobalMemoryStatusEx(&system);
+  const DWORD systemError = systemRead ? 0 : ::GetLastError();
+  constexpr double mb = 1024.0 * 1024.0;
+  char note[384];
+  SprintfLiteral(note,
+                 "jit: commit snapshot requested=%.1f MB error=%lu "
+                 "app_query_error=%lu app_available=%.1f MB "
+                 "app_private=%.1f MB app_total=%.1f MB app_peak_private=%.1f MB "
+                 "system_query_error=%lu available_commit=%.1f MB "
+                 "available_physical=%.1f MB",
+                 double(bytes) / mb, error, appError,
+                 double(app.AvailableCommit) / mb,
+                 double(app.PrivateCommitUsage) / mb,
+                 double(app.TotalCommitUsage) / mb,
+                 double(app.PeakPrivateCommitUsage) / mb, systemError,
+                 double(system.ullAvailPageFile) / mb,
+                 double(system.ullAvailPhys) / mb);
+  GeckoW10mNote(note);
+}
+#endif
+
 [[nodiscard]] static bool CommitPages(void* addr, size_t bytes,
                                       ProtectionSetting protection) {
   const DWORD wanted = ProtectionSettingToFlags(protection);
@@ -418,11 +476,17 @@ static DWORD ProtectionSettingToFlags(ProtectionSetting protection) {
   void* p = VirtualAlloc(addr, bytes, MEM_COMMIT, committed);
   if (!p) {
 #if defined(GECKO_W10M)
+    const DWORD error = GetLastError();
     char note[128];
     SprintfLiteral(note, "jit: commit of %u bytes at %p failed, 0x%x, err %u",
                    unsigned(bytes), addr, unsigned(committed),
-                   unsigned(GetLastError()));
+                   unsigned(error));
     GeckoW10mNote(note);
+    NoteExecutableCommit(bytes, error);
+    if (error == ERROR_COMMITMENT_LIMIT || error == ERROR_NOT_ENOUGH_MEMORY ||
+        error == ERROR_OUTOFMEMORY) {
+      GeckoW10mMemoryPressureOnFailure("executable commit");
+    }
 #endif
     return false;
   }
@@ -432,11 +496,17 @@ static DWORD ProtectionSettingToFlags(ProtectionSetting protection) {
   if (committed != wanted) {
     ULONG previous = 0;
     if (!VirtualProtect(addr, bytes, wanted, &previous)) {
+      const DWORD error = GetLastError();
+      if (!VirtualFree(addr, bytes, MEM_DECOMMIT)) {
+        MOZ_CRASH("Failed to roll back executable memory commit");
+      }
       char note[128];
       SprintfLiteral(note, "jit: protect of %u bytes at %p to 0x%x failed, err %u",
                      unsigned(bytes), addr, unsigned(wanted),
-                     unsigned(GetLastError()));
+                     unsigned(error));
       GeckoW10mNote(note);
+      NoteExecutableCommit(bytes, error);
+      SetLastError(error);
       return false;
     }
   }
@@ -853,6 +923,7 @@ void* ProcessExecutableMemory::allocate(size_t bytes,
     // Check if we have enough pages available.
     if (pagesAllocated_ + numPages >= MaxCodePages) {
 #if defined(GECKO_W10M)
+      GeckoW10mAllocationFailure("jit-code-limit", bytes, 0);
       // The other way out of this function without a page, and the one that
       // would mean the pool is simply too small rather than unusable.
       char note[96];
@@ -918,6 +989,10 @@ void* ProcessExecutableMemory::allocate(size_t bytes,
 
 #if !defined(__wasi__)
   gc::RecordMemoryAlloc(bytes);
+#if defined(GECKO_W10M)
+  sJitCommitted += bytes;
+  sJitAllocatedTotal += bytes;
+#endif
 #endif
 
   SetMemCheckKind(p, bytes, checkKind);
@@ -945,6 +1020,10 @@ void ProcessExecutableMemory::deallocate(void* addr, size_t bytes,
     DecommitPages(addr, bytes);
 #if !defined(__wasi__)
     gc::RecordMemoryFree(bytes);
+#if defined(GECKO_W10M)
+    sJitCommitted -= bytes;
+    sJitFreedTotal += bytes;
+#endif
 #endif
   }
 

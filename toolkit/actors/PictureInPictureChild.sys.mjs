@@ -399,7 +399,22 @@ export class PictureInPictureToggleChild extends JSWindowActorChild {
   }
 
   didDestroy() {
-    this.stopTrackingMouseOverVideos();
+    // The actor's manager may already be gone. Its document/contentWindow
+    // getters then throw, so teardown must use the weak targets saved while
+    // the actor was live. Mark it first so queued events cannot re-enter it.
+    let document = this.cleanupDocument?.deref();
+    let state = document && this.weakDocStates.get(document);
+    this.isDestroyed = true;
+    state?.mousemoveDeferredTask?.disarm();
+    document?.removeEventListener("mousemove", this, {
+      mozSystemGroup: true,
+      capture: true,
+    });
+    let window = document?.defaultView;
+    for (let type of ["pageshow", "pagehide", "visibilitychange"]) {
+      window?.removeEventListener(type, this, { mozSystemGroup: true });
+    }
+    this.removeMouseButtonListeners();
     Services.prefs.removeObserver(TOGGLE_ENABLED_PREF, this.observerFunction);
     Services.prefs.removeObserver(PIP_ENABLED_PREF, this.observerFunction);
     Services.prefs.removeObserver(
@@ -409,7 +424,6 @@ export class PictureInPictureToggleChild extends JSWindowActorChild {
     Services.cpmm.sharedData.removeEventListener("change", this);
 
     // remove the observer on the <video> element
-    let state = this.docState;
     if (state?.intersectionObserver) {
       state.intersectionObserver.disconnect();
     }
@@ -467,6 +481,7 @@ export class PictureInPictureToggleChild extends JSWindowActorChild {
       return false;
     }
 
+    this.cleanupDocument = new WeakRef(this.document);
     let state = this.weakDocStates.get(this.document);
 
     let visibilityThresholdPref = Services.prefs.getFloatPref(
@@ -544,6 +559,10 @@ export class PictureInPictureToggleChild extends JSWindowActorChild {
     if (!event.isTrusted) {
       // We don't care about synthesized events that might be coming from
       // content JS.
+      return;
+    }
+
+    if (this.isDestroyed) {
       return;
     }
 
@@ -875,6 +894,7 @@ export class PictureInPictureToggleChild extends JSWindowActorChild {
   }
 
   addMouseButtonListeners() {
+    this.cleanupWindowRoot = new WeakRef(this.contentWindow.windowRoot);
     // We want to try to cancel the mouse events from continuing
     // on into content if the user has clicked on the toggle, so
     // we don't use the mozSystemGroup here, and add the listener
@@ -909,29 +929,30 @@ export class PictureInPictureToggleChild extends JSWindowActorChild {
   removeMouseButtonListeners() {
     // This can be null when closing the tab, but the event
     // listeners should be removed in that case already.
-    if (!this.contentWindow || !this.contentWindow.windowRoot) {
+    let windowRoot = this.cleanupWindowRoot?.deref();
+    if (!windowRoot) {
       return;
     }
 
-    this.contentWindow.windowRoot.removeEventListener("pointerdown", this, {
+    windowRoot.removeEventListener("pointerdown", this, {
       capture: true,
     });
-    this.contentWindow.windowRoot.removeEventListener("mousedown", this, {
+    windowRoot.removeEventListener("mousedown", this, {
       capture: true,
     });
-    this.contentWindow.windowRoot.removeEventListener("mouseup", this, {
+    windowRoot.removeEventListener("mouseup", this, {
       capture: true,
     });
-    this.contentWindow.windowRoot.removeEventListener("pointerup", this, {
+    windowRoot.removeEventListener("pointerup", this, {
       capture: true,
     });
-    this.contentWindow.windowRoot.removeEventListener("click", this, {
+    windowRoot.removeEventListener("click", this, {
       capture: true,
     });
-    this.contentWindow.windowRoot.removeEventListener("mouseout", this, {
+    windowRoot.removeEventListener("mouseout", this, {
       capture: true,
     });
-    this.contentWindow.windowRoot.removeEventListener("touchstart", this, {
+    windowRoot.removeEventListener("touchstart", this, {
       capture: true,
     });
   }
@@ -951,6 +972,9 @@ export class PictureInPictureToggleChild extends JSWindowActorChild {
    */
   beginTrackingMouseOverVideos() {
     let state = this.docState;
+    if (!state) {
+      return;
+    }
     if (!state.mousemoveDeferredTask) {
       state.mousemoveDeferredTask = new lazy.DeferredTask(() => {
         this.checkLastMouseMove();
@@ -985,7 +1009,7 @@ export class PictureInPictureToggleChild extends JSWindowActorChild {
     // If it doesn't exist, that can't have happened. Nothing else ever sets
     // this value (though we arm/disarm in various places). So we don't need
     // to do anything else here and can return early.
-    if (!state.mousemoveDeferredTask) {
+    if (!state || !state.mousemoveDeferredTask) {
       return;
     }
     state.mousemoveDeferredTask.disarm();

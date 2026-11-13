@@ -16,6 +16,10 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdint>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
+#include <cmath>
 
 #include <dxgi1_3.h>
 #include <windows.ui.core.h>
@@ -24,14 +28,46 @@
 #include <wrl.h>
 #include <wrl/wrappers/corewrappers.h>
 
+namespace rx {
+struct PanelMetrics {
+    int32_t width = 0, height = 0;
+    int32_t capacityWidth = 0, capacityHeight = 0;
+    int capacityMode = 0;
+    float scaleX = 1, scaleY = 1;
+};
+struct PanelMetricsState {
+    std::mutex mutex;
+    PanelMetrics value;
+};
+}
+
 namespace
 {
+std::mutex sWindowMetricsMutex;
+std::unordered_map<void *, std::shared_ptr<rx::PanelMetricsState>> sWindowMetrics;
+std::shared_ptr<rx::PanelMetricsState> WindowMetrics(void *panel) {
+    std::lock_guard<std::mutex> lock(sWindowMetricsMutex);
+    auto entry = sWindowMetrics.find(panel);
+    return entry != sWindowMetrics.end() ? entry->second : nullptr;
+}
+rx::PanelMetrics Snapshot(const std::shared_ptr<rx::PanelMetricsState> &state) {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    return state->value;
+}
 // The size of the panel, which belongs to the UI thread while everything here
 // runs on the renderer's. So it is handed over rather than asked for: the shell
 // already measures the room it has and tells the engine, and this is the same
 // number arriving by a shorter road. Written rarely, read every resize.
-std::atomic<LONG> sPanelWidth{0};
-std::atomic<LONG> sPanelHeight{0};
+std::atomic<int64_t> sPanelSize{0};
+std::atomic<int64_t> sPanelCapacity{0};
+std::atomic<int> sCapacityMode{0};
+
+int64_t PackPanelSize(int32_t width, int32_t height)
+{
+    return width > 0 && height > 0
+               ? (static_cast<int64_t>(width) << 32) | static_cast<uint32_t>(height)
+               : 0;
+}
 // The panel's composition scale, times 1000. XAML shows a swap chain's pixels
 // as logical units unless told otherwise; on a 350% phone that is a picture
 // three and a half times too big. The shell reads the scale from the panel
@@ -110,6 +146,28 @@ HRESULT RunOnUIThread(std::function<HRESULT()> &&work,
 }
 }  // namespace
 
+// The host publishes one complete snapshot before native-window construction.
+// Renderers retain the state object, so unregistering cannot make an in-flight
+// frame start reading another window's defaults or a reused pointer address.
+extern "C" __declspec(dllexport) uint32_t angle_uwp_window_metrics_version() { return 1; }
+extern "C" __declspec(dllexport) int32_t angle_uwp_set_window_metrics(
+    void *panel, int32_t width, int32_t height, float scaleX, float scaleY,
+    int32_t capacityWidth, int32_t capacityHeight, int32_t capacityMode) {
+    if (!panel || width <= 0 || height <= 0 || capacityWidth < width || capacityHeight < height ||
+        !std::isfinite(scaleX) || !std::isfinite(scaleY) || scaleX < 0.00001f || scaleY < 0.00001f ||
+        (capacityMode != 0 && capacityMode != 1 && capacityMode != 2)) return 0;
+    std::lock_guard<std::mutex> registryLock(sWindowMetricsMutex);
+    auto &state = sWindowMetrics[panel];
+    if (!state) state = std::make_shared<rx::PanelMetricsState>();
+    std::lock_guard<std::mutex> stateLock(state->mutex);
+    state->value = {width, height, capacityWidth, capacityHeight, capacityMode, scaleX, scaleY};
+    return 1;
+}
+extern "C" __declspec(dllexport) void angle_uwp_release_window_metrics(void *panel) {
+    std::lock_guard<std::mutex> lock(sWindowMetricsMutex);
+    sWindowMetrics.erase(panel);
+}
+
 // Called by the shell, which owns the panel and is the only thing that knows
 // how big it is. Exported because it is called from outside this library --
 // xul cannot forward it, since xul does not link against ANGLE at all: EGL
@@ -117,8 +175,15 @@ HRESULT RunOnUIThread(std::function<HRESULT()> &&work,
 extern "C" __declspec(dllexport) void angle_uwp_set_panel_size(int32_t width,
                                                                int32_t height)
 {
-    sPanelWidth  = width;
-    sPanelHeight = height;
+    sPanelSize = PackPanelSize(width, height);
+}
+
+extern "C" __declspec(dllexport) void angle_uwp_set_panel_capacity(int32_t width,
+                                                                  int32_t height,
+                                                                  int32_t mode)
+{
+    sCapacityMode = (mode == 1 || mode == 2) ? mode : 0;
+    sPanelCapacity = PackPanelSize(width, height);
 }
 
 extern "C" __declspec(dllexport) void angle_uwp_set_panel_scale(float x, float y)
@@ -160,8 +225,70 @@ void AngleUwpNote(const char *text)
     Note(text);
 }
 
+bool AngleUwpPanelCapacity(LONG *width, LONG *height, const NativeWindow11WinRT *window)
+{
+    if (window) return window->panelCapacity(width, height);
+    const int64_t size = sPanelCapacity.load();
+    const LONG capacityWidth = static_cast<LONG>(size >> 32);
+    const LONG capacityHeight = static_cast<LONG>(size & 0xffffffff);
+    if (width) *width = capacityWidth;
+    if (height) *height = capacityHeight;
+    return capacityWidth > 0 && capacityHeight > 0;
+}
+
+int AngleUwpCapacityMode(const NativeWindow11WinRT *window)
+{
+    if (window) return window->panelCapacityMode();
+    return sPanelCapacity.load() != 0 ? sCapacityMode.load() : 0;
+}
+
+HRESULT AngleUwpSetSourceSize(IDXGISwapChain *chain, UINT width, UINT height,
+                              UINT bufferWidth, UINT bufferHeight, int mode,
+                              UINT *readBackWidth, UINT *readBackHeight, const NativeWindow11WinRT *window)
+{
+    *readBackWidth = 0;
+    *readBackHeight = 0;
+    if (!chain || width == 0 || height == 0 || width > bufferWidth || height > bufferHeight)
+    {
+        return E_INVALIDARG;
+    }
+    Microsoft::WRL::ComPtr<IDXGISwapChain2> chain2;
+    HRESULT hr = chain->QueryInterface(IID_PPV_ARGS(&chain2));
+    if (FAILED(hr))
+    {
+        return hr;
+    }
+    hr = chain2->SetSourceSize(width, height);
+    if (SUCCEEDED(hr) && mode == 2)
+    {
+        float scaleX = sPanelScaleX.load() / 1000.0f;
+        float scaleY = sPanelScaleY.load() / 1000.0f;
+        if (window) window->panelScale(&scaleX, &scaleY);
+        DXGI_MATRIX_3X2_F transform = {};
+        transform._11 = (static_cast<float>(width) / bufferWidth) / scaleX;
+        transform._22 = (static_cast<float>(height) / bufferHeight) / scaleY;
+        hr = chain2->SetMatrixTransform(&transform);
+        if (FAILED(hr))
+        {
+            char note[192];
+            snprintf(note, sizeof(note),
+                     "angle: diag: source-size transform %.6fx%.6f failed 0x%08lx",
+                     transform._11, transform._22, static_cast<unsigned long>(hr));
+            Note(note);
+        }
+    }
+    const HRESULT readResult = chain2->GetSourceSize(readBackWidth, readBackHeight);
+    if (SUCCEEDED(hr))
+    {
+        hr = FAILED(readResult) ? readResult
+                               : (*readBackWidth == width && *readBackHeight == height ? S_OK : E_FAIL);
+    }
+    return hr;
+}
+
 NativeWindow11WinRT::NativeWindow11WinRT(EGLNativeWindowType window, bool hasAlpha)
     : NativeWindow11(window),
+      mMetrics(WindowMetrics(reinterpret_cast<void *>(window))),
       mPanel(nullptr),
       mDispatcher(nullptr),
       mHasAlpha(hasAlpha),
@@ -222,8 +349,10 @@ bool NativeWindow11WinRT::getClientRect(LPRECT rect) const
     {
         return false;
     }
-    const LONG width  = sPanelWidth.load();
-    const LONG height = sPanelHeight.load();
+    const int64_t size = sPanelSize.load();
+    const auto own = mMetrics ? Snapshot(mMetrics) : PanelMetrics{};
+    const LONG width = mMetrics ? own.width : static_cast<LONG>(size >> 32);
+    const LONG height = mMetrics ? own.height : static_cast<LONG>(size & 0xffffffff);
     if (width <= 0 || height <= 0)
     {
         return false;
@@ -235,11 +364,59 @@ bool NativeWindow11WinRT::getClientRect(LPRECT rect) const
     return true;
 }
 
+bool NativeWindow11WinRT::panelCapacity(LONG *width, LONG *height) const {
+    if (!mMetrics) return AngleUwpPanelCapacity(width, height);
+    const auto own = Snapshot(mMetrics);
+    if (width) *width = own.capacityWidth;
+    if (height) *height = own.capacityHeight;
+    return own.capacityWidth > 0 && own.capacityHeight > 0;
+}
+int NativeWindow11WinRT::panelCapacityMode() const {
+    return mMetrics ? Snapshot(mMetrics).capacityMode : AngleUwpCapacityMode();
+}
+void NativeWindow11WinRT::panelScale(float *x, float *y) const {
+    const auto own = mMetrics ? Snapshot(mMetrics) : PanelMetrics{};
+    *x = mMetrics ? own.scaleX : sPanelScaleX.load() / 1000.0f;
+    *y = mMetrics ? own.scaleY : sPanelScaleY.load() / 1000.0f;
+}
+
 bool NativeWindow11WinRT::isIconic() const
 {
     // A phone has no minimised window. It has a suspended app, which stops
     // drawing altogether rather than drawing into a hidden surface.
     return false;
+}
+
+HRESULT NativeWindow11WinRT::detachSwapChainForResize()
+{
+    if (!mPanel || !mDispatcher)
+    {
+        return E_INVALIDARG;
+    }
+    ISwapChainPanelNative *panel = mPanel;
+    const HRESULT result = RunOnUIThread(
+        [panel]() -> HRESULT { return panel->SetSwapChain(nullptr); }, mDispatcher);
+    char note[112];
+    snprintf(note, sizeof(note), "angle: diag: panel detached for resize -> 0x%08lx",
+             static_cast<unsigned long>(result));
+    Note(note);
+    return result;
+}
+
+HRESULT NativeWindow11WinRT::onSwapChainResized(IDXGISwapChain *swapChain)
+{
+    if (!mPanel || !mDispatcher || !swapChain)
+    {
+        return E_INVALIDARG;
+    }
+    ISwapChainPanelNative *panel = mPanel;
+    const HRESULT result = RunOnUIThread(
+        [panel, swapChain]() -> HRESULT { return panel->SetSwapChain(swapChain); }, mDispatcher);
+    char note[112];
+    snprintf(note, sizeof(note), "angle: resized swap chain rebound to panel -> 0x%08lx",
+             static_cast<unsigned long>(result));
+    Note(note);
+    return result;
 }
 
 HRESULT NativeWindow11WinRT::createSwapChain(ID3D11Device *device,
@@ -291,13 +468,20 @@ HRESULT NativeWindow11WinRT::createSwapChain(ID3D11Device *device,
     swapChainDesc.BufferCount = 3;
     swapChainDesc.Scaling     = DXGI_SCALING_STRETCH;
     swapChainDesc.SwapEffect  = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
-    swapChainDesc.AlphaMode = mHasAlpha ? DXGI_ALPHA_MODE_PREMULTIPLIED : DXGI_ALPHA_MODE_IGNORE;
+    // The browser surface is an opaque XAML layer. EGL may request an alpha
+    // channel for rendering, but its back-buffer alpha is not guaranteed to be
+    // premultiplied (or even initialized). Using it for XAML composition can
+    // hide otherwise valid RGB content behind the host's background.
+    swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
     swapChainDesc.Flags     = 0;
+
+    Note(mHasAlpha ? "angle: panel alpha mode opaque (EGL alpha requested)"
+                   : "angle: panel alpha mode opaque (no EGL alpha)");
 
     {
         char note[128];
         snprintf(note, sizeof(note),
-                 "angle: making a %ux%u swap chain for the panel, %u buffers", width, height,
+                 "angle: making an opaque %ux%u swap chain for the panel, %u buffers", width, height,
                  swapChainDesc.BufferCount);
         Note(note);
     }
@@ -315,6 +499,21 @@ HRESULT NativeWindow11WinRT::createSwapChain(ID3D11Device *device,
         return result;
     }
     Note("angle: the swap chain exists, giving it to the panel");
+    {
+        Microsoft::WRL::ComPtr<IDXGIDevice1> queueDevice;
+        UINT latency = 0;
+        HRESULT latencyHr = device->QueryInterface(IID_PPV_ARGS(queueDevice.GetAddressOf()));
+        if (SUCCEEDED(latencyHr)) latencyHr = queueDevice->GetMaximumFrameLatency(&latency);
+        DXGI_SWAP_CHAIN_DESC1 actual = {};
+        const HRESULT descHr = swapChain1->GetDesc1(&actual);
+        char note[320];
+        snprintf(note, sizeof(note),
+            "angle: diag: presentation-queue-v1 device=%p panel=%p chain=%p maxLatency=%u hr=0x%08lx desc=0x%08lx buffers=%u effect=%u flags=0x%x size=%ux%u",
+            static_cast<void *>(device), static_cast<void *>(mPanel), static_cast<void *>(swapChain1),
+            latency, static_cast<unsigned long>(latencyHr), static_cast<unsigned long>(descHr),
+            actual.BufferCount, unsigned(actual.SwapEffect), actual.Flags, actual.Width, actual.Height);
+        Note(note);
+    }
 
     if (sMode.load() == 1)
     {
@@ -343,8 +542,8 @@ HRESULT NativeWindow11WinRT::createSwapChain(ID3D11Device *device,
     Note("angle: the panel took the swap chain");
 
     {
-        const float scaleX = sPanelScaleX.load() / 1000.0f;
-        const float scaleY = sPanelScaleY.load() / 1000.0f;
+        float scaleX, scaleY;
+        panelScale(&scaleX, &scaleY);
         IDXGISwapChain2 *swapChain2 = nullptr;
         if (SUCCEEDED(swapChain1->QueryInterface(__uuidof(IDXGISwapChain2),
                                                  reinterpret_cast<void **>(&swapChain2))) &&

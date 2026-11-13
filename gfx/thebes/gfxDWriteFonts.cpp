@@ -34,6 +34,15 @@ using namespace mozilla::gfx;
 // Cleartype can be dynamically enabled/disabled, so we have to allow for
 // dynamically updating it.
 static BYTE GetSystemTextQuality() {
+#if defined(GECKO_W10M)
+  // GeckoW10m renders into a texture which the UWP/XAML compositor may scale
+  // (notably by 70% on Xbox).  Desktop ClearType assumes a fixed 1:1 RGB pixel
+  // grid; applying it before that composition makes glyph edges look coloured
+  // or uneven.  AppContainer also cannot reliably query the desktop smoothing
+  // settings below.  Grayscale antialiasing survives the composition and gives
+  // both the standalone and embedded hosts the same predictable result.
+  return ANTIALIASED_QUALITY;
+#else
   BOOL font_smoothing;
   UINT smoothing_type;
 
@@ -55,6 +64,7 @@ static BYTE GetSystemTextQuality() {
   }
 
   return DEFAULT_QUALITY;
+#endif
 }
 
 #ifndef SPI_GETFONTSMOOTHINGCONTRAST

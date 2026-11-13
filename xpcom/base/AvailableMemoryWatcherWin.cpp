@@ -392,11 +392,17 @@ nsAvailableMemoryWatcher::Observe(nsISupports* aSubject, const char* aTopic,
 }
 
 already_AddRefed<nsAvailableMemoryWatcherBase> CreateAvailableMemoryWatcher() {
+#if defined(GECKO_W10M)
+  // The UWP host already reports its per-package memory level to the
+  // GeckoW10m controller. A second watcher would bypass its cost controls.
+  return do_AddRef(new nsAvailableMemoryWatcherBase);
+#else
   RefPtr watcher(new nsAvailableMemoryWatcher);
   if (NS_FAILED(watcher->Init())) {
     return do_AddRef(new nsAvailableMemoryWatcherBase);  // fallback
   }
   return watcher.forget();
+#endif
 }
 
 }  // namespace mozilla

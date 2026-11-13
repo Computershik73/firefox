@@ -51,6 +51,10 @@ using namespace js;
 using mozilla::Atomic;
 using mozilla::DebugOnly;
 
+#if defined(GECKO_W10M)
+extern "C" void GeckoW10mMemoryPressureOnFailure(const char* aWhy);
+#endif
+
 /* static */ MOZ_THREAD_LOCAL(JSContext*) js::TlsContext;
 /* static */
 Atomic<size_t> JSRuntime::liveRuntimesCount;
@@ -710,6 +714,12 @@ JS_PUBLIC_API void* JSRuntime::onOutOfMemory(AllocFunction allocFunc,
     if (p) {
       return p;
     }
+#if defined(GECKO_W10M)
+    // The retry still failed after empty GC chunks were released. Let the
+    // port controller perform a cost-bounded fresh collection and hold the
+    // pressure briefly instead of repeatedly forcing GC from the host.
+    GeckoW10mMemoryPressureOnFailure("a JS allocation failed");
+#endif
   }
 
   if (maybecx) {

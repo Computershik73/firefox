@@ -210,12 +210,16 @@ USE_LIBS += [
 ]
 
 OS_LIBS += [
-    "ktmw32",
     "rpcrt4",
     "shcore",
     "urlmon",
     "winmm",
 ]
+
+# Used only by the desktop/portable toast-registration fallback. GeckoW10m
+# obtains its AUMID from the AppX package, and Xbox has no ktmw32.dll.
+if not CONFIG["MOZ_UWP"]:
+    OS_LIBS += ["ktmw32"]
 
 # mingw is missing Windows toast notification definitions.
 if CONFIG["CC_TYPE"] == "clang-cl":

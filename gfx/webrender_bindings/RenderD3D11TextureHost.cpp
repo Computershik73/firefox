@@ -5,6 +5,9 @@
 #include "RenderD3D11TextureHost.h"
 
 #include <dcomp.h>
+#if defined(GECKO_W10M)
+#  include <d3d10.h>
+#endif
 
 #include "GLContextEGL.h"
 #include "GLLibraryEGL.h"
@@ -163,6 +166,18 @@ IDCompositionTexture* RenderDXGITextureHost::GetDCompositionTexture() {
 }
 
 ID3D11Texture2D* RenderDXGITextureHost::GetD3D11Texture2DWithGL() {
+#if defined(GECKO_W10M)
+  // This accessor is used by the primary browser's hardware overlay. A
+  // texture previously imported by a private renderer must be reopened on
+  // the primary device before the overlay copies it.
+  RefPtr<gl::GLContext> primary = RenderThread::Get()->SingletonGL();
+  if (primary && mGL != primary) {
+    DeleteTextureHandle();
+    mGL = primary;
+    mTexture = nullptr;
+    mKeyedMutex = nullptr;
+  }
+#endif
   if (mTexture) {
     return mTexture;
   }
@@ -354,13 +369,82 @@ bool RenderDXGITextureHost::EnsureD3D11Texture2D(ID3D11Device* aDevice) {
     auto* textureMap = layers::GpuProcessD3D11TextureMap::Get();
     if (textureMap) {
       RefPtr<ID3D11Texture2D> texture;
-      textureMap->WaitTextureReady(mGpuProcessTextureId.ref());
+      if (!textureMap->WaitTextureReady(mGpuProcessTextureId.ref())) {
+        return false;
+      }
       mTexture = textureMap->GetTexture(mGpuProcessTextureId.ref());
     }
     if (!mTexture) {
       gfxCriticalNote << "GpuProcessTextureId is not valid";
       return false;
     }
+#if defined(GECKO_W10M)
+    // Decoder/WebGL texture IDs may resolve to a texture on the primary
+    // device. An independent renderer must import a shared view on its own
+    // device, never post the foreign ID3D11Texture2D directly to ANGLE.
+    RefPtr<ID3D11Device> owner;
+    mTexture->GetDevice(getter_AddRefs(owner));
+    if (owner != aDevice) {
+      D3D11_TEXTURE2D_DESC desc = {};
+      mTexture->GetDesc(&desc);
+      RefPtr<ID3D11Texture2D> source;
+      RefPtr<ID3D11Texture2D> transfer;
+      if (!(desc.MiscFlags & D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)) {
+        source = mTexture;
+        auto transferDesc = desc;
+        transferDesc.Usage = D3D11_USAGE_DEFAULT;
+        transferDesc.CPUAccessFlags = 0;
+        transferDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        transferDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE |
+                                 D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+        HRESULT result = owner->CreateTexture2D(&transferDesc, nullptr,
+                                               getter_AddRefs(transfer));
+        if (FAILED(result)) {
+          gfxCriticalNote << "Private texture transfer allocation failed: "
+                          << gfx::hexa(result);
+          mTexture = nullptr;
+          return false;
+        }
+        mTexture = transfer;
+        desc = transferDesc;
+      }
+      RefPtr<ID3D11Texture2D> imported;
+      HRESULT hr = E_NOINTERFACE;
+      if (desc.MiscFlags & D3D11_RESOURCE_MISC_SHARED_NTHANDLE) {
+        RefPtr<IDXGIResource1> resource;
+        RefPtr<ID3D11Device1> destination;
+        hr = mTexture->QueryInterface(__uuidof(IDXGIResource1), getter_AddRefs(resource));
+        if (SUCCEEDED(hr)) hr = aDevice->QueryInterface(__uuidof(ID3D11Device1), getter_AddRefs(destination));
+        HANDLE handle = nullptr;
+        if (SUCCEEDED(hr)) hr = resource->CreateSharedHandle(nullptr,
+            DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, &handle);
+        if (SUCCEEDED(hr)) hr = destination->OpenSharedResource1(handle,
+            __uuidof(ID3D11Texture2D), getter_AddRefs(imported));
+        if (handle) ::CloseHandle(handle);
+      } else if (desc.MiscFlags & (D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)) {
+        RefPtr<IDXGIResource> resource;
+        hr = mTexture->QueryInterface(__uuidof(IDXGIResource), getter_AddRefs(resource));
+        HANDLE handle = nullptr;
+        if (SUCCEEDED(hr)) hr = resource->GetSharedHandle(&handle);
+        if (SUCCEEDED(hr)) hr = aDevice->OpenSharedResource(handle,
+            __uuidof(ID3D11Texture2D), getter_AddRefs(imported));
+        // The legacy DXGI handle is borrowed, not an NT handle.
+      }
+      if (FAILED(hr) || !imported) {
+        gfxCriticalNote << "Private window cannot import GPU texture, hr=" << gfx::hexa(hr);
+        mTexture = nullptr;
+        return false;
+      }
+      mTexture = imported;
+      hr = mTexture->QueryInterface(__uuidof(IDXGIKeyedMutex), getter_AddRefs(mKeyedMutex));
+      if (FAILED(hr) || !mKeyedMutex) {
+        mTexture = nullptr;
+        return false;
+      }
+      mTransferSource = source;
+      mTransferTexture = transfer;
+    }
+#endif
   } else {
     RefPtr<ID3D11Device1> device1;
     aDevice->QueryInterface((ID3D11Device1**)getter_AddRefs(device1));
@@ -504,6 +588,12 @@ wr::WrExternalImage RenderDXGITextureHost::Lock(uint8_t aChannelIndex,
     // Release the texture handle in the previous gl context.
     DeleteTextureHandle();
     mGL = aGL;
+#if defined(GECKO_W10M)
+    // Cached native resources must be reopened on the destination device.
+    // DeleteTextureHandle can return early if no GL handle existed yet.
+    mTexture = nullptr;
+    mKeyedMutex = nullptr;
+#endif
   }
 
   if (!mGL) {
@@ -514,6 +604,9 @@ wr::WrExternalImage RenderDXGITextureHost::Lock(uint8_t aChannelIndex,
     return InvalidToWrExternalImage();
   }
 
+#if defined(GECKO_W10M)
+  if (!mGL->MakeCurrent()) return InvalidToWrExternalImage();
+#endif
   if (!EnsureLockable()) {
     return InvalidToWrExternalImage();
   }
@@ -528,10 +621,49 @@ wr::WrExternalImage RenderDXGITextureHost::Lock(uint8_t aChannelIndex,
                                         static_cast<float>(size.height));
 }
 
+#if defined(GECKO_W10M)
+bool RenderDXGITextureHost::UpdateTransferTexture() {
+  if (!mTransferTexture) return true;
+  RefPtr<ID3D11Device> device;
+  mTransferSource->GetDevice(getter_AddRefs(device));
+  if (mFencesHolderId.isSome()) {
+    auto* fences = layers::CompositeProcessD3D11FencesHolderMap::Get();
+    if (!fences || !fences->WaitWriteFence(mFencesHolderId.ref(), device)) {
+      return false;
+    }
+  }
+  RefPtr<IDXGIKeyedMutex> mutex;
+  HRESULT hr = mTransferTexture->QueryInterface(
+      __uuidof(IDXGIKeyedMutex), getter_AddRefs(mutex));
+  if (FAILED(hr)) return false;
+  RefPtr<ID3D10Multithread> multithread;
+  hr = device->QueryInterface(__uuidof(ID3D10Multithread), getter_AddRefs(multithread));
+  if (FAILED(hr) || !multithread->GetMultithreadProtected()) return false;
+  hr = mutex->AcquireSync(0, 1000);
+  if (hr != S_OK) {
+    gfxCriticalNote << "Private texture transfer acquire failed: " << gfx::hexa(hr);
+    return false;
+  }
+  layers::D3D11MTAutoEnter lock(multithread.forget());
+  RefPtr<ID3D11DeviceContext> context;
+  device->GetImmediateContext(getter_AddRefs(context));
+  context->CopyResource(mTransferTexture, mTransferSource);
+  hr = mutex->ReleaseSync(0);
+  if (FAILED(hr)) {
+    gfxCriticalNote << "Private texture transfer release failed: " << gfx::hexa(hr);
+    return false;
+  }
+  return SUCCEEDED(device->GetDeviceRemovedReason());
+}
+#endif
+
 bool RenderDXGITextureHost::LockInternal() {
   MOZ_ASSERT(mTexture);
 
   if (!mLocked) {
+#if defined(GECKO_W10M)
+    if (!UpdateTransferTexture()) return false;
+#endif
     if (mFencesHolderId.isSome()) {
       auto* fencesHolderMap =
           layers::CompositeProcessD3D11FencesHolderMap::Get();
@@ -574,7 +706,16 @@ void RenderDXGITextureHost::ClearCachedResources() {
 }
 
 void RenderDXGITextureHost::DeleteTextureHandle() {
+  Unlock();
+#if defined(GECKO_W10M)
+  mTransferSource = nullptr;
+  mTransferTexture = nullptr;
+#endif
   if (mTextureHandle[0] == 0) {
+#if defined(GECKO_W10M)
+    mTexture = nullptr;
+    mKeyedMutex = nullptr;
+#endif
     return;
   }
 
@@ -846,6 +987,10 @@ wr::WrExternalImage RenderDXGIYCbCrTextureHost::Lock(uint8_t aChannelIndex,
     // Release the texture handle in the previous gl context.
     DeleteTextureHandle();
     mGL = aGL;
+#if defined(GECKO_W10M)
+    for (auto& texture : mTextures) texture = nullptr;
+    mDevice = nullptr;
+#endif
   }
 
   if (!mGL) {
@@ -856,6 +1001,9 @@ wr::WrExternalImage RenderDXGIYCbCrTextureHost::Lock(uint8_t aChannelIndex,
     return InvalidToWrExternalImage();
   }
 
+#if defined(GECKO_W10M)
+  if (!mGL->MakeCurrent()) return InvalidToWrExternalImage();
+#endif
   if (!EnsureLockable()) {
     return InvalidToWrExternalImage();
   }

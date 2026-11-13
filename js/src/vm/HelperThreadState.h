@@ -375,6 +375,9 @@ class GlobalHelperThreadState {
   bool canStartWasmPartialTier2CompileTask(
       const AutoLockHelperThreadState& lock);
   bool canStartPromiseHelperTask(const AutoLockHelperThreadState& lock);
+#if defined(GECKO_W10M)
+  size_t runnablePromiseTaskIndex(const AutoLockHelperThreadState& lock);
+#endif
   bool canStartBaselineCompileTask(const AutoLockHelperThreadState& lock);
   bool canStartIonCompileTask(const AutoLockHelperThreadState& lock);
   bool canStartIonFreeTask(const AutoLockHelperThreadState& lock);
@@ -658,6 +661,14 @@ class SourceCompressionTask final : public HelperThreadTask {
 struct PromiseHelperTask : OffThreadPromiseTask, public HelperThreadTask {
   PromiseHelperTask(JSContext* cx, JS::Handle<PromiseObject*> promise)
       : OffThreadPromiseTask(cx, promise) {}
+
+#if defined(GECKO_W10M)
+  // Set before submission; streaming tasks must not hold this scheduling gate.
+  size_t bufferedWasmCompilationBytes = 0;
+  bool isLargeBufferedWasmCompilation() const {
+    return bufferedWasmCompilationBytes >= LargeWasmCompilationThreshold;
+  }
+#endif
 
   // To be called on a helper thread and implemented by the derived class.
   virtual void execute() = 0;

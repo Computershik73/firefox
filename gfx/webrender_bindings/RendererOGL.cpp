@@ -21,7 +21,18 @@
 #include "mozilla/widget/CompositorWidget.h"
 #if defined(GECKO_W10M)
 #  include "mozilla/Sprintf.h"
+#  include "nsPrintfCString.h"
 extern "C" void GeckoW10mNote(const char* text);
+extern "C" uint64_t gecko_w10m_managed_id_for_widget(mozilla::widget::CompositorWidget*);
+extern "C" void gecko_w10m_window_graphics_failed(uint64_t);
+extern "C" int gecko_w10m_private_video_scope(int);
+class AutoPrivateVideoScope final {
+ public:
+  explicit AutoPrivateVideoScope(bool active) : mPrevious(gecko_w10m_private_video_scope(active ? 1 : 0)) {}
+  ~AutoPrivateVideoScope() { gecko_w10m_private_video_scope(mPrevious); }
+ private:
+  int mPrevious;
+};
 // The window is hidden a few hundred milliseconds after hardware WebRender
 // starts drawing. Note the stages of the first frames so the hide can be
 // placed against them.
@@ -140,6 +151,9 @@ RendererOGL::RendererOGL(RefPtr<RenderThread>&& aThread,
   MOZ_ASSERT(mRenderer);
   MOZ_ASSERT(mBridge);
   MOZ_COUNT_CTOR(RendererOGL);
+#if defined(GECKO_W10M)
+  mIndependentWindowId = gecko_w10m_managed_id_for_widget(mCompositor->GetWidget());
+#endif
 }
 
 RendererOGL::~RendererOGL() {
@@ -168,12 +182,31 @@ void RendererOGL::SetFramePublishId(FramePublishId aPublishId) {
   wr_renderer_set_target_frame_publish_id(mRenderer, aPublishId);
 }
 
+#if defined(GECKO_W10M)
+bool RendererOGL::HandleIndependentGraphicsFailure(const char* stage) {
+  if (!mIndependentWindowId) return false;
+  if (!mIndependentGraphicsFailed) {
+    mIndependentGraphicsFailed = true;
+    GeckoW10mNote(nsPrintfCString("gfx: private-window-v1 id=%llu failed stage=%s; window renderer stopped",
+        static_cast<unsigned long long>(mIndependentWindowId), stage).get());
+    gecko_w10m_window_graphics_failed(mIndependentWindowId);
+  }
+  return true;
+}
+#endif
+
 void RendererOGL::Update() {
+#if defined(GECKO_W10M)
+  if (mIndependentGraphicsFailed) return;
+#endif
   mCompositor->Update();
   if (mCompositor->MakeCurrent()) {
     wr_renderer_update(mRenderer);
     FlushPipelineInfo();
   }
+#if defined(GECKO_W10M)
+  else { HandleIndependentGraphicsFailure("update-make-current"); }
+#endif
 }
 
 RenderedFrameId RendererOGL::UpdateAndRender(
@@ -181,6 +214,10 @@ RenderedFrameId RendererOGL::UpdateAndRender(
     const Maybe<wr::ImageFormat>& aReadbackFormat,
     const Maybe<Range<uint8_t>>& aReadbackBuffer, bool* aNeedsYFlip,
     const wr::FrameReadyParams& aFrameParams, RendererStats* aOutStats) {
+#if defined(GECKO_W10M)
+  if (mIndependentGraphicsFailed) return RenderedFrameId();
+  AutoPrivateVideoScope privateVideo(mIndependentWindowId != 0);
+#endif
   mozilla::widget::WidgetRenderingContext widgetContext;
 
 #if defined(XP_MACOSX)
@@ -237,6 +274,9 @@ RenderedFrameId RendererOGL::UpdateAndRender(
     }
   } else if (!mCompositor->MakeCurrent()) {
     // MakeCurrent is otherwise called by mCompositor->BeginFrame above.
+#if defined(GECKO_W10M)
+    HandleIndependentGraphicsFailure("offscreen-make-current");
+#endif
     return RenderedFrameId();
   }
 
@@ -285,6 +325,9 @@ RenderedFrameId RendererOGL::UpdateAndRender(
     if (needPostRenderCall) {
       mCompositor->GetWidget()->PostRender(&widgetContext);
     }
+#if defined(GECKO_W10M)
+    if (HandleIndependentGraphicsFailure("renderer-render")) return RenderedFrameId();
+#endif
     RenderThread::Get()->HandleWebRenderError(WebRenderError::RENDER);
     return RenderedFrameId();
   }
@@ -410,6 +453,9 @@ void RendererOGL::CheckGraphicsResetStatus(gfx::DeviceResetDetectPlace aPlace,
   if (mCompositor) {
     auto reason = mCompositor->IsContextLost(aForce);
     if (reason != gfx::DeviceResetReason::OK) {
+#if defined(GECKO_W10M)
+      if (HandleIndependentGraphicsFailure("context-reset")) return;
+#endif
       RenderThread::Get()->HandleDeviceReset(aPlace, reason);
     }
   }

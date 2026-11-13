@@ -3,6 +3,15 @@
   "name": "Web Compatibility Interventions",
   "description": "Urgent post-release fixes for web compatibility.",
   "version": "155.5.0",
+  "content_scripts": [
+    {
+      "matches": ["https://web.parsec.app/*"],
+      "js": ["injections/js/gecko-w10m-parsec-clipboard.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    }
+  ],
   "browser_specific_settings": {
     "gecko": {
       "id": "webcompat@mozilla.org",

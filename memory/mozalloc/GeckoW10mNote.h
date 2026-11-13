@@ -69,8 +69,10 @@ inline void Note(const char* text) {
   CREATEFILE2_EXTENDED_PARAMETERS params{};
   params.dwSize = sizeof(params);
   params.dwFileAttributes = FILE_ATTRIBUTE_NORMAL;
-  HANDLE file = ::CreateFile2(path, FILE_APPEND_DATA, FILE_SHARE_READ,
-                              OPEN_ALWAYS, &params);
+  HANDLE file = ::CreateFile2(
+      path, FILE_APPEND_DATA,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, OPEN_ALWAYS,
+      &params);
   if (file == INVALID_HANDLE_VALUE) return;
 
   ::SetFilePointer(file, 0, nullptr, FILE_END);
@@ -88,10 +90,26 @@ inline void Note(const char* text) {
 // unwinds from tables rather than a frame pointer chain.  Walking those tables
 // by hand gives a real trace.  This is the same walk the shell's CrashProbe
 // does; mozglue sits underneath xul and cannot reach the shell's copy.
+#if defined(_M_X64) || defined(__x86_64__)
+using GeckoW10mPc = DWORD64;
+using GeckoW10mCaptureContextFn = void(WINAPI*)(PCONTEXT);
+using GeckoW10mLookupFunctionEntryFn = PVOID(WINAPI*)(DWORD64, PDWORD64, PVOID);
+using GeckoW10mVirtualUnwindFn = PVOID(WINAPI*)(DWORD, DWORD64, DWORD64, PVOID,
+                                                PCONTEXT, PVOID*, PDWORD64,
+                                                PVOID);
+inline GeckoW10mPc& GeckoW10mContextPc(CONTEXT& context) {
+  return context.Rip;
+}
+#else
+using GeckoW10mPc = DWORD;
 using GeckoW10mCaptureContextFn = void(WINAPI*)(PCONTEXT);
 using GeckoW10mLookupFunctionEntryFn = PVOID(WINAPI*)(DWORD, PDWORD, PVOID);
 using GeckoW10mVirtualUnwindFn = PVOID(WINAPI*)(DWORD, DWORD, DWORD, PVOID,
-                                              PCONTEXT, PVOID*, PDWORD, PVOID);
+                                                PCONTEXT, PVOID*, PDWORD, PVOID);
+inline GeckoW10mPc& GeckoW10mContextPc(CONTEXT& context) {
+  return context.Pc;
+}
+#endif
 
 inline int NoteStack() {
   HMODULE ntdll = ::GetModuleHandleW(L"ntdll.dll");
@@ -109,27 +127,28 @@ inline int NoteStack() {
 
   int depth = 0;
   for (; depth < 24; ++depth) {
-    if (!context.Pc) return depth;
+    GeckoW10mPc& pc = GeckoW10mContextPc(context);
+    if (!pc) return depth;
 
     char line[160];
     char* out = line;
     const char* end = line + sizeof(line) - 1;
     NoteAppend(out, end, "  at ");
-    NoteAppendAddress(out, end, reinterpret_cast<const void*>(context.Pc));
+    NoteAppendAddress(out, end, reinterpret_cast<const void*>(pc));
     *out = '\0';
     Note(line);
 
-    DWORD imageBase = 0;
-    PVOID entry = lookup(context.Pc, &imageBase, nullptr);
+    GeckoW10mPc imageBase = 0;
+    PVOID entry = lookup(pc, &imageBase, nullptr);
     if (!entry) return depth + 1;
 
     PVOID handlerData = nullptr;
-    DWORD establisher = 0;
-    DWORD previous = context.Pc;
-    unwind(0 /*UNW_FLAG_NHANDLER*/, imageBase, context.Pc, entry, &context,
+    GeckoW10mPc establisher = 0;
+    GeckoW10mPc previous = pc;
+    unwind(0 /*UNW_FLAG_NHANDLER*/, imageBase, pc, entry, &context,
            &handlerData, &establisher, nullptr);
     // A frame that does not move is a frame that will not move again.
-    if (context.Pc == previous) return depth + 1;
+    if (GeckoW10mContextPc(context) == previous) return depth + 1;
   }
   return depth;
 }
@@ -162,8 +181,8 @@ inline void NoteStackScan() {
   for (const uintptr_t* word = sp; word < limit && printed < 32; ++word) {
     uintptr_t value = *word;
     if (value < 0x10000) continue;
-    DWORD imageBase = 0;
-    if (!lookup(static_cast<DWORD>(value), &imageBase, nullptr)) continue;
+    GeckoW10mPc imageBase = 0;
+    if (!lookup(static_cast<GeckoW10mPc>(value), &imageBase, nullptr)) continue;
 
     char line[160];
     char* out = line;

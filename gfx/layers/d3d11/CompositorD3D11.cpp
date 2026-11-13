@@ -149,6 +149,7 @@ bool CompositorD3D11::Initialize(nsCString* const out_failureReason) {
   // the path for the ones that cannot: feature level 9_3, software WebRender
   // drawing the tiles, this compositor putting them on the screen.
   if (!mWidget->AsWindows()) {
+    GeckoW10mSetPanelPresenting(false);
     memset(&mVSConstants, 0, sizeof(VertexShaderConstants));
 
     RefPtr<IDXGIDevice> dxgiDevice;
@@ -205,6 +206,7 @@ bool CompositorD3D11::Initialize(nsCString* const out_failureReason) {
     mIsDoubleBuffered = true;
 
     if (!mWidget->InitCompositor(this)) {
+      GeckoW10mSetPanelPresenting(false);
       *out_failureReason = "FEATURE_FAILURE_D3D11_INIT_COMPOSITOR";
       return false;
     }
@@ -932,6 +934,9 @@ Maybe<IntRect> CompositorD3D11::BeginFrame(const nsIntRegion& aInvalidRegion,
   }
 
   if (mDevice->GetDeviceRemovedReason() != S_OK) {
+#if defined(GECKO_W10M)
+    GeckoW10mSetPanelPresenting(false);
+#endif
     if (!mAttachments->IsDeviceReset()) {
       gfxCriticalNote << "GFX: D3D11 skip BeginFrame with device-removed.";
       mAttachments->SetDeviceReset();
@@ -1277,12 +1282,18 @@ bool CompositorD3D11::VerifyBufferSize() {
 
   mVerifyBuffersFailed = FAILED(hr);
   if (mVerifyBuffersFailed) {
+#if defined(GECKO_W10M)
+    GeckoW10mSetPanelPresenting(false);
+#endif
     gfxCriticalNote << "D3D11 swap resize buffers failed " << hexa(hr) << " on "
                     << mSize;
     HandleError(hr);
     mBufferSize = LayoutDeviceIntSize();
   } else {
     mBufferSize = mSize;
+#if defined(GECKO_W10M)
+    GeckoW10mSetPanelPresenting(true);
+#endif
   }
 
   mBackBufferInvalid = mFrontBufferInvalid =
@@ -1313,6 +1324,9 @@ bool CompositorD3D11::UpdateRenderTarget() {
   if (hr == DXGI_ERROR_INVALID_CALL) {
     // This happens on some GPUs/drivers when there's a TDR.
     if (mDevice->GetDeviceRemovedReason() != S_OK) {
+#if defined(GECKO_W10M)
+      GeckoW10mSetPanelPresenting(false);
+#endif
       gfxCriticalError() << "GetBuffer returned invalid call! " << mSize << ", "
                          << (int)mVerifyBuffersFailed;
       return false;
@@ -1320,6 +1334,9 @@ bool CompositorD3D11::UpdateRenderTarget() {
   }
 
   if (FAILED(hr)) {
+#if defined(GECKO_W10M)
+    GeckoW10mSetPanelPresenting(false);
+#endif
     gfxCriticalNote << "Failed in UpdateRenderTarget " << hexa(hr) << ", "
                     << mSize << ", " << (int)mVerifyBuffersFailed;
     HandleError(hr);

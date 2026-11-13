@@ -197,6 +197,12 @@ OS_LIBS += [
     "d3dcompiler"
 ]
 
+# ANGLE's D3D11 trim path uses Windows Runtime activation APIs.  The UWP
+# x64 link must explicitly import them from runtimeobject.lib.
+OS_LIBS += [
+    "runtimeobject"
+]
+
 # GeckoW10m: this build claims the desktop API family so that the rest of
 # Gecko keeps its Win32 APIs, so ANGLE cannot derive this for itself --
 # but the process really is an app container, and these are the paths

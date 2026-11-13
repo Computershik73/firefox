@@ -64,6 +64,11 @@ class SwapChain11 final : public SwapChainD3D
 
   private:
     void release();
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    void bufferSizeFor(EGLint width, EGLint height, EGLint *bufferWidth, EGLint *bufferHeight) const;
+    EGLint updateSourceSize(DisplayD3D *displayD3D);
+    EGLint remakeAfterSourceSizeFailure(DisplayD3D *displayD3D, EGLint width, EGLint height);
+#endif
     angle::Result initPassThroughResources(DisplayD3D *displayD3D);
 
     void releaseOffscreenColorBuffer();
@@ -89,6 +94,27 @@ class SwapChain11 final : public SwapChainD3D
     Renderer11 *mRenderer;
     EGLint mWidth;
     EGLint mHeight;
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    EGLint mBufferWidth = 0;
+    EGLint mBufferHeight = 0;
+    int mCapacityMode = 0;
+    bool mSourceSizeDirty = false;
+    bool mSourceSizeBroken = false;
+    unsigned mSourceSizeNotes = 0;
+    void traceCommand(const char *stage, HRESULT result = S_OK, bool resources = false);
+    void probeProgress(const char *stage);
+    unsigned mDiagnosticId = 0;
+    unsigned mDiagnosticFrame = 0;
+    bool mDiagnosticLost = false;
+    struct ProgressProbe {
+        ID3D11Query *query = nullptr;
+        unsigned frame = 0;
+        ULONGLONG submitted = 0;
+        const char *stage = nullptr;
+    };
+    ProgressProbe mProgress[4];
+    ULONGLONG mNextSourceSizeRemake = 0;
+#endif
     const EGLint mOrientation;
     bool mAppCreatedShareHandle;
     unsigned int mSwapInterval;

@@ -6885,6 +6885,15 @@ bool WorkerPrivate::IsSharedMemoryAllowed() const {
 }
 
 bool WorkerPrivate::CrossOriginIsolated() const {
+#if defined(GECKO_W10M)
+  // Match Window.crossOriginIsolated for the single-process GeckoW10m port.
+  // Pthread-based WebAssembly applications also test this from their worker.
+  if (StaticPrefs::
+          dom_postMessage_sharedArrayBuffer_bypassCOOP_COEP_insecure_enabled()) {
+    return true;
+  }
+#endif
+
   if (!StaticPrefs::
           dom_postMessage_sharedArrayBuffer_withCOOP_COEP_AtStartup()) {
     return false;

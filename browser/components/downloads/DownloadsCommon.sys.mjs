@@ -580,6 +580,18 @@ export var DownloadsCommon = {
    *   With a JavaScript exception if there was an error trying to launch the file.
    */
   async openDownload(download, options) {
+    if (
+      download.succeeded &&
+      (Services.prefs.getBoolPref("widget.gecko-w10m.desktop-mode", false) ||
+        Services.prefs.getBoolPref("widget.gecko-w10m.standalone-mode", false))
+    ) {
+      Services.obs.notifyObservers(
+        null,
+        "gecko-w10m-bridge",
+        JSON.stringify({ op: "file.open-download", path: download.target.path })
+      );
+      return;
+    }
     // some download objects got serialized and need reconstituting
     if (typeof download.launch !== "function") {
       download = await lazy.Downloads.createDownload(download);
@@ -596,6 +608,16 @@ export var DownloadsCommon = {
   showDownloadedFile(aFile) {
     if (!(aFile instanceof Ci.nsIFile)) {
       throw new Error("aFile must be a nsIFile object");
+    }
+    if (
+      Services.prefs.getBoolPref("widget.gecko-w10m.desktop-mode", false)
+    ) {
+      Services.obs.notifyObservers(
+        null,
+        "gecko-w10m-bridge",
+        JSON.stringify({ op: "file.reveal", path: aFile.path })
+      );
+      return;
     }
     try {
       // Show the directory containing the file and select the file.
@@ -1015,6 +1037,14 @@ DownloadsDataCtor.prototype = {
       allowFromInactiveWorkspace: true,
     });
     if (!browserWin) {
+      return;
+    }
+
+    if (
+      aType == "start" &&
+      browserWin.document.documentElement.hasAttribute("desktopmode-app")
+    ) {
+      browserWin.DownloadsPanel.showPanel();
       return;
     }
 

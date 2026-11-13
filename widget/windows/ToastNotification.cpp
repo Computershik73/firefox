@@ -7,7 +7,9 @@
 // clang-format off
 #include <windows.h>
 #include <appmodel.h>
+#if !defined(GECKO_W10M)
 #include <ktmw32.h>
+#endif
 #include <shellapi.h>
 #include <windows.foundation.h>
 #include <wrl/client.h>
@@ -161,6 +163,14 @@ bool ToastNotification::AssignIfNsisAumid(nsAutoString& aInstallHash,
 
 bool ToastNotification::RegisterRuntimeAumid(nsAutoString& aInstallHash,
                                              Maybe<nsAutoString>& aAumid) {
+#if defined(GECKO_W10M)
+  // GeckoW10m is always an AppX/UWP application, so AssignIfMsixAumid has
+  // already obtained the package AUMID before this desktop/portable fallback
+  // can be reached.  Xbox does not ship ktmw32.dll; keeping the unreachable
+  // transactional-registry code in xul's import table prevents the loader
+  // from mapping xul.dll at all.
+  return false;
+#else
   // Portable AUMID slightly differs from installed AUMID so we can
   // differentiate installed to HKCU vs portable installs if necessary.
   nsAutoString portableAumid =
@@ -314,6 +324,7 @@ bool ToastNotification::RegisterRuntimeAumid(nsAutoString& aInstallHash,
        NS_ConvertUTF16toUTF8(guidStr).get()));
   aAumid.emplace(portableAumid);
   return true;
+#endif
 }
 
 nsresult ToastNotification::BackgroundDispatch(nsIRunnable* runnable) {

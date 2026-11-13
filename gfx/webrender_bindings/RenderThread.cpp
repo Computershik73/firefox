@@ -34,6 +34,11 @@
 #include "nsThreadUtils.h"
 #include "transport/runnable_utils.h"
 
+#if defined(GECKO_W10M)
+#  include "mozilla/Sprintf.h"
+extern "C" void GeckoW10mNote(const char* text);
+#endif
+
 #ifdef XP_WIN
 #  include "GLContextEGL.h"
 #  include "GLLibraryEGL.h"
@@ -1409,6 +1414,30 @@ void RenderThread::PostRunnable(already_AddRefed<nsIRunnable> aRunnable) {
 void RenderThread::HandleDeviceReset(gfx::DeviceResetDetectPlace aPlace,
                                      gfx::DeviceResetReason aReason) {
   MOZ_ASSERT(IsInRenderThread());
+
+#if defined(GECKO_W10M)
+  {
+    const RefPtr<ID3D11Device> device = gfx::DeviceManagerDx::Get()->GetCompositorDevice();
+    char note[256];
+    SprintfLiteral(note,
+                   "gfx: diag: HandleDeviceReset place=%u reason=%u handling=%d renderers=%zu "
+                   "device=%s D3D_reason=0x%08lx software=%d",
+                   static_cast<unsigned>(aPlace), static_cast<unsigned>(aReason),
+                   mHandlingDeviceReset ? 1 : 0, mRenderers.size(), device ? "present" : "null",
+                   static_cast<unsigned long>(device ? device->GetDeviceRemovedReason() : E_POINTER),
+                   gfx::gfxVars::UseSoftwareWebRender() ? 1 : 0);
+    GeckoW10mNote(note);
+    if (!mHandlingDeviceReset && device) {
+      const HMODULE angle = ::GetModuleHandleW(L"libGLESv2.dll");
+      using DumpDeviceRemoved = void (*)(void*);
+      const auto dump = angle ? reinterpret_cast<DumpDeviceRemoved>(
+          ::GetProcAddress(angle, "angle_uwp_dump_device_removed")) : nullptr;
+      GeckoW10mNote(dump ? "gfx: diag: driver-removal-v1 collecting before resource cleanup"
+                        : "gfx: diag: driver-removal-v1 ANGLE export unavailable");
+      if (dump) dump(device.get());
+    }
+  }
+#endif
 
   if (mHandlingDeviceReset) {
     return;

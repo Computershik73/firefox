@@ -30,6 +30,10 @@
 #include <dcomp.h>
 #include <ddraw.h>
 #include <dxgi.h>
+#if defined(GECKO_W10M)
+#  include <d3d12.h>
+extern "C" void GeckoW10mNote(const char* text);
+#endif
 
 // Magic constants to convert to fixed point.
 // https://docs.microsoft.com/en-us/windows/win32/api/dxgi1_5/ns-dxgi1_5-dxgi_hdr_metadata_hdr10
@@ -860,9 +864,51 @@ bool DeviceManagerDx::CreateCompositorDeviceHelper(
     flags |= D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
   }
 
-  HRESULT hr;
+  HRESULT hr = E_FAIL;
   RefPtr<ID3D11Device> device;
-  if (!CreateDevice(aAdapter, D3D_DRIVER_TYPE_UNKNOWN, flags, hr, device)) {
+  bool createdWithDiagnostics = false;
+#if defined(GECKO_W10M)
+  // Temporary reset diagnosis: request validation when the platform provides
+  // the debug layer. Xbox deployments without Graphics Tools retain the
+  // normal creation path. Do not enable break-on-error or debugger traps.
+  // Request driver breadcrumbs before creating the compositor device. This
+  // optional entry point is resolved only from a module already loaded by the
+  // platform, avoiding any new mandatory import on Xbox.
+  static const bool configuredDred = []() {
+    const HMODULE module = ::GetModuleHandleW(L"d3d12.dll");
+    using GetDebugInterface = HRESULT(WINAPI*)(REFIID, void**);
+    const auto getDebug = module ? reinterpret_cast<GetDebugInterface>(
+        ::GetProcAddress(module, "D3D12GetDebugInterface")) : nullptr;
+    ID3D12DeviceRemovedExtendedDataSettings* settings = nullptr;
+    const HRESULT hr = getDebug ? getDebug(
+        __uuidof(ID3D12DeviceRemovedExtendedDataSettings),
+        reinterpret_cast<void**>(&settings)) : E_NOINTERFACE;
+    if (SUCCEEDED(hr) && settings) {
+      settings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+      settings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+    }
+    GeckoW10mNote(nsPrintfCString(
+        "gfx: diag: driver-removal-v1 settings module=%d entry=%d hr=0x%08lx enabled=%d",
+        int(module != nullptr), int(getDebug != nullptr), static_cast<unsigned long>(hr),
+        int(SUCCEEDED(hr) && bool(settings))).get());
+    const bool enabled = SUCCEEDED(hr) && settings;
+    if (settings) settings->Release();
+    return enabled;
+  }();
+  (void)configuredDred;
+  const bool attempted = CreateDevice(aAdapter, D3D_DRIVER_TYPE_UNKNOWN,
+      flags | D3D11_CREATE_DEVICE_DEBUG, hr, device);
+  createdWithDiagnostics = attempted && SUCCEEDED(hr) && device;
+  GeckoW10mNote(nsPrintfCString(
+      "gfx: commands-v1 compositor debug-layer accepted=%d hr=0x%08lx flags=0x%x video=%d",
+      int(createdWithDiagnostics), static_cast<unsigned long>(hr), flags,
+      int(aAttemptVideoSupport)).get());
+  if (!createdWithDiagnostics) {
+    device = nullptr;
+  }
+#endif
+  if (!createdWithDiagnostics &&
+      !CreateDevice(aAdapter, D3D_DRIVER_TYPE_UNKNOWN, flags, hr, device)) {
     if (!aAttemptVideoSupport) {
       gfxCriticalError() << "Crash during D3D11 device creation";
       aD3d11.SetFailed(FeatureStatus::CrashedInHandler,

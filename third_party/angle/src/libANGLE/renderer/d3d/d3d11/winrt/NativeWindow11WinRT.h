@@ -21,6 +21,7 @@
 #define LIBANGLE_RENDERER_D3D_D3D11_WINRT_NATIVEWINDOW11WINRT_H_
 
 #include "libANGLE/renderer/d3d/d3d11/NativeWindow11.h"
+#include <memory>
 
 struct ISwapChainPanelNative;
 struct IInspectable;
@@ -41,6 +42,8 @@ struct ICoreDispatcher;
 
 namespace rx
 {
+struct PanelMetricsState;
+class NativeWindow11WinRT;
 
 // What the shell asked this build to do with the swap chain, and where to say
 // what happened. Both live in NativeWindow11WinRT.cpp; SwapChain11 needs them
@@ -55,6 +58,11 @@ namespace rx
 // halves are the only two things that happen in that gap.
 int AngleUwpMode();
 void AngleUwpNote(const char *text);
+bool AngleUwpPanelCapacity(LONG *width, LONG *height, const NativeWindow11WinRT *window = nullptr);
+int AngleUwpCapacityMode(const NativeWindow11WinRT *window = nullptr);
+HRESULT AngleUwpSetSourceSize(IDXGISwapChain *chain, UINT width, UINT height,
+                              UINT bufferWidth, UINT bufferHeight, int mode,
+                              UINT *readBackWidth, UINT *readBackHeight, const NativeWindow11WinRT *window = nullptr);
 
 class NativeWindow11WinRT : public NativeWindow11
 {
@@ -65,6 +73,9 @@ class NativeWindow11WinRT : public NativeWindow11
     bool initialize() override;
     bool getClientRect(LPRECT rect) const override;
     bool isIconic() const override;
+    bool panelCapacity(LONG *width, LONG *height) const;
+    int panelCapacityMode() const;
+    void panelScale(float *x, float *y) const;
 
     HRESULT createSwapChain(ID3D11Device *device,
                             IDXGIFactory *factory,
@@ -76,12 +87,16 @@ class NativeWindow11WinRT : public NativeWindow11
 
     void commitChange() override;
 
+    HRESULT detachSwapChainForResize();
+    HRESULT onSwapChainResized(IDXGISwapChain *swapChain);
+
     static bool IsValidNativeWindow(EGLNativeWindowType window);
 
   private:
     // The panel this presents to, and the size it was last given. The size is
     // remembered rather than asked for because it belongs to the UI thread and
     // this is called from the renderer's.
+    std::shared_ptr<PanelMetricsState> mMetrics;
     ISwapChainPanelNative *mPanel;
   // The thread the panel belongs to. Giving it a swap chain from any other
   // thread takes the system compositor down with it.

@@ -373,12 +373,22 @@ def vc_path(target_windows_abi, host_windows_abi, vc_toolchain_search_path):
 
 with only_when(target_is_windows):
 
+    option(
+        env="MOZ_DXCOMPILER_PATH",
+        nargs=1,
+        help="Path to a local dxcompiler.dll",
+    )
+
     @depends(target)
     def dxc_task_name(target):
         return "dxc-" + target.cpu + "-pc-windows-msvc"
 
-    @depends_if(bootstrap_path(dxc_task_name))
-    def dxc_dll_path(bootstrap):
+    @depends("MOZ_DXCOMPILER_PATH", bootstrap_path(dxc_task_name))
+    def dxc_dll_path(local_path, bootstrap):
+        if local_path:
+            return local_path[0]
+        if not bootstrap:
+            return
         return os.path.join(bootstrap, "dxcompiler.dll")
 
     @depends_if(vc_path)

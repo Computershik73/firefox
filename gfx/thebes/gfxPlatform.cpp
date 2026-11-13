@@ -947,11 +947,13 @@ void gfxPlatform::Init() {
 
   if (XRE_IsParentProcess()) {
     // Monitor for sanity test changes.
+#if !defined(GECKO_W10M)
     Preferences::RegisterCallbackAndCall(
         VideoDecodingFailedChangedCallback,
         "media.hardware-video-decoding.failed");
+#endif
     Preferences::RegisterCallbackAndCall(HWDRMFailedChangedCallback,
-                                         "media.eme.hwdrm.failed");
+                                          "media.eme.hwdrm.failed");
   }
 
 #if defined(XP_WIN)
@@ -3089,11 +3091,13 @@ void gfxPlatform::InitHardwareVideoConfig() {
   if (status == nsIGfxInfo::FEATURE_BLOCKED_PLATFORM_TEST) {
     featureDec.ForceDisable(FeatureStatus::Unavailable,
                             "Force disabled by gfxInfo", failureId);
+#if !defined(GECKO_W10M)
   } else if (Preferences::GetBool("media.hardware-video-decoding.failed",
                                   false)) {
     featureDec.ForceDisable(FeatureStatus::Unavailable,
                             "Force disabled by failed sanity test",
                             "FEATURE_FAILURE_SANITY_TEST_FAILED"_ns);
+#endif
   }
 #ifdef XP_MACOSX
   else if (isXpcshell) {
@@ -3109,13 +3113,13 @@ void gfxPlatform::InitHardwareVideoConfig() {
   featureEnc.EnableByDefault();
 
   if (!StaticPrefs::media_hardware_video_encoding_enabled_AtStartup()) {
-    featureDec.UserDisable(
+    featureEnc.UserDisable(
         "User disabled via media.hardware-video-encoding.enabled pref",
         "FEATURE_HARDWARE_VIDEO_ENCODING_PREF_1_DISABLED"_ns);
   }
 #ifdef XP_WIN
   else if (!StaticPrefs::media_wmf_dxva_d3d11_enabled()) {
-    featureDec.UserDisable(
+    featureEnc.UserDisable(
         "User disabled via media.wmf.dxva.d3d11.enabled pref",
         "FEATURE_HARDWARE_VIDEO_ENCODING_PREF_2_DISABLED"_ns);
   }
@@ -3138,11 +3142,13 @@ void gfxPlatform::InitHardwareVideoConfig() {
   if (status == nsIGfxInfo::FEATURE_BLOCKED_PLATFORM_TEST) {
     featureEnc.ForceDisable(FeatureStatus::Unavailable,
                             "Force disabled by gfxInfo", failureId);
+#if !defined(GECKO_W10M)
   } else if (Preferences::GetBool("media.hardware-video-decoding.failed",
                                   false)) {
     featureEnc.ForceDisable(FeatureStatus::Unavailable,
                             "Force disabled by failed sanity test",
                             "FEATURE_FAILURE_SANITY_TEST_FAILED"_ns);
+#endif
   }
 #ifdef XP_MACOSX
   else if (isXpcshell) {

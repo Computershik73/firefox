@@ -10,6 +10,7 @@
 #include "mozilla/Likely.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/ScopeExit.h"
+#include "mozilla/Sprintf.h"
 #include "mozilla/TaggedAnonymousMemory.h"
 
 #include <algorithm>  // std::max, std::min
@@ -159,6 +160,39 @@ static Atomic<uint64_t, mozilla::ReleaseAcquire> wasmReservedBytesSinceLast(0);
 
 uint64_t js::WasmReservedBytes() { return wasmReservedBytes; }
 
+#if defined(GECKO_W10M)
+extern "C" void GeckoW10mNote(const char* text);
+extern "C" void GeckoW10mAllocationFailure(const char*, uint64_t, uint32_t);
+static Atomic<uint64_t, mozilla::ReleaseAcquire> sWasmCommitted(0);
+static Atomic<uint64_t, mozilla::ReleaseAcquire> sWasmLiveBuffers(0);
+static Atomic<uint64_t, mozilla::ReleaseAcquire> sWasmAllocatedTotal(0);
+static Atomic<uint64_t, mozilla::ReleaseAcquire> sWasmFreedTotal(0);
+extern "C" void GeckoW10mGetWasmMemoryLedger(uint64_t* reserved,
+    uint64_t* committed, uint64_t* live, uint64_t* allocated, uint64_t* freed) {
+  *reserved = wasmReservedBytes;
+  *committed = sWasmCommitted;
+  *live = sWasmLiveBuffers;
+  *allocated = sWasmAllocatedTotal;
+  *freed = sWasmFreedTotal;
+}
+static void NoteWasmAllocation(const char* stage, size_t reserved,
+                               size_t committed, unsigned long error = 0) {
+  const DWORD savedError = GetLastError();
+  char line[256];
+  SprintfLiteral(line,
+                 "wasm-memory: stage=%s reserve_bytes=%zu commit_bytes=%zu "
+                 "live_reserved_bytes=%llu reserve_limit_bytes=%llu error=%lu",
+                 stage, reserved, committed,
+                 static_cast<unsigned long long>(uint64_t(wasmReservedBytes)),
+                 static_cast<unsigned long long>(WasmReservedBytesMax), error);
+  GeckoW10mNote(line);
+  if (strstr(stage, "failed") || strstr(stage, "limit")) {
+    GeckoW10mAllocationFailure(stage, committed, error);
+  }
+  SetLastError(savedError);
+}
+#endif
+
 [[nodiscard]] static bool CheckArrayBufferTooLarge(JSContext* cx,
                                                    uint64_t nbytes) {
   // Refuse to allocate too large buffers.
@@ -188,6 +222,9 @@ void* js::MapBufferMemory(wasm::AddressType t, wasm::PageSize pageSize,
       OnLargeAllocationFailure();
     }
     if (wasmReservedBytes >= WasmReservedBytesMax) {
+#if defined(GECKO_W10M)
+      NoteWasmAllocation("reservation-limit", mappedSize, initialCommittedSize);
+#endif
       return nullptr;
     }
   }
@@ -195,11 +232,22 @@ void* js::MapBufferMemory(wasm::AddressType t, wasm::PageSize pageSize,
 #ifdef XP_WIN
   void* data = VirtualAlloc(nullptr, mappedSize, MEM_RESERVE, PAGE_NOACCESS);
   if (!data) {
+#if defined(GECKO_W10M)
+    NoteWasmAllocation("reserve-failed", mappedSize, initialCommittedSize,
+                       GetLastError());
+#endif
     return nullptr;
   }
 
   if (!VirtualAlloc(data, initialCommittedSize, MEM_COMMIT, PAGE_READWRITE)) {
+#if defined(GECKO_W10M)
+    const DWORD commitError = GetLastError();
+#endif
     VirtualFree(data, 0, MEM_RELEASE);
+#if defined(GECKO_W10M)
+    NoteWasmAllocation("commit-failed", mappedSize, initialCommittedSize,
+                       commitError);
+#endif
     return nullptr;
   }
 
@@ -238,6 +286,16 @@ void* js::MapBufferMemory(wasm::AddressType t, wasm::PageSize pageSize,
 #endif
 
   failed.release();
+#if defined(GECKO_W10M)
+  sWasmCommitted += initialCommittedSize;
+  sWasmAllocatedTotal += initialCommittedSize;
+  sWasmLiveBuffers++;
+#endif
+#if defined(GECKO_W10M)
+  if (initialCommittedSize >= 64 * 1024 * 1024) {
+    NoteWasmAllocation("allocated", mappedSize, initialCommittedSize);
+  }
+#endif
   return data;
 }
 
@@ -247,6 +305,9 @@ bool js::CommitBufferMemory(void* dataEnd, size_t delta) {
 
 #ifdef XP_WIN
   if (!VirtualAlloc(dataEnd, delta, MEM_COMMIT, PAGE_READWRITE)) {
+#if defined(GECKO_W10M)
+    NoteWasmAllocation("grow-commit-failed", 0, delta, GetLastError());
+#endif
     return false;
   }
 #elif defined(__wasi__)
@@ -259,6 +320,10 @@ bool js::CommitBufferMemory(void* dataEnd, size_t delta) {
 #endif  // XP_WIN
 
   gc::RecordMemoryAlloc(delta);
+#if defined(GECKO_W10M)
+  sWasmCommitted += delta;
+  sWasmAllocatedTotal += delta;
+#endif
 
 #if defined(MOZ_VALGRIND) && \
     defined(VALGRIND_DISABLE_ADDR_ERROR_REPORTING_IN_RANGE)
@@ -293,6 +358,16 @@ void js::UnmapBufferMemory(wasm::AddressType t, void* base, size_t mappedSize,
   // Untrack reserved memory *after* releasing memory -- otherwise, a race
   // condition could enable the creation of unlimited buffers.
   wasmReservedBytes -= uint64_t(mappedSize);
+#if defined(GECKO_W10M)
+  sWasmCommitted -= committedSize;
+  sWasmFreedTotal += committedSize;
+  sWasmLiveBuffers--;
+#endif
+#if defined(GECKO_W10M)
+  if (committedSize >= 64 * 1024 * 1024) {
+    NoteWasmAllocation("released", mappedSize, committedSize);
+  }
+#endif
 }
 
 /*
@@ -1723,6 +1798,19 @@ static ArrayBufferObjectMaybeShared* CreateSpecificWasmBuffer(
   RawbufT* buffer = RawbufT::AllocateWasm(
       memory.limits.addressType, memory.pageSize(), initialPages,
       clampedMaxPages, sourceMaxPages, mappedSize);
+#if defined(GECKO_W10M)
+  if (!buffer) {
+    // Failed OS commits do not reach the reserved-address-space GC heuristic.
+    JS::PrepareForFullGC(cx);
+    JS::NonIncrementalGC(cx, JS::GCOptions::Shrink,
+                         JS::GCReason::TOO_MUCH_WASM_MEMORY);
+    buffer = RawbufT::AllocateWasm(
+        memory.limits.addressType, memory.pageSize(), initialPages,
+        clampedMaxPages, sourceMaxPages, mappedSize);
+    NoteWasmAllocation(buffer ? "gc-retry-succeeded" : "gc-retry-failed",
+                       0, initialPages.byteLength());
+  }
+#endif
   if (!buffer) {
     if (useHugeMemory) {
       WarnNumberASCII(cx, JSMSG_WASM_HUGE_MEMORY_FAILED);

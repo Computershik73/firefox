@@ -121,7 +121,7 @@ constexpr size_t kCacheLineMask = kCacheLineSize - 1;
 
 // Recycle at most 128 MiB of chunks. This means we retain at most
 // 6.25% of the process address space on a 32-bit OS for later use.
-#if defined(GECKO_W10M)
+#if defined(GECKO_W10M) && (defined(_M_ARM) || defined(__arm__))
 // On a 32-bit ARM phone the address space runs out before the memory does:
 // graphics drivers, the 132 MB engine and the JIT reservation share two
 // gigabytes, and a busy YouTube session left 633 MB free in 400 pieces, the

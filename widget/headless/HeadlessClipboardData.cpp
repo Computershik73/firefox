@@ -24,11 +24,46 @@ bool HeadlessClipboardData::HasHTML() const { return !mHTML.IsVoid(); }
 
 const nsAString& HeadlessClipboardData::GetHTML() const { return mHTML; }
 
+void HeadlessClipboardData::SetData(const nsACString& aFlavor,
+                                    nsISupports* aData) {
+  for (auto& entry : mOtherData) {
+    if (entry.mFlavor.Equals(aFlavor)) {
+      entry.mData = aData;
+      mChangeCount++;
+      return;
+    }
+  }
+  auto& entry = *mOtherData.AppendElement();
+  entry.mFlavor = aFlavor;
+  entry.mData = aData;
+  mChangeCount++;
+}
+
+bool HeadlessClipboardData::HasData(const nsACString& aFlavor) const {
+  for (const auto& entry : mOtherData) {
+    if (entry.mFlavor.Equals(aFlavor)) {
+      return !!entry.mData;
+    }
+  }
+  return false;
+}
+
+already_AddRefed<nsISupports> HeadlessClipboardData::GetData(
+    const nsACString& aFlavor) const {
+  for (const auto& entry : mOtherData) {
+    if (entry.mFlavor.Equals(aFlavor)) {
+      return do_AddRef(entry.mData);
+    }
+  }
+  return nullptr;
+}
+
 int32_t HeadlessClipboardData::GetChangeCount() const { return mChangeCount; }
 
 void HeadlessClipboardData::Clear() {
   mPlain.SetIsVoid(true);
   mHTML.SetIsVoid(true);
+  mOtherData.Clear();
   mChangeCount++;
 }
 

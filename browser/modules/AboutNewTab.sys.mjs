@@ -19,6 +19,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
 });
 
 const ABOUT_URL = "about:newtab";
+const DEFAULT_NEW_TAB_URL = "https://www.google.com/";
 const PREF_ACTIVITY_STREAM_DEBUG = "browser.newtabpage.activity-stream.debug";
 // AboutHomeStartupCache needs us in "quit-application", so stay alive longer.
 // TODO: We could better have a shared async shutdown blocker?
@@ -44,7 +45,7 @@ export const AboutNewTab = {
 
   _cachedTopSites: null,
 
-  _newTabURL: ABOUT_URL,
+  _newTabURL: DEFAULT_NEW_TAB_URL,
   _newTabURLOverridden: false,
 
   /**
@@ -136,7 +137,7 @@ export const AboutNewTab = {
       this._activityStreamEnabled = false;
     }
 
-    this._newTabURL = ABOUT_URL;
+    this._newTabURL = DEFAULT_NEW_TAB_URL;
     return true;
   },
 
@@ -170,7 +171,7 @@ export const AboutNewTab = {
 
   resetNewTabURL() {
     this._newTabURLOverridden = false;
-    this._newTabURL = ABOUT_URL;
+    this._newTabURL = DEFAULT_NEW_TAB_URL;
     this.toggleActivityStream(true, true);
     this.notifyChange();
   },

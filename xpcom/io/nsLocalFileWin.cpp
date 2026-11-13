@@ -54,6 +54,22 @@ using namespace mozilla;
 using mozilla::FilePreferences::kDevicePathSpecifier;
 using mozilla::FilePreferences::kPathSeparator;
 
+#if defined(GECKO_W10M)
+struct GeckoW10mFileBroker {
+  intptr_t (*open)(const wchar_t*, int32_t);
+  int32_t (*exists)(const wchar_t*);
+  int32_t (*stat)(const wchar_t*, int64_t*);
+  int32_t (*move)(const wchar_t*, const wchar_t*);
+  int32_t (*remove)(const wchar_t*);
+};
+static GeckoW10mFileBroker gGeckoW10mFileBroker{};
+
+extern "C" __declspec(dllexport) void gecko_w10m_set_file_broker(
+    const GeckoW10mFileBroker* aBroker) {
+  gGeckoW10mFileBroker = aBroker ? *aBroker : GeckoW10mFileBroker{};
+}
+#endif
+
 #define CHECK_mWorkingPath()                                     \
   do {                                                           \
     if (mWorkingPath.IsEmpty()) return NS_ERROR_NOT_INITIALIZED; \
@@ -1009,6 +1025,33 @@ nsresult nsLocalFile::ResolveAndStat() {
   // there is nothing more that can be done
   nsresult rv = GetFileInfo(nsprPath, &mFileInfo);
   if (NS_FAILED(rv)) {
+#if defined(GECKO_W10M)
+    if (gGeckoW10mFileBroker.stat || gGeckoW10mFileBroker.exists) {
+      int64_t brokeredSize = 0;
+      int32_t brokered = gGeckoW10mFileBroker.stat
+                             ? gGeckoW10mFileBroker.stat(mWorkingPath.get(),
+                                                        &brokeredSize)
+                             : -1;
+      // BasicProperties may be unavailable while Gecko still has the .part
+      // handle open.  Failure to enrich the metadata must not turn an
+      // otherwise valid brokered file into an unreadable source.
+      if (brokered < 1 && gGeckoW10mFileBroker.exists) {
+        brokered = gGeckoW10mFileBroker.exists(mWorkingPath.get());
+        brokeredSize = 0;
+      }
+      if (brokered >= 1) {
+        mFileInfo = {};
+        mFileInfo.type = brokered == 2 ? PR_FILE_DIRECTORY : PR_FILE_FILE;
+        mFileInfo.size = brokeredSize;
+        mResolveDirty = false;
+        // A zero size can mean that the .part metadata was temporarily
+        // unavailable while its write handle was open. Keep stat dirty so a
+        // later query after completion can obtain the final byte count.
+        mDirty = brokered == 1 && brokeredSize == 0;
+        return NS_OK;
+      }
+    }
+#endif
     return rv;
   }
 
@@ -1287,9 +1330,8 @@ nsLocalFile::OpenANSIFileDesc(const char* aMode, FILE** aResult) {
 static nsresult do_create(nsIFile* aFile, const nsString& aPath,
                           uint32_t aAttributes) {
   PRFileDesc* file;
-  nsresult rv =
-      OpenFile(aPath, PR_RDONLY | PR_CREATE_FILE | PR_APPEND | PR_EXCL,
-               aAttributes, false, &file);
+  nsresult rv = aFile->OpenNSPRFileDesc(
+      PR_RDONLY | PR_CREATE_FILE | PR_APPEND | PR_EXCL, aAttributes, &file);
   if (file) {
     PR_Close(file);
   }
@@ -1464,7 +1506,26 @@ nsresult nsLocalFile::OpenNSPRFileDescMaybeShareDelete(int32_t aFlags,
                                                        int32_t aMode,
                                                        bool aShareDelete,
                                                        PRFileDesc** aResult) {
-  return OpenFile(mWorkingPath, aFlags, aMode, aShareDelete, aResult);
+  nsresult rv = OpenFile(mWorkingPath, aFlags, aMode, aShareDelete, aResult);
+#if defined(GECKO_W10M)
+  if (NS_FAILED(rv) && gGeckoW10mFileBroker.open) {
+    int32_t brokerFlags = 0;
+    if (aFlags & PR_RDONLY) brokerFlags |= 1;
+    if (aFlags & PR_WRONLY) brokerFlags |= 2;
+    if (aFlags & PR_RDWR) brokerFlags |= 3;
+    if (aFlags & PR_CREATE_FILE) brokerFlags |= 4;
+    if (aFlags & PR_TRUNCATE) brokerFlags |= 8;
+    if (aFlags & PR_APPEND) brokerFlags |= 16;
+    if (aFlags & PR_EXCL) brokerFlags |= 32;
+    intptr_t handle =
+        gGeckoW10mFileBroker.open(mWorkingPath.get(), brokerFlags);
+    if (handle != -1) {
+      *aResult = PR_ImportFile(static_cast<PROsfd>(handle));
+      return *aResult ? NS_OK : NS_ERROR_FAILURE;
+    }
+  }
+#endif
+  return rv;
 }
 
 #define TOUPPER(u) (((u) >= L'a' && (u) <= L'z') ? (u) - (L'a' - L'A') : (u))
@@ -1864,6 +1925,18 @@ nsresult nsLocalFile::MoveOrCopyAsSingleFileOrDir(nsIFile* aDestParent,
     return NS_ERROR_FILE_ACCESS_DENIED;
   }
 
+#if defined(GECKO_W10M)
+  // All public move/rename variants converge here, including
+  // MoveToFollowingLinks and RenameTo used when a download's .part file is
+  // committed to its final name.
+  if (move && gGeckoW10mFileBroker.move &&
+      gGeckoW10mFileBroker.move(filePath.get(), destPath.get()) == 1) {
+    mWorkingPath = destPath;
+    MakeDirty();
+    return NS_OK;
+  }
+#endif
+
   // Attempt to determine if we are a directory before any move/copy.
   auto isDir = Some(false);
   if (NS_FAILED(IsDirectory(isDir.ptr()))) {
@@ -2241,6 +2314,24 @@ nsLocalFile::CopyToFollowingLinks(nsIFile* aNewParentDir,
 
 NS_IMETHODIMP
 nsLocalFile::MoveTo(nsIFile* aNewParentDir, const nsAString& aNewName) {
+#if defined(GECKO_W10M)
+  if (gGeckoW10mFileBroker.move && aNewParentDir) {
+    nsAutoString parentPath;
+    nsresult pathRv = aNewParentDir->GetPath(parentPath);
+    if (NS_SUCCEEDED(pathRv)) {
+      nsAutoString name(aNewName);
+      if (name.IsEmpty()) GetLeafName(name);
+      nsAutoString destination(parentPath);
+      destination.Append(u'\\');
+      destination.Append(name);
+      if (gGeckoW10mFileBroker.move(mWorkingPath.get(), destination.get()) == 1) {
+        mWorkingPath = destination;
+        MakeDirty();
+        return NS_OK;
+      }
+    }
+  }
+#endif
   return CopyMove(aNewParentDir, aNewName, Move);
 }
 
@@ -2375,6 +2466,15 @@ nsLocalFile::Remove(bool aRecursive, uint32_t* aRemoveCount) {
   // only the shortcut file will be deleted.
 
   CHECK_mWorkingPath();
+
+#if defined(GECKO_W10M)
+  if (!aRecursive && gGeckoW10mFileBroker.remove &&
+      gGeckoW10mFileBroker.remove(mWorkingPath.get()) == 1) {
+    if (aRemoveCount) *aRemoveCount += 1;
+    MakeDirty();
+    return NS_OK;
+  }
+#endif
 
   nsresult rv = NS_OK;
 
@@ -2926,6 +3026,12 @@ nsLocalFile::Exists(bool* aResult) {
   MakeDirty();
   nsresult rv = ResolveAndStat();
   *aResult = NS_SUCCEEDED(rv) || rv == NS_ERROR_FILE_IS_LOCKED;
+#if defined(GECKO_W10M)
+  if (!*aResult && gGeckoW10mFileBroker.exists) {
+    const int32_t brokered = gGeckoW10mFileBroker.exists(mWorkingPath.get());
+    if (brokered >= 0) *aResult = brokered >= 1;
+  }
+#endif
 
   return NS_OK;
 }
@@ -2934,6 +3040,18 @@ NS_IMETHODIMP
 nsLocalFile::IsWritable(bool* aIsWritable) {
   // Check we are correctly initialized.
   CHECK_mWorkingPath();
+
+#if defined(GECKO_W10M)
+  // A FutureAccessList folder is writable through the host broker even when
+  // Win32 attribute/access probes are denied by the AppContainer.
+  if (gGeckoW10mFileBroker.exists) {
+    const int32_t brokered = gGeckoW10mFileBroker.exists(mWorkingPath.get());
+    if (brokered >= 1) {
+      *aIsWritable = true;
+      return NS_OK;
+    }
+  }
+#endif
 
   // The read-only attribute on a FAT directory only means that it can't
   // be deleted. It is still possible to modify the contents of the directory.
@@ -3076,11 +3194,29 @@ nsLocalFile::IsExecutable(bool* aResult) {
 
 NS_IMETHODIMP
 nsLocalFile::IsDirectory(bool* aResult) {
+#if defined(GECKO_W10M)
+  if (gGeckoW10mFileBroker.exists) {
+    const int32_t brokered = gGeckoW10mFileBroker.exists(mWorkingPath.get());
+    if (brokered >= 0) {
+      *aResult = brokered == 2;
+      return NS_OK;
+    }
+  }
+#endif
   return HasFileAttribute(FILE_ATTRIBUTE_DIRECTORY, aResult);
 }
 
 NS_IMETHODIMP
 nsLocalFile::IsFile(bool* aResult) {
+#if defined(GECKO_W10M)
+  if (gGeckoW10mFileBroker.exists) {
+    const int32_t brokered = gGeckoW10mFileBroker.exists(mWorkingPath.get());
+    if (brokered >= 0) {
+      *aResult = brokered == 1;
+      return NS_OK;
+    }
+  }
+#endif
   nsresult rv = HasFileAttribute(FILE_ATTRIBUTE_DIRECTORY, aResult);
   if (NS_SUCCEEDED(rv)) {
     *aResult = !*aResult;

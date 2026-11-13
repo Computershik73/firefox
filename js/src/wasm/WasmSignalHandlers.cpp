@@ -30,6 +30,18 @@
 #  include <winternl.h>  // must include before util/WindowsWrapper.h's `#undef`s
 
 #  include "util/WindowsWrapper.h"
+
+#  if defined(GECKO_W10M)
+// The app partition of the Windows SDK headers hides this declaration even
+// though kernel32 exports it and the Xbox app container permits it.  The UWP
+// host uses the same declaration for its crash probe and confirms at runtime
+// that the handler is installed.
+extern "C" {
+using GeckoW10mVectoredHandler = LONG(CALLBACK*)(PEXCEPTION_POINTERS);
+__declspec(dllimport) PVOID WINAPI
+AddVectoredExceptionHandler(ULONG First, GeckoW10mVectoredHandler Handler);
+}
+#  endif
 #elif defined(XP_DARWIN)
 #  include <mach/exc.h>
 #  include <mach/mach.h>
@@ -591,11 +603,6 @@ struct AutoHandlingTrap {
 // =============================================================================
 
 #  if defined(XP_WIN)
-// UWP has no vectored exception handler; the whole Windows async-trap handler
-// is compiled out and wasm uses explicit bounds checks (see the early return in
-// EnsureEagerProcessSignalHandlers). Keeping the XP_WIN arm avoids falling
-// through to the POSIX signal path.
-#    if !defined(GECKO_W10M)
 // Obtained empirically from thread_local codegen on x86/x64/arm64.
 // Compiled in all user binaries, so should be stable over time.
 static const unsigned sThreadLocalArrayPointerIndex = 11;
@@ -629,7 +636,6 @@ static LONG WINAPI WasmTrapHandler(LPEXCEPTION_POINTERS exception) {
 
   return EXCEPTION_CONTINUE_EXECUTION;
 }
-#    endif  // !GECKO_W10M
 
 #  elif defined(XP_DARWIN)
 // On OSX we are forced to use the lower-level Mach exception mechanism instead
@@ -892,11 +898,7 @@ void wasm::EnsureEagerProcessSignalHandlers() {
   sAlreadyHandlingTrap.infallibleInit();
 
   // Install whatever exception/signal handler is appropriate for the OS.
-#  if defined(XP_WIN) && defined(GECKO_W10M)
-  // UWP has no AddVectoredExceptionHandler; run wasm with explicit bounds
-  // checks instead of the async trap handler.
-  return;
-#  elif defined(XP_WIN)
+#  if defined(XP_WIN)
 
 #    if defined(MOZ_ASAN)
   // Under ASan we need to let the ASan runtime's ShadowExceptionHandler stay

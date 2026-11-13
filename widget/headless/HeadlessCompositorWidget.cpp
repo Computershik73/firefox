@@ -23,12 +23,20 @@
 
 #if defined(GECKO_W10M)
 #  include <string.h>
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#  include <unknwn.h>
 
 #  include <algorithm>
 #  include <vector>
+#  include <memory>
+#  include <unordered_map>
 
 #  include "mozilla/Atomics.h"
 #  include "mozilla/StaticMutex.h"
+#  include "mozilla/ScopeExit.h"
 #  include "mozilla/gfx/2D.h"
 #  include "mozilla/gfx/Types.h"
 #  include "mozilla/ClearOnShutdown.h"
@@ -37,11 +45,24 @@
 #  include "mozilla/TextEventDispatcherListener.h"
 #  include "mozilla/TextEventDispatcher.h"
 #  include "mozilla/TextEvents.h"
+#  include "mozilla/dom/DataTransfer.h"
+#  include "mozilla/MouseEvents.h"
+#  include "nsContentUtils.h"
+#  include "nsIFile.h"
+#  include "nsIDragService.h"
+#  include "nsIDragSession.h"
+#  include "nsServiceManagerUtils.h"
+#  include "nsVariant.h"
 #  include "nsIWidget.h"
+#  include "nsIWidgetListener.h"
 #  include "nsString.h"
 #  include "nsThreadUtils.h"
 
 extern "C" void GeckoW10mNote(const char* text);
+extern "C" void GeckoW10mMemoryBackground();
+extern "C" void gecko_w10m_set_managed_viewport(uint64_t, int32_t, int32_t);
+extern "C" uint32_t GeckoW10mMemoryAwayToken();
+extern "C" void GeckoW10mMemoryForeground(uint32_t aToken);
 
 namespace {
 
@@ -118,6 +139,10 @@ mozilla::widget::HeadlessCompositorWidget* sMain = nullptr;
 // through the panel -- but the overlays still need its size and origin to be
 // composited over it.
 mozilla::widget::HeadlessCompositorWidget* sMainWidget = nullptr;
+mozilla::widget::HeadlessCompositorWidget* sExternalWidget = nullptr;
+uint64_t sExternalSerial = 0;
+uint64_t sManagedFrameSerial = 0;
+std::unordered_map<uint64_t, std::shared_ptr<void>> sWindowPanels;
 
 }  // namespace
 #endif
@@ -139,20 +164,176 @@ HeadlessCompositorWidget::HeadlessCompositorWidget(
 #endif
 {
 #if defined(GECKO_W10M)
-  mIsOverlay = aWindow->GetWindowType() != WindowType::TopLevel;
+  mIsManagedWindow = aWindow->GeckoW10mIsManagedWindow();
+  mIsExternalWindow = aWindow->GeckoW10mIsExternalWindow();
+  mIsOverlay = aWindow->GetWindowType() != WindowType::TopLevel &&
+               !mIsExternalWindow;
   StaticMutexAutoLock lock(sFrameLock);
+  mWindowId = aWindow->GeckoW10mWindowId();
   sWindows.push_back(this);
-  if (!mIsOverlay) {
-    sMainWidget = this;
+  if (!mIsOverlay && !mIsManagedWindow) {
+    if (mIsExternalWindow) {
+      sExternalWidget = this;
+    } else {
+      sMainWidget = this;
+    }
   }
 #endif
 }
 
 #if defined(GECKO_W10M)
+uint32_t HeadlessCompositorWidget::ListWindowIds(uint64_t* aIds,
+                                                    uint32_t aCapacity) {
+  StaticMutexAutoLock lock(sFrameLock);
+  uint32_t count = 0;
+  for (auto* window : sWindows) {
+    if (window->mIsOverlay) continue;
+    if (aIds && count < aCapacity) aIds[count] = window->mWindowId;
+    ++count;
+  }
+  return count;
+}
+
+bool HeadlessCompositorWidget::BindWindowPanel(uint64_t aId, void* aPanel) {
+  if (!aPanel || !aId) return false;
+  // The caller supplies a valid COM IUnknown identity for a SwapChainPanel.
+  // Retain outside sFrameLock; final release must also happen outside it.
+  auto* unknown = static_cast<IUnknown*>(aPanel);
+  unknown->AddRef();
+  std::shared_ptr<void> retained(aPanel, [](void* value) {
+    static_cast<IUnknown*>(value)->Release();
+  });
+  StaticMutexAutoLock lock(sFrameLock);
+  for (auto* window : sWindows) {
+    if (window->mWindowId != aId || window->mIsOverlay) continue;
+    auto existing = sWindowPanels.find(aId);
+    if (existing != sWindowPanels.end()) return existing->second.get() == aPanel;
+    sWindowPanels.emplace(aId, std::move(retained));
+    return true;
+  }
+  return false;
+}
+
+bool HeadlessCompositorWidget::PrepareWindowPanel(uint64_t aId, void* aPanel) {
+  if (!aId || !aPanel) return false;
+  auto* unknown = static_cast<IUnknown*>(aPanel);
+  unknown->AddRef();
+  std::shared_ptr<void> retained(aPanel, [](void* value) {
+    static_cast<IUnknown*>(value)->Release();
+  });
+  StaticMutexAutoLock lock(sFrameLock);
+  if (sWindowPanels.find(aId) != sWindowPanels.end()) return false;
+  sWindowPanels.emplace(aId, std::move(retained));
+  return true;
+}
+
+bool HeadlessCompositorWidget::RequiresSoftwareComposition() const {
+  bool dedicated, managed, overlay, external;
+  {
+    StaticMutexAutoLock lock(sFrameLock);
+    managed = mIsManagedWindow;
+    overlay = mIsOverlay;
+    external = mIsExternalWindow;
+    auto panel = sWindowPanels.find(mWindowId);
+    dedicated = panel != sWindowPanels.end() && panel->second;
+  }
+  // A Shell-owned root has its own panel, published before native creation.
+  // Its legacy role must not force it into another window's software overlay.
+  // A managed root missing that binding must NEVER use the primary panel.
+  const bool software = managed ? !dedicated : (overlay || external);
+  GeckoW10mNote(nsPrintfCString(
+      "compositor: id=%llu managed=%d dedicated_panel=%d overlay=%d external=%d route=%s",
+      static_cast<unsigned long long>(mWindowId), int(managed), int(dedicated),
+      int(overlay), int(external), software ? "software" : "gpu-eligible").get());
+  return software;
+}
+
+void* HeadlessCompositorWidget::PanelForWidgetKey(uintptr_t aKey, bool* aManaged) {
+  if (aManaged) *aManaged = false;
+  StaticMutexAutoLock lock(sFrameLock);
+  for (auto* window : sWindows) {
+    if (window->GetWidgetKey() == aKey) {
+      if (aManaged) *aManaged = window->mIsManagedWindow;
+      auto panel = sWindowPanels.find(window->mWindowId);
+      return panel != sWindowPanels.end() ? panel->second.get() : nullptr;
+    }
+  }
+  return nullptr;
+}
+
+void HeadlessCompositorWidget::ForgetWindowPanel(uint64_t aId) {
+  std::shared_ptr<void> retained;
+  {
+    StaticMutexAutoLock lock(sFrameLock);
+    auto it = sWindowPanels.find(aId);
+    if (it == sWindowPanels.end()) return;
+    retained = std::move(it->second);
+    sWindowPanels.erase(it);
+  }
+  // COM final release can call into XAML; never release under sFrameLock.
+}
+
+void HeadlessCompositorWidget::SetExternalWindow(bool aExternal) {
+  StaticMutexAutoLock lock(sFrameLock);
+  if (mIsExternalWindow == aExternal) {
+    return;
+  }
+  mIsExternalWindow = aExternal;
+  mIsOverlay = mWidget->GetWindowType() != WindowType::TopLevel && !aExternal;
+  if (aExternal) {
+    if (sMain == this) {
+      // A window may be promoted after its first software paint. It must stop
+      // being the source returned by gecko_w10m_frame_copy immediately; that
+      // API is reserved for the real browser and its attached overlays.
+      sMain = nullptr;
+      for (auto it = sWindows.rbegin(); it != sWindows.rend(); ++it) {
+        auto* candidate = *it;
+        if (candidate != this && !candidate->mIsManagedWindow && !candidate->mIsOverlay &&
+            !candidate->mIsExternalWindow && candidate->mVisible &&
+            candidate->mPixels) {
+          sMain = candidate;
+          break;
+        }
+      }
+    }
+    if (sMainWidget == this) {
+      sMainWidget = nullptr;
+      for (auto it = sWindows.rbegin(); it != sWindows.rend(); ++it) {
+        auto* candidate = *it;
+        if (candidate != this && !candidate->mIsManagedWindow && !candidate->mIsOverlay &&
+            !candidate->mIsExternalWindow && candidate->mVisible) {
+          sMainWidget = candidate;
+          break;
+        }
+      }
+    }
+    sExternalWidget = this;
+  } else {
+    if (sExternalWidget == this) {
+      sExternalWidget = nullptr;
+    }
+    if (!mIsOverlay && mVisible) {
+      sMainWidget = this;
+    }
+  }
+  ++sExternalSerial;
+}
+
+bool HeadlessCompositorWidget::IsSoftwareMainPresenting() {
+  StaticMutexAutoLock lock(sFrameLock);
+  return sMain && !sMain->mIsOverlay && !sMain->mIsExternalWindow &&
+         sMain->mVisible && sMain->mPixels && sMain->mWidth > 0 &&
+         sMain->mHeight > 0;
+}
+
 HeadlessCompositorWidget::~HeadlessCompositorWidget() {
   StaticMutexAutoLock lock(sFrameLock);
   if (sMainWidget == this) {
     sMainWidget = nullptr;
+  }
+  if (sExternalWidget == this) {
+    sExternalWidget = nullptr;
+    ++sExternalSerial;
   }
   for (auto it = sWindows.begin(); it != sWindows.end(); ++it) {
     if (*it == this) {
@@ -190,7 +371,14 @@ void HeadlessCompositorWidget::NotifyOriginChanged(
 
 void HeadlessCompositorWidget::NotifyVisibilityChanged(bool aVisible) {
   mVisible = aVisible;
+  if (mIsManagedWindow) return;
   StaticMutexAutoLock lock(sFrameLock);
+  if (mIsExternalWindow) {
+    sExternalWidget = aVisible ? this : (sExternalWidget == this ? nullptr
+                                                                 : sExternalWidget);
+    ++sExternalSerial;
+    return;
+  }
   if (!mIsOverlay) {
     if (aVisible) {
       sMainWidget = this;
@@ -301,6 +489,13 @@ uintptr_t HeadlessCompositorWidget::GetWidgetKey() {
 already_AddRefed<gfx::DrawTarget>
 HeadlessCompositorWidget::StartRemoteDrawingInRegion(
     const LayoutDeviceIntRegion& aInvalidRegion) {
+  // CopyExternalFrame runs on the DesktopMode XAML thread and reads mPixels.
+  // Protect the complete lifetime of the DrawTarget. Previously only mWidth
+  // and mHeight were protected, allowing a resize to free/reallocate mPixels
+  // while the host was copying it.
+  sFrameLock.Lock();
+  auto unlockOnFailure = MakeScopeExit([] { sFrameLock.Unlock(); });
+
   const LayoutDeviceIntSize size = GetClientSize();
   if (size.width <= 0 || size.height <= 0) {
     return nullptr;
@@ -327,11 +522,8 @@ HeadlessCompositorWidget::StartRemoteDrawingInRegion(
   // the last paint, at the last paint's row length, and came out as a black
   // rectangle over the page. It only happened when the timing fell that way,
   // which is why it happened every other time.
-  {
-    StaticMutexAutoLock lock(sFrameLock);
-    mWidth = size.width;
-    mHeight = size.height;
-  }
+  mWidth = size.width;
+  mHeight = size.height;
 
   static bool sSaidSo = false;
   if (!sSaidSo) {
@@ -343,20 +535,39 @@ HeadlessCompositorWidget::StartRemoteDrawingInRegion(
       gfx::BackendType::SKIA, mPixels.get(),
       gfx::IntSize(size.width, size.height), int32_t(stride),
       gfx::SurfaceFormat::B8G8R8A8);
+  if (!dt) {
+    return nullptr;
+  }
+  mFrameLockHeldForDrawing = true;
+  unlockOnFailure.release();
   return dt.forget();
 }
 
 void HeadlessCompositorWidget::EndRemoteDrawingInRegion(
     gfx::DrawTarget* aDrawTarget, const LayoutDeviceIntRegion& aInvalidRegion) {
+  auto unlockDrawing = MakeScopeExit([this] {
+    if (mFrameLockHeldForDrawing) {
+      mFrameLockHeldForDrawing = false;
+      sFrameLock.Unlock();
+    }
+  });
   if (aDrawTarget) {
     aDrawTarget->Flush();
   }
 
-  StaticMutexAutoLock lock(sFrameLock);
-
   // This window now holds a complete picture of itself at its current size.
   mPaintedWidth = mWidth;
   mPaintedHeight = mHeight;
+
+  if (mIsManagedWindow) {
+    mManagedFrameSource = 1;
+    mExternalSerial = ++sManagedFrameSerial;
+    return;
+  }
+  if (mIsExternalWindow) {
+    mExternalSerial = ++sExternalSerial;
+    return;
+  }
 
   if (!mIsOverlay) {
     sMain = this;
@@ -456,6 +667,115 @@ void HeadlessCompositorWidget::EndRemoteDrawingInRegion(
 
   ++sSerial;
 }
+
+int32_t HeadlessCompositorWidget::CopyExternalFrame(
+    void* aDest, int32_t aCapacity, int32_t* aWidth, int32_t* aHeight,
+    uint64_t* aSerial) {
+  // This export is polled by CompositionTarget::Rendering on DesktopMode's UI
+  // thread. Waiting for WebRender while it paints a large popup freezes the
+  // entire Shell. Missing one frame is harmless; the next display tick retries.
+  if (!sFrameLock.TryLock()) {
+    return 0;
+  }
+  auto unlock = MakeScopeExit([] { sFrameLock.Unlock(); });
+  auto* window = sExternalWidget;
+  if (!window || !window->mVisible || !window->mPixels ||
+      window->mWidth <= 0 || window->mHeight <= 0 ||
+      window->mPaintedWidth != window->mWidth ||
+      window->mPaintedHeight != window->mHeight) {
+    if (aWidth) *aWidth = 0;
+    if (aHeight) *aHeight = 0;
+    return 0;
+  }
+  if (aSerial && *aSerial == window->mExternalSerial) return 0;
+  const size_t bytes = size_t(window->mWidth) * size_t(window->mHeight) * 4;
+  const bool fits = aDest && aWidth && aHeight &&
+                    *aWidth == window->mWidth && *aHeight == window->mHeight &&
+                    size_t(aCapacity) >= bytes;
+  *aWidth = window->mWidth;
+  *aHeight = window->mHeight;
+  if (!fits) return 0;
+  memcpy(aDest, window->mPixels.get(), bytes);
+  if (aSerial) *aSerial = window->mExternalSerial;
+  return 1;
+}
+
+void HeadlessCompositorWidget::ManagedFramePresented(uintptr_t aKey) {
+  StaticMutexAutoLock lock(sFrameLock);
+  for (auto* window : sWindows) {
+    if (window->GetWidgetKey() != aKey || !window->mIsManagedWindow) continue;
+    if (window->mManagedFrameSource != 2) {
+      window->mManagedFrameSource = 2;
+      window->mExternalSerial = ++sManagedFrameSerial;
+    }
+    return;
+  }
+}
+
+void HeadlessCompositorWidget::PublishManagedPixels(
+    uintptr_t aKey, int32_t aWidth, int32_t aHeight, const uint8_t* aPixels) {
+  StaticMutexAutoLock lock(sFrameLock);
+  for (auto* window : sWindows) {
+    if (window->GetWidgetKey() != aKey || !window->mIsManagedWindow) continue;
+    const size_t bytes = size_t(aWidth) * size_t(aHeight) * 4;
+    if (window->mCapacity < bytes) {
+      window->mPixels = MakeUnique<uint8_t[]>(bytes);
+      window->mCapacity = bytes;
+    }
+    memcpy(window->mPixels.get(), aPixels, bytes);
+    window->mWidth = window->mPaintedWidth = aWidth;
+    window->mHeight = window->mPaintedHeight = aHeight;
+    window->mManagedFrameSource = 1;  // Bitmap delivery ABI, regardless of rasterizer.
+    window->mExternalSerial = ++sManagedFrameSerial;
+    return;
+  }
+}
+
+extern "C" void gecko_w10m_publish_managed_pixels(
+    uintptr_t aKey, int32_t aWidth, int32_t aHeight, const uint8_t* aPixels) {
+  mozilla::widget::HeadlessCompositorWidget::PublishManagedPixels(
+      aKey, aWidth, aHeight, aPixels);
+}
+
+int32_t HeadlessCompositorWidget::CopyManagedFrame(
+    uint64_t aId, void* aDest, int32_t aCapacity, int32_t* aWidth,
+    int32_t* aHeight, uint64_t* aSerial, int32_t* aSoftware) {
+  if (!aWidth || !aHeight || !aSoftware) return 0;
+  *aSoftware = -1;  // Pending paint or lock contention: keep the previous frame.
+  if (!sFrameLock.TryLock()) return 0;
+  auto unlock = MakeScopeExit([] { sFrameLock.Unlock(); });
+  for (auto* window : sWindows) {
+    if (window->mWindowId != aId || !window->mIsManagedWindow) continue;
+    if (window->mManagedFrameSource == 2) {
+      *aSoftware = 0;
+      return 0;
+    }
+    if (window->mManagedFrameSource != 1 || !window->mPixels ||
+        window->mWidth <= 0 || window->mHeight <= 0 ||
+        window->mPaintedWidth != window->mWidth ||
+        window->mPaintedHeight != window->mHeight) return 0;
+    const size_t bytes = size_t(window->mWidth) * size_t(window->mHeight) * 4;
+    if (bytes > INT32_MAX) return 0;
+    const bool fits = aDest && aCapacity >= 0 && size_t(aCapacity) >= bytes &&
+        *aWidth == window->mWidth && *aHeight == window->mHeight;
+    *aWidth = window->mWidth;
+    *aHeight = window->mHeight;
+    *aSoftware = 1;
+    if (!fits || (aSerial && *aSerial == window->mExternalSerial)) return 0;
+    memcpy(aDest, window->mPixels.get(), bytes);
+    // This is a complete opaque browser window, not an overlay surface.
+    auto* pixels = static_cast<uint8_t*>(aDest);
+    for (size_t alpha = 3; alpha < bytes; alpha += 4) pixels[alpha] = 255;
+    if (aSerial) *aSerial = window->mExternalSerial;
+    return 1;
+  }
+  return 0;
+}
+
+bool HeadlessCompositorWidget::HasExternalWindow() {
+  StaticMutexAutoLock lock(sFrameLock);
+  return sExternalWidget && sExternalWidget->mVisible;
+}
 #endif
 
 }  // namespace widget
@@ -484,20 +804,72 @@ static void GeckoW10mDispatchInput(already_AddRefed<nsIRunnable> aRunnable) {
                                mozilla::EventQueuePriority::InputHigh);
 }
 
+// A headless widget cannot ask an OS window manager to begin a caption drag.
+// The embedded host supplies this sink and moves its virtual XAML window.
+static void (*gGeckoW10mWindowDragSink)(int) = nullptr;
+static bool gGeckoW10mWindowDragging = false;
+
+extern "C" __declspec(dllexport) void gecko_w10m_set_window_drag_sink(
+    void (*aSink)(int)) {
+  gGeckoW10mWindowDragSink = aSink;
+  GeckoW10mNote(aSink ? "window: the shell accepts title-bar dragging"
+                      : "window: title-bar dragging sink cleared");
+}
+
 // in a test: HeadlessWidget builds a real WidgetMouseEvent or WidgetWheelEvent
 // and puts it through DispatchInputEvent. The shell calls from its UI thread,
 // so each one is handed to the main thread rather than dispatched in place.
 //
 // Message: 0 move, 1 button down, 2 button up. Coordinates are in the pixels of
-// the frame the shell last drew, which is the window.
-extern "C" __declspec(dllexport) void gecko_w10m_input_mouse(int32_t aMessage,
-                                                          int32_t aX,
-                                                          int32_t aY) {
+// the frame the shell last drew, which is the window. Button uses DOM order:
+// 0 primary, 1 middle, 2 secondary.
+static void GeckoW10mInputMouse(int32_t aMessage, int32_t aButton, int32_t aX,
+                                 int32_t aY, bool aExternal = false, uint64_t aWindowId = 0) {
   GeckoW10mDispatchInput(
-      NS_NewRunnableFunction("gecko_w10m_input_mouse", [aMessage, aX, aY]() {
-        auto* widget = mozilla::widget::HeadlessWidget::ShownWidget();
+      NS_NewRunnableFunction("gecko_w10m_input_mouse",
+                            [aMessage, aButton, aX, aY, aExternal, aWindowId]() {
+        RefPtr<mozilla::widget::HeadlessWidget> widget = aWindowId
+            ? mozilla::widget::HeadlessWidget::WindowById(aWindowId)
+            : RefPtr<mozilla::widget::HeadlessWidget>(aExternal
+                  ? mozilla::widget::HeadlessWidget::ExternalWidget()
+                  : mozilla::widget::HeadlessWidget::ShownWidget());
         if (!widget) {
           return;
+        }
+        if (aExternal) {
+          mozilla::widget::HeadlessWidget::ActivateExternalWidget(true);
+        }
+        mozilla::LayoutDeviceIntPoint point(aX, aY);
+        if (aWindowId) point += widget->WidgetToScreenOffset();
+        // The external framebuffer is exposed from (0,0), but a Popup widget
+        // retains the screen origin at which Firefox originally anchored it.
+        // SynthesizeNativeMouseEvent converts screen to widget-local, so feed
+        // it screen coordinates for promoted panels and local coordinates for
+        // ordinary top-level/dialog windows.
+        if (aExternal && widget->GetWindowType() ==
+                             mozilla::widget::WindowType::Popup) {
+          point += widget->WidgetToScreenOffset();
+        }
+        if (aButton == 0 && !aExternal && !aWindowId &&
+            !widget->GeckoW10mNativePointerLocked()) {
+          if (aMessage == 1 && widget->GeckoW10mPointIsDraggable(point)) {
+            gGeckoW10mWindowDragging = true;
+            if (gGeckoW10mWindowDragSink) {
+              gGeckoW10mWindowDragSink(1);
+            }
+            GeckoW10mNote("window: title-bar drag began");
+            return;
+          }
+          if (gGeckoW10mWindowDragging) {
+            if (aMessage == 2) {
+              gGeckoW10mWindowDragging = false;
+              if (gGeckoW10mWindowDragSink) {
+                gGeckoW10mWindowDragSink(0);
+              }
+              GeckoW10mNote("window: title-bar drag ended");
+            }
+            return;
+          }
         }
         using NativeMouseMessage = nsIWidget::NativeMouseMessage;
         NativeMouseMessage message = NativeMouseMessage::Move;
@@ -506,11 +878,72 @@ extern "C" __declspec(dllexport) void gecko_w10m_input_mouse(int32_t aMessage,
         } else if (aMessage == 2) {
           message = NativeMouseMessage::ButtonUp;
         }
+        mozilla::MouseButton button = mozilla::MouseButton::eNotPressed;
+        if (aMessage != 0) {
+          if (aButton == 1) {
+            button = mozilla::MouseButton::eMiddle;
+          } else if (aButton == 2) {
+            button = mozilla::MouseButton::eSecondary;
+          } else {
+            button = mozilla::MouseButton::ePrimary;
+          }
+        }
         widget->SynthesizeNativeMouseEvent(
-            mozilla::LayoutDeviceIntPoint(aX, aY), message,
-            aMessage == 0 ? mozilla::MouseButton::eNotPressed
-                          : mozilla::MouseButton::ePrimary,
+            point, message, button,
             nsIWidget::NativeModifiers::NO_MODIFIERS, nullptr);
+      }));
+}
+
+extern "C" __declspec(dllexport) void gecko_w10m_window_mouse(
+    uint64_t aId, int32_t aMessage, int32_t aButton, int32_t aX, int32_t aY) {
+  if (!aId || aMessage < 0 || aMessage > 2 || aButton < 0 || aButton > 2) return;
+  GeckoW10mInputMouse(aMessage, aButton, aX, aY, false, aId);
+}
+
+extern "C" __declspec(dllexport) void gecko_w10m_window_wheel(
+    uint64_t aId, int32_t aX, int32_t aY, double aDX, double aDY) {
+  if (!aId) return;
+  GeckoW10mDispatchInput(NS_NewRunnableFunction(
+      "gecko_w10m_window_wheel", [aId, aX, aY, aDX, aDY]() {
+        RefPtr<mozilla::widget::HeadlessWidget> widget =
+            mozilla::widget::HeadlessWidget::WindowById(aId);
+        if (!widget) return;
+        widget->SynthesizeNativeMouseScrollEvent(
+            mozilla::LayoutDeviceIntPoint(aX, aY) + widget->WidgetToScreenOffset(),
+            0, aDX, aDY, 0, nsIWidget::NativeModifiers::NO_MODIFIERS, 0, nullptr);
+      }));
+}
+
+// Original ABI retained so a newer host can still be paired with an older
+// package during development, and vice versa.
+extern "C" __declspec(dllexport) void gecko_w10m_input_mouse(int32_t aMessage,
+                                                             int32_t aX,
+                                                             int32_t aY) {
+  GeckoW10mInputMouse(aMessage, 0, aX, aY);
+}
+
+extern "C" __declspec(dllexport) void gecko_w10m_input_mouse2(
+    int32_t aMessage, int32_t aButton, int32_t aX, int32_t aY) {
+  GeckoW10mInputMouse(aMessage, aButton, aX, aY);
+}
+
+extern "C" __declspec(dllexport) void gecko_w10m_external_input_mouse2(
+    int32_t aMessage, int32_t aButton, int32_t aX, int32_t aY) {
+  GeckoW10mInputMouse(aMessage, aButton, aX, aY, true);
+}
+
+extern "C" __declspec(dllexport) void gecko_w10m_input_mouse_delta(
+    int32_t aDeltaX, int32_t aDeltaY) {
+  if (!aDeltaX && !aDeltaY) {
+    return;
+  }
+  GeckoW10mDispatchInput(NS_NewRunnableFunction(
+      "gecko_w10m_input_mouse_delta", [aDeltaX, aDeltaY]() {
+        auto* widget = mozilla::widget::HeadlessWidget::ShownWidget();
+        if (widget) {
+          widget->GeckoW10mSynthesizeRelativeMouseMove(
+              mozilla::LayoutDeviceIntPoint(aDeltaX, aDeltaY));
+        }
       }));
 }
 
@@ -617,6 +1050,20 @@ extern "C" __declspec(dllexport) int32_t gecko_w10m_open_url(const char* aUrl) {
   return NS_SUCCEEDED(rv) ? 1 : 0;
 }
 
+// DesktopMode cannot tear XRE down and initialize it again inside the Shell
+// process. Closing its embedded browser therefore asks Firefox chrome to
+// discard the live browsing session while leaving the reusable runtime up.
+extern "C" __declspec(dllexport) void gecko_w10m_close_browser_session() {
+  NS_DispatchToMainThread(NS_NewRunnableFunction(
+      "gecko_w10m_close_browser_session", []() {
+        if (nsCOMPtr<nsIObserverService> obs =
+                mozilla::services::GetObserverService()) {
+          obs->NotifyObservers(nullptr, "gecko-w10m-close-browser-session",
+                               nullptr);
+        }
+      }));
+}
+
 // The display, in device pixels, whichever way the phone is held.
 // The display's density, which decides how far a finger may wander and still
 // be a tap. Without it APZ measures against 96 dpi.
@@ -637,12 +1084,21 @@ extern "C" __declspec(dllexport) void gecko_w10m_set_dpi(int32_t aDpi) {
 // it comes back. Chrome script listens and flushes what Firefox otherwise
 // saves on a shutdown that never comes here.
 extern "C" __declspec(dllexport) void gecko_w10m_app_state(int32_t aForeground) {
+  uint32_t awayToken = 0;
+  if (!aForeground) {
+    GeckoW10mMemoryBackground();
+  } else {
+    awayToken = GeckoW10mMemoryAwayToken();
+  }
   NS_DispatchToMainThread(
-      NS_NewRunnableFunction("gecko_w10m_app_state", [aForeground]() {
+      NS_NewRunnableFunction("gecko_w10m_app_state", [aForeground, awayToken]() {
         const char* topic =
             aForeground ? "application-foreground" : "application-background";
         GeckoW10mNote(aForeground ? "app: foreground -- telling chrome"
                                 : "app: background -- telling chrome to flush");
+        if (aForeground) {
+          GeckoW10mMemoryForeground(awayToken);
+        }
         if (nsCOMPtr<nsIObserverService> obs =
                 mozilla::services::GetObserverService()) {
           obs->NotifyObservers(nullptr, topic, nullptr);
@@ -664,6 +1120,11 @@ extern "C" __declspec(dllexport) void gecko_w10m_app_state(int32_t aForeground) 
 // strings, so no IDL, no component, no build change beyond this file; binary
 // payloads travel as base64 inside the JSON.
 static void (*gGeckoW10mBridgeSink)(const char*) = nullptr;
+static mozilla::Atomic<uint32_t, mozilla::Relaxed> sGamepadPromptRequests{0};
+
+extern "C" __declspec(dllexport) uint32_t gecko_w10m_gamepad_prompt_requests() {
+  return sGamepadPromptRequests;
+}
 
 namespace {
 class GeckoW10mBridgeObserver final : public nsIObserver {
@@ -671,6 +1132,10 @@ class GeckoW10mBridgeObserver final : public nsIObserver {
   NS_DECL_ISUPPORTS
   NS_IMETHOD Observe(nsISupports*, const char* aTopic,
                      const char16_t* aData) override {
+    if (aData && nsDependentString(aData).EqualsLiteral("gamepad-controls")) {
+      ++sGamepadPromptRequests;
+      return NS_OK;
+    }
     if (gGeckoW10mBridgeSink && aData) {
       NS_ConvertUTF16toUTF8 utf8(aData);
       gGeckoW10mBridgeSink(utf8.get());
@@ -722,12 +1187,6 @@ extern "C" __declspec(dllexport) void gecko_w10m_bridge_reply(const char* aJson)
           obs->NotifyObservers(nullptr, "gecko-w10m-bridge-reply", data.get());
         }
       }));
-}
-
-extern "C" __declspec(dllexport) void gecko_w10m_memory_pressure(int32_t aLevel) {
-  GeckoW10mNote(aLevel >= 2 ? "mem: the phone says memory is CRITICAL"
-                          : "mem: the phone says memory is tight");
-  NS_NotifyOfEventualMemoryPressure(MemoryPressureState::LowMemory);
 }
 
 extern "C" __declspec(dllexport) void gecko_w10m_set_screen(int32_t aWidth,
@@ -782,6 +1241,102 @@ extern "C" __declspec(dllexport) void gecko_w10m_input_wheel(int32_t aX, int32_t
       }));
 }
 
+extern "C" __declspec(dllexport) void gecko_w10m_external_input_wheel(
+    int32_t aX, int32_t aY, double aDeltaX, double aDeltaY) {
+  GeckoW10mDispatchInput(NS_NewRunnableFunction(
+      "gecko_w10m_external_input_wheel", [aX, aY, aDeltaX, aDeltaY]() {
+        auto* widget = mozilla::widget::HeadlessWidget::ExternalWidget();
+        if (!widget) return;
+        mozilla::LayoutDeviceIntPoint point(aX, aY);
+        if (widget->GetWindowType() == mozilla::widget::WindowType::Popup) {
+          point += widget->WidgetToScreenOffset();
+        }
+        widget->SynthesizeNativeMouseScrollEvent(
+            point, 0, aDeltaX, aDeltaY, 0,
+            nsIWidget::NativeModifiers::NO_MODIFIERS, 0, nullptr);
+      }));
+}
+
+namespace {
+RefPtr<mozilla::dom::DataTransfer> sGeckoW10mExternalDrag;
+}
+
+// Files supplied by the XAML shell are already copied into the app's upload
+// staging directory, so ordinary nsIFile access is valid here. State is:
+// 0 enter, 1 over, 2 leave/cancel, 3 drop. Paths are newline-separated UTF-16.
+extern "C" __declspec(dllexport) void gecko_w10m_drag_files(
+    int32_t aState, int32_t aX, int32_t aY, const wchar_t* aPaths) {
+  nsString paths(aPaths ? reinterpret_cast<const char16_t*>(aPaths) : u"");
+  GeckoW10mDispatchInput(NS_NewRunnableFunction(
+      "gecko_w10m_drag_files", [aState, aX, aY, paths = std::move(paths)]() {
+        auto* widget = mozilla::widget::HeadlessWidget::ShownWidget();
+        if (!widget) return;
+
+        mozilla::EventMessage message = mozilla::eDragOver;
+        if (aState == 0) message = mozilla::eDragEnter;
+        else if (aState == 2) message = mozilla::eDragExit;
+        else if (aState == 3) message = mozilla::eDrop;
+
+        if (aState == 0) {
+          sGeckoW10mExternalDrag = new mozilla::dom::DataTransfer(
+              nullptr, mozilla::eDragEnter, false, mozilla::Nothing());
+          nsCOMPtr<nsIPrincipal> principal = nsContentUtils::GetSystemPrincipal();
+          uint32_t index = 0;
+          for (const auto& path : paths.Split(u'\n')) {
+            if (path.IsEmpty()) continue;
+            nsCOMPtr<nsIFile> file;
+            if (NS_FAILED(NS_NewLocalFile(path, getter_AddRefs(file))) || !file) {
+              continue;
+            }
+            RefPtr<nsVariantCC> value = new nsVariantCC();
+            value->SetAsISupports(file);
+            sGeckoW10mExternalDrag->SetDataWithPrincipal(
+                u"application/x-moz-file"_ns, value, index++, principal, false);
+          }
+          sGeckoW10mExternalDrag->SetEffectAllowed(u"copy"_ns);
+          sGeckoW10mExternalDrag->SetDropEffect(u"copy"_ns);
+        }
+
+        if (!sGeckoW10mExternalDrag) return;
+
+        nsCOMPtr<nsIDragService> dragService =
+            do_GetService("@mozilla.org/widget/dragservice;1");
+        nsCOMPtr<nsIDragSession> dragSession;
+        if (dragService) {
+          dragService->GetCurrentSession(widget, getter_AddRefs(dragSession));
+          if (!dragSession && aState != 2) {
+            dragSession = dragService->StartDragSession(widget);
+          }
+          if (dragSession) {
+            // Keep the original payload in the session. Gecko clones it for
+            // each target/event with protected mode on hover and readable files
+            // on drop; reusing a dragenter DataTransfer hides files from sites.
+            dragSession->SetDataTransfer(sGeckoW10mExternalDrag);
+            if (aState != 3 && aState != 2) {
+              dragSession->SetDragAction(nsIDragService::DRAGDROP_ACTION_COPY);
+            }
+          }
+        }
+
+        mozilla::WidgetDragEvent event(true, message, widget);
+        // GeckoHost supplies coordinates relative to BrowserSurface. The shown
+        // headless widget uses that same local coordinate space; subtracting its
+        // screen offset a second time moves the drop away from the pointer.
+        event.mRefPoint = mozilla::LayoutDeviceIntPoint(aX, aY);
+        // Leave mDataTransfer unset: nsContentUtils::SetDataTransferInEvent
+        // supplies the per-event clone from the session after hit testing.
+        widget->DispatchInputEvent(&event);
+
+        if (aState == 2 || aState == 3) {
+          if (dragSession) {
+            dragSession->SetDragEndPoint(aX, aY);
+            dragSession->EndDragSession(aState == 3, 0);
+          }
+          sGeckoW10mExternalDrag = nullptr;
+        }
+      }));
+}
+
 // For the shell's heartbeat: the engine's own D3D11 device, so its
 // GetDeviceRemovedReason can be polled from outside the renderer thread, and
 // the renderer thread's pulse/where counters from WebRender's device code.
@@ -809,7 +1364,13 @@ extern "C" __declspec(dllexport) uint32_t gecko_w10m_wr_where() {
 extern "C" __declspec(dllexport) int32_t gecko_w10m_frame_copy(
     void* aDest, int32_t aCapacity, int32_t* aWidth, int32_t* aHeight,
     uint64_t* aSerial) {
-  mozilla::StaticMutexAutoLock lock(sFrameLock);
+  // The embedded host calls this from XAML's render callback. Never make the
+  // Shell UI wait behind a Gecko paint; an unchanged/missed display tick is
+  // preferable and will be retried immediately.
+  if (!sFrameLock.TryLock()) {
+    return 0;
+  }
+  auto unlock = mozilla::MakeScopeExit([] { sFrameLock.Unlock(); });
   if (!sFront || sFrontWidth <= 0 || sFrontHeight <= 0) {
     return 0;
   }
@@ -840,6 +1401,57 @@ extern "C" __declspec(dllexport) int32_t gecko_w10m_frame_copy(
   if (aHeight) *aHeight = sFrontHeight;
   if (aSerial) *aSerial = sSerial;
   return 1;
+}
+
+extern "C" __declspec(dllexport) int32_t
+gecko_w10m_software_main_presenting() {
+  // Unlike the panel-presenting flag, this answers only for the browser's
+  // actual software main surface. Overlay menus and promoted external windows
+  // must never make the shell hide a working GPU SwapChainPanel.
+  return mozilla::widget::HeadlessCompositorWidget::IsSoftwareMainPresenting()
+             ? 1
+             : 0;
+}
+
+extern "C" __declspec(dllexport) int32_t gecko_w10m_external_frame_copy(
+    void* aDest, int32_t aCapacity, int32_t* aWidth, int32_t* aHeight,
+    uint64_t* aSerial) {
+  return mozilla::widget::HeadlessCompositorWidget::CopyExternalFrame(
+      aDest, aCapacity, aWidth, aHeight, aSerial);
+}
+
+extern "C" __declspec(dllexport) int32_t gecko_w10m_external_window_open() {
+  return mozilla::widget::HeadlessCompositorWidget::HasExternalWindow() ? 1 : 0;
+}
+
+extern "C" __declspec(dllexport) void gecko_w10m_external_window_activate(
+    int32_t aActive) {
+  NS_DispatchToMainThread(NS_NewRunnableFunction(
+      "gecko_w10m_external_window_activate", [aActive]() {
+        mozilla::widget::HeadlessWidget::ActivateExternalWidget(aActive != 0);
+      }));
+}
+
+extern "C" __declspec(dllexport) void gecko_w10m_external_window_resize(
+    int32_t aWidth, int32_t aHeight) {
+  if (aWidth <= 0 || aHeight <= 0) return;
+  NS_DispatchToMainThread(NS_NewRunnableFunction(
+      "gecko_w10m_external_window_resize", [aWidth, aHeight]() {
+        if (auto* widget = mozilla::widget::HeadlessWidget::ExternalWidget()) {
+          widget->Resize(mozilla::DesktopSize(aWidth, aHeight), true);
+        }
+      }));
+}
+
+extern "C" __declspec(dllexport) void gecko_w10m_external_window_close() {
+  NS_DispatchToMainThread(NS_NewRunnableFunction(
+      "gecko_w10m_external_window_close", []() {
+        if (auto* widget = mozilla::widget::HeadlessWidget::ExternalWidget()) {
+          if (auto* listener = widget->GetWidgetListener()) {
+            listener->RequestWindowClose(widget);
+          }
+        }
+      }));
 }
 #endif
 
@@ -888,14 +1500,86 @@ extern "C" __declspec(dllexport) void gecko_w10m_set_panel(void* aPanel) {
 // Read by GLContextProviderEGL, which declares it rather than including this.
 extern "C" void* gecko_w10m_egl_native_window() { return sPanel; }
 
-// Read by RenderCompositor::Create, which declares it rather than including
-// this: menus, panels and dialogs are composited in software over the panel.
-extern "C" bool gecko_w10m_widget_is_overlay(mozilla::widget::CompositorWidget* aWidget) {
-  auto* delegate = aWidget ? aWidget->AsDelegate() : nullptr;
-  auto* headless = delegate ? delegate->AsHeadlessCompositorWidget() : nullptr;
-  return headless && headless->IsOverlay();
+// These commands resolve the ID inside the queued runnable. A close that
+// overtakes another request makes that request a no-op, never input for the
+// next active window. Strong local references cover listener reentrancy.
+extern "C" __declspec(dllexport) void gecko_w10m_window_resize(
+    uint64_t aId, int32_t aWidth, int32_t aHeight) {
+  if (!aId || aWidth <= 0 || aHeight <= 0) return;
+  gecko_w10m_set_managed_viewport(aId, aWidth, aHeight);
+  NS_DispatchToMainThread(NS_NewRunnableFunction(
+      "gecko_w10m_window_resize", [aId, aWidth, aHeight]() {
+        RefPtr<mozilla::widget::HeadlessWidget> window =
+            mozilla::widget::HeadlessWidget::WindowById(aId);
+        if (window) window->Resize(mozilla::DesktopSize(aWidth, aHeight), true);
+      }));
+}
+extern "C" __declspec(dllexport) void gecko_w10m_window_activate(uint64_t aId) {
+  if (!aId) return;
+  GeckoW10mDispatchInput(NS_NewRunnableFunction(
+      "gecko_w10m_window_activate", [aId]() {
+        RefPtr<mozilla::widget::HeadlessWidget> window =
+            mozilla::widget::HeadlessWidget::WindowById(aId);
+        if (window) window->SetFocus(nsIWidget::Raise::Yes,
+                                    mozilla::dom::CallerType::System);
+      }));
+}
+extern "C" __declspec(dllexport) void gecko_w10m_window_close(uint64_t aId) {
+  if (!aId) return;
+  NS_DispatchToMainThread(NS_NewRunnableFunction(
+      "gecko_w10m_window_close", [aId]() {
+        RefPtr<mozilla::widget::HeadlessWidget> window =
+            mozilla::widget::HeadlessWidget::WindowById(aId);
+        if (window && window->GetWidgetListener()) {
+          window->GetWidgetListener()->RequestWindowClose(window);
+        }
+      }));
 }
 
+// Registry capability only. This is deliberately not a claim that input,
+// popup routing and browser-window creation implement multi-window ABI yet.
+extern "C" __declspec(dllexport) uint32_t gecko_w10m_window_registry_version() {
+  return 2;
+}
+extern "C" void gecko_w10m_managed_frame_presented(uintptr_t key) {
+  mozilla::widget::HeadlessCompositorWidget::ManagedFramePresented(key);
+}
+extern "C" __declspec(dllexport) int32_t gecko_w10m_window_frame_copy(
+    uint64_t id, void* dest, int32_t capacity, int32_t* width,
+    int32_t* height, uint64_t* serial, int32_t* software) {
+  return mozilla::widget::HeadlessCompositorWidget::CopyManagedFrame(
+      id, dest, capacity, width, height, serial, software);
+}
+
+extern "C" __declspec(dllexport) uint32_t gecko_w10m_window_ids(
+    uint64_t* aIds, uint32_t aCapacity) {
+  return mozilla::widget::HeadlessCompositorWidget::ListWindowIds(aIds, aCapacity);
+}
+extern "C" __declspec(dllexport) int32_t gecko_w10m_bind_window_panel(
+    uint64_t aId, void* aPanel) {
+  return mozilla::widget::HeadlessCompositorWidget::BindWindowPanel(aId, aPanel) ? 1 : 0;
+}
+extern "C" void* gecko_w10m_egl_window_for_key(const void* aKey) {
+  bool managed = false;
+  void* panel = mozilla::widget::HeadlessCompositorWidget::PanelForWidgetKey(
+      reinterpret_cast<uintptr_t>(aKey), &managed);
+  if (panel || managed) return panel;
+  // Only legacy, unbound widgets may use the original primary host panel.
+  return sPanel;
+}
+
+extern "C" uint64_t gecko_w10m_managed_id_for_widget(mozilla::widget::CompositorWidget* widget) {
+  auto* delegate = widget ? widget->AsDelegate() : nullptr;
+  auto* headless = delegate ? delegate->AsHeadlessCompositorWidget() : nullptr;
+  auto* native = headless ? static_cast<mozilla::widget::HeadlessWidget*>(headless->RealWidget()) : nullptr;
+  return native && native->GeckoW10mIsManagedWindow() ? native->GeckoW10mWindowId() : 0;
+}
+
+extern "C" bool gecko_w10m_widget_needs_software(mozilla::widget::CompositorWidget* aWidget) {
+  auto* delegate = aWidget ? aWidget->AsDelegate() : nullptr;
+  auto* headless = delegate ? delegate->AsHeadlessCompositorWidget() : nullptr;
+  return headless && headless->RequiresSoftwareComposition();
+}
 extern "C" __declspec(dllexport) int32_t gecko_w10m_overlay_open() {
   mozilla::StaticMutexAutoLock lock(sFrameLock);
   for (auto* window : sWindows) {
@@ -918,19 +1602,22 @@ extern "C" __declspec(dllexport) uint32_t gecko_w10m_text_input_state() {
          (uint32_t(mozilla::widget::HeadlessWidget::TextInputKind()) & 0xff);
 }
 
-extern "C" __declspec(dllexport) void gecko_w10m_input_text(
-    const uint16_t* aText, int32_t aLength) {
+static void GeckoW10mTextForWindow(
+    uint64_t aWindowId, const uint16_t* aText, int32_t aLength) {
   if (!aText || aLength <= 0) {
     return;
   }
   nsString text(reinterpret_cast<const char16_t*>(aText), aLength);
   GeckoW10mDispatchInput(NS_NewRunnableFunction(
-      "gecko_w10m_input_text", [text = std::move(text)]() mutable {
+      "gecko_w10m_input_text", [aWindowId, text = std::move(text)]() mutable {
         // Three ways for this to come to nothing, and none of them said so.
         // Typing has now failed twice for reasons that were in different
         // halves of the path, so each step reports itself and the next log
         // names the one that is silent.
-        auto* widget = mozilla::widget::HeadlessWidget::ShownWidget();
+        RefPtr<mozilla::widget::HeadlessWidget> widget = aWindowId
+            ? mozilla::widget::HeadlessWidget::WindowById(aWindowId)
+            : RefPtr<mozilla::widget::HeadlessWidget>(
+                  mozilla::widget::HeadlessWidget::ShownWidget());
         if (!widget) {
           GeckoW10mNote("text: arrived, but there is no shown widget");
           return;
@@ -956,10 +1643,15 @@ extern "C" __declspec(dllexport) void gecko_w10m_input_text(
       }));
 }
 
-extern "C" __declspec(dllexport) void gecko_w10m_input_key(int32_t aKeyCode) {
+static void GeckoW10mKeyForWindow(
+    uint64_t aWindowId, int32_t aDown, int32_t aKeyCode, uint32_t aModifiers, int32_t aRepeat) {
   GeckoW10mDispatchInput(
-      NS_NewRunnableFunction("gecko_w10m_input_key", [aKeyCode]() {
-        auto* widget = mozilla::widget::HeadlessWidget::ShownWidget();
+      NS_NewRunnableFunction("gecko_w10m_input_key2",
+                            [aWindowId, aDown, aKeyCode, aModifiers, aRepeat]() {
+        RefPtr<mozilla::widget::HeadlessWidget> widget = aWindowId
+            ? mozilla::widget::HeadlessWidget::WindowById(aWindowId)
+            : RefPtr<mozilla::widget::HeadlessWidget>(
+                  mozilla::widget::HeadlessWidget::ShownWidget());
         if (!widget) {
           return;
         }
@@ -977,66 +1669,159 @@ extern "C" __declspec(dllexport) void gecko_w10m_input_key(int32_t aKeyCode) {
         // NS_VK_* are, so the code needs no translation -- only the name,
         // which is what the DOM actually reports as KeyboardEvent.key.
         mozilla::KeyNameIndex name = mozilla::KEY_NAME_INDEX_Unidentified;
+        mozilla::CodeNameIndex code = mozilla::CODE_NAME_INDEX_UNKNOWN;
+        nsString keyValue;
         switch (aKeyCode) {
           case 8:
             name = mozilla::KEY_NAME_INDEX_Backspace;
+            code = mozilla::CODE_NAME_INDEX_Backspace;
             break;
           case 9:
             name = mozilla::KEY_NAME_INDEX_Tab;
+            code = mozilla::CODE_NAME_INDEX_Tab;
             break;
           case 13:
             name = mozilla::KEY_NAME_INDEX_Enter;
+            code = mozilla::CODE_NAME_INDEX_Enter;
+            break;
+          case 16:
+            name = mozilla::KEY_NAME_INDEX_Shift;
+            code = mozilla::CODE_NAME_INDEX_ShiftLeft;
+            break;
+          case 17:
+            name = mozilla::KEY_NAME_INDEX_Control;
+            code = mozilla::CODE_NAME_INDEX_ControlLeft;
+            break;
+          case 18:
+            name = mozilla::KEY_NAME_INDEX_Alt;
+            code = mozilla::CODE_NAME_INDEX_AltLeft;
             break;
           case 27:
             name = mozilla::KEY_NAME_INDEX_Escape;
+            code = mozilla::CODE_NAME_INDEX_Escape;
+            break;
+          case 32:
+            name = mozilla::KEY_NAME_INDEX_USE_STRING;
+            keyValue.AssignLiteral(u" ");
+            code = mozilla::CODE_NAME_INDEX_Space;
             break;
           case 33:
             name = mozilla::KEY_NAME_INDEX_PageUp;
+            code = mozilla::CODE_NAME_INDEX_PageUp;
             break;
           case 34:
             name = mozilla::KEY_NAME_INDEX_PageDown;
+            code = mozilla::CODE_NAME_INDEX_PageDown;
             break;
           case 35:
             name = mozilla::KEY_NAME_INDEX_End;
+            code = mozilla::CODE_NAME_INDEX_End;
             break;
           case 36:
             name = mozilla::KEY_NAME_INDEX_Home;
+            code = mozilla::CODE_NAME_INDEX_Home;
             break;
           case 37:
             name = mozilla::KEY_NAME_INDEX_ArrowLeft;
+            code = mozilla::CODE_NAME_INDEX_ArrowLeft;
             break;
           case 38:
             name = mozilla::KEY_NAME_INDEX_ArrowUp;
+            code = mozilla::CODE_NAME_INDEX_ArrowUp;
             break;
           case 39:
             name = mozilla::KEY_NAME_INDEX_ArrowRight;
+            code = mozilla::CODE_NAME_INDEX_ArrowRight;
             break;
           case 40:
             name = mozilla::KEY_NAME_INDEX_ArrowDown;
+            code = mozilla::CODE_NAME_INDEX_ArrowDown;
+            break;
+          case 45:
+            name = mozilla::KEY_NAME_INDEX_Insert;
+            code = mozilla::CODE_NAME_INDEX_Insert;
             break;
           case 46:
             name = mozilla::KEY_NAME_INDEX_Delete;
+            code = mozilla::CODE_NAME_INDEX_Delete;
+            break;
+          case 91:
+          case 92:
+            name = mozilla::KEY_NAME_INDEX_Meta;
+            code = aKeyCode == 91 ? mozilla::CODE_NAME_INDEX_MetaLeft
+                                  : mozilla::CODE_NAME_INDEX_MetaRight;
             break;
           default:
-            return;
+            if (aKeyCode >= 'A' && aKeyCode <= 'Z') {
+              name = mozilla::KEY_NAME_INDEX_USE_STRING;
+              const bool shifted = (aModifiers & 1u) != 0;
+              keyValue.Append(char16_t(aKeyCode + (shifted ? 0 : ('a' - 'A'))));
+              code = static_cast<mozilla::CodeNameIndex>(
+                  mozilla::CODE_NAME_INDEX_KeyA + (aKeyCode - 'A'));
+            } else if (aKeyCode >= '0' && aKeyCode <= '9') {
+              name = mozilla::KEY_NAME_INDEX_USE_STRING;
+              // Keep the physical Digit code, but report the shifted symbol
+              // as KeyboardEvent.key and keypress.charCode.
+              constexpr char16_t shiftedDigits[] = u")!@#$%^&*(";
+              keyValue.Append((aModifiers & 1u)
+                                  ? shiftedDigits[aKeyCode - '0']
+                                  : char16_t(aKeyCode));
+              code = static_cast<mozilla::CodeNameIndex>(
+                  mozilla::CODE_NAME_INDEX_Digit0 + (aKeyCode - '0'));
+            } else if (aKeyCode >= 112 && aKeyCode <= 135) {
+              name = static_cast<mozilla::KeyNameIndex>(
+                  mozilla::KEY_NAME_INDEX_F1 + (aKeyCode - 112));
+              code = static_cast<mozilla::CodeNameIndex>(
+                  mozilla::CODE_NAME_INDEX_F1 + (aKeyCode - 112));
+            } else {
+              return;
+            }
         }
 
-        mozilla::WidgetKeyboardEvent event(true, mozilla::eKeyDown, widget);
+        const mozilla::EventMessage message =
+            aDown ? mozilla::eKeyDown : mozilla::eKeyUp;
+        mozilla::WidgetKeyboardEvent event(true, message, widget);
         event.mKeyCode = uint32_t(aKeyCode);
         event.mKeyNameIndex = name;
-        event.mCodeNameIndex = mozilla::CODE_NAME_INDEX_UNKNOWN;
-        event.mIsRepeat = false;
+        event.mKeyValue = keyValue;
+        event.mCodeNameIndex = code;
+        event.mIsRepeat = aRepeat != 0;
+        if (aModifiers & 1u) event.mModifiers |= mozilla::MODIFIER_SHIFT;
+        if (aModifiers & 2u) event.mModifiers |= mozilla::MODIFIER_CONTROL;
+        if (aModifiers & 4u) event.mModifiers |= mozilla::MODIFIER_ALT;
+        if (aModifiers & 8u) event.mModifiers |= mozilla::MODIFIER_META;
 
         nsEventStatus status = nsEventStatus_eIgnore;
-        const bool down =
-            dispatcher->DispatchKeyboardEvent(mozilla::eKeyDown, event, status);
-        const nsEventStatus downStatus = status;
-        if (down) {
+        const bool dispatched =
+            dispatcher->DispatchKeyboardEvent(message, event, status);
+        if (aDown && dispatched) {
           dispatcher->MaybeDispatchKeypressEvents(event, status);
         }
-        status = nsEventStatus_eIgnore;
-        dispatcher->DispatchKeyboardEvent(mozilla::eKeyUp, event, status);
       }));
+}
+
+extern "C" __declspec(dllexport) void gecko_w10m_input_text(
+    const uint16_t* aText, int32_t aLength) {
+  GeckoW10mTextForWindow(0, aText, aLength);
+}
+extern "C" __declspec(dllexport) void gecko_w10m_window_text(
+    uint64_t aId, const uint16_t* aText, int32_t aLength) {
+  if (aId) GeckoW10mTextForWindow(aId, aText, aLength);
+}
+extern "C" __declspec(dllexport) void gecko_w10m_input_key2(
+    int32_t aDown, int32_t aKeyCode, uint32_t aModifiers, int32_t aRepeat) {
+  GeckoW10mKeyForWindow(0, aDown, aKeyCode, aModifiers, aRepeat);
+}
+extern "C" __declspec(dllexport) void gecko_w10m_window_key(
+    uint64_t aId, int32_t aDown, int32_t aKeyCode,
+    uint32_t aModifiers, int32_t aRepeat) {
+  if (aId) GeckoW10mKeyForWindow(aId, aDown, aKeyCode, aModifiers, aRepeat);
+}
+
+extern "C" __declspec(dllexport) void gecko_w10m_input_key(int32_t aKeyCode) {
+  // Preserve the old ABI for the shell's Back button and for older hosts.
+  gecko_w10m_input_key2(1, aKeyCode, 0, 0);
+  gecko_w10m_input_key2(0, aKeyCode, 0, 0);
 }
 
 // The on-screen keyboard covers the bottom of the screen, and a window that
@@ -1054,7 +1839,9 @@ extern "C" __declspec(dllexport) void gecko_w10m_resize(int32_t aWidth,
   mozilla::widget::gGeckoW10mPendingHeight = aHeight;
   NS_DispatchToMainThread(
       NS_NewRunnableFunction("gecko_w10m_resize", [aWidth, aHeight]() {
-        auto* widget = mozilla::widget::HeadlessWidget::ShownWidget();
+        // This entry point carries the embedded Shell window's viewport. A
+        // focused dialog must not steal that resize from the browser window.
+        auto* widget = mozilla::widget::HeadlessWidget::MainWidget();
         if (!widget) {
           return;
         }

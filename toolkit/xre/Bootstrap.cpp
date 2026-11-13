@@ -21,8 +21,12 @@ extern "C" int __llvm_profile_dump(void);
 
 #if defined(GECKO_W10M)
 #  include <windows.h>
+#  include "mozilla/Assertions.h"
+#  include "../../memory/mozalloc/GeckoW10mNote.h"
 
+#  include <cctype>
 #  include <cstring>
+#  include <string>
 
 #  include <delayimp.h>
 
@@ -322,6 +326,105 @@ FARPROC WINAPI GeckoW10mDelayLoadFailure(unsigned notification,
 
 }  // namespace
 
+// Keep diagnostic context while ensuring gecko-notes is safe to attach to a
+// bug report. This is deliberately here, at the writer, so every caller --
+// including console messages from a web page -- receives the same treatment.
+static std::string GeckoW10mRedactLogText(const char* aText) {
+  std::string text = aText ? aText : "";
+  const auto delimiter = [](char aChar) {
+    const unsigned char value = static_cast<unsigned char>(aChar);
+    return std::isspace(value) || aChar == '"' || aChar == '\'' ||
+           aChar == '<' || aChar == '>' || aChar == ')' || aChar == ']' ||
+           aChar == '}';
+  };
+
+  // Keep scheme, host and path, but never queries or fragments. Signed media
+  // URLs commonly put their credentials there.
+  for (size_t scheme = text.find("://"); scheme != std::string::npos;) {
+    const size_t end = text.find_first_of(" \t\r\n\"'<>)]}", scheme + 3);
+    const size_t limit = end == std::string::npos ? text.size() : end;
+    const size_t secret = text.find_first_of("?#", scheme + 3);
+    if (secret != std::string::npos && secret < limit) {
+      text.replace(secret, limit - secret, "?[redacted]");
+      scheme = text.find("://", secret + 11);
+    } else {
+      scheme = text.find("://", limit);
+    }
+  }
+
+  // Console and protocol diagnostics sometimes carry credentials outside an
+  // URL. Preserve the field name but not its value.
+  std::string lower = text;
+  for (char& ch : lower) {
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  }
+  const char* keys[] = {"access_token", "refresh_token", "id_token",
+                        "authorization", "cookie", "session", "token",
+                        "sid", "sig"};
+  for (const char* key : keys) {
+    const size_t keyLength = std::strlen(key);
+    for (size_t at = lower.find(key); at != std::string::npos;) {
+      size_t value = at + keyLength;
+      while (value < text.size() &&
+             (text[value] == ' ' || text[value] == '\t' ||
+              text[value] == ':' || text[value] == '=' || text[value] == '"')) {
+        ++value;
+      }
+      if (value == at + keyLength || value >= text.size()) {
+        at = lower.find(key, at + keyLength);
+        continue;
+      }
+      size_t end = value;
+      while (end < text.size() && !delimiter(text[end]) && text[end] != '&' &&
+             text[end] != ',' && text[end] != ';') {
+        ++end;
+      }
+      text.replace(value, end - value, "[redacted]");
+      lower = text;
+      for (char& ch : lower) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+      }
+      at = lower.find(key, value + 10);
+    }
+  }
+
+  // Mask standalone IPv4 addresses (public and LAN). Do not remove host
+  // names: they remain valuable for connection and codec diagnostics.
+  for (size_t i = 0; i < text.size();) {
+    if (!std::isdigit(static_cast<unsigned char>(text[i])) ||
+        (i && (std::isalnum(static_cast<unsigned char>(text[i - 1])) ||
+               text[i - 1] == '.'))) {
+      ++i;
+      continue;
+    }
+    size_t p = i;
+    bool valid = true;
+    for (int part = 0; part < 4; ++part) {
+      const size_t begin = p;
+      int value = 0;
+      while (p < text.size() && std::isdigit(static_cast<unsigned char>(text[p])) &&
+             p - begin < 3) {
+        value = value * 10 + text[p++] - '0';
+      }
+      if (p == begin || value > 255 ||
+          (p < text.size() && std::isdigit(static_cast<unsigned char>(text[p]))) ||
+          (part != 3 && (p == text.size() || text[p++] != '.'))) {
+        valid = false;
+        break;
+      }
+    }
+    if (valid && (p == text.size() ||
+                  (!std::isalnum(static_cast<unsigned char>(text[p])) &&
+                   text[p] != '.'))) {
+      text.replace(i, p - i, "[ip]");
+      i += 4;
+    } else {
+      ++i;
+    }
+  }
+  return text;
+}
+
 // Bringing an engine up on a device with no debugger means the engine has to
 // be able to say things. printf_stderr goes nowhere in a packaged app -- the
 // process has no console, and ucrtbase captured the standard handles long
@@ -330,6 +433,7 @@ FARPROC WINAPI GeckoW10mDelayLoadFailure(unsigned notification,
 // names, immediately and flushed, which is enough to instrument a suspect
 // function and read the answer off the device afterwards.
 extern "C" void GeckoW10mNote(const char* text) {
+  const std::string redacted = GeckoW10mRedactLogText(text);
   // Stamped with the wall clock to the millisecond, in the same form as the
   // shell's log, so the two can be laid side by side. The notes have said
   // "the EGL compositor is up" for a month without ever saying when.
@@ -337,8 +441,27 @@ extern "C" void GeckoW10mNote(const char* text) {
   ::GetLocalTime(&now);
   char line[512];
   snprintf(line, sizeof(line), "%02u:%02u:%02u.%03u  %s", now.wHour, now.wMinute,
-           now.wSecond, now.wMilliseconds, text ? text : "");
+           now.wSecond, now.wMilliseconds, redacted.c_str());
   AppendLine(L"GECKO_W10M_NOTE_LOG", line);
+}
+
+static LONG CALLBACK GeckoW10mReportFatalException(EXCEPTION_POINTERS* aInfo) {
+  if (!aInfo || !aInfo->ExceptionRecord || !gMozCrashReason) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+  const DWORD code = aInfo->ExceptionRecord->ExceptionCode;
+  if (code != EXCEPTION_BREAKPOINT && code != EXCEPTION_ACCESS_VIOLATION) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+  static volatile LONG reported = 0;
+  if (::InterlockedCompareExchange(&reported, 1, 0)) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+  const std::string reason = GeckoW10mRedactLogText(gMozCrashReason);
+  gecko_w10m::Note("fatal: MOZ_CRASH");
+  gecko_w10m::Note(reason.c_str());
+  gecko_w10m::NoteStack();
+  return EXCEPTION_CONTINUE_SEARCH;
 }
 
 // The hook is const -- it was made so deliberately, a writable global function
@@ -373,6 +496,9 @@ class BootstrapImpl final : public Bootstrap {
   virtual int XRE_main(int argc, char* argv[],
                        const BootstrapConfig& aConfig) override {
 #if defined(GECKO_W10M)
+    if (!::AddVectoredExceptionHandler(1, GeckoW10mReportFatalException)) {
+      GeckoW10mNote("fatal: could not register crash diagnostics");
+    }
     // First line in the file, so its absence means the channel is broken
     // rather than the code being instrumented never running.
     GeckoW10mNote("XRE_main entered");

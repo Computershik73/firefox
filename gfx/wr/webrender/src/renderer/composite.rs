@@ -1400,18 +1400,16 @@ impl Renderer {
         draw_target_dimensions: DeviceIntSize,
         results: &mut RenderResults,
     ) -> Option<PartialPresentMode> {
+        // Native compositor tiles may carry an INVALID unresolved surface index.
+        super::gecko_w10m_offer_videos(
+            composite_state,
+            matches!(self.current_compositor_kind, CompositorKind::Draw { .. }),
+        );
+
         if let Some(ref _compositor) = self.compositor_config.layer_compositor() {
             // Calculate dirty rects of layer compositor in composite_simple()
             return None;
         }
-
-        // GeckoW10m: every opaque video goes to the video layer first, which
-        // presents its frame to the display overlay and says whether the
-        // compositor should leave a hole for it -- and whether that hole is
-        // already there. A hole that is already there is not dirty: when only
-        // the video changes, nothing of the browser's layer is drawn or
-        // presented at all, and the display updates the overlay by itself.
-        super::gecko_w10m_offer_videos(composite_state);
 
         let mut partial_present_mode = None;
 

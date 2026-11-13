@@ -116,6 +116,11 @@ class RenderDXGITextureHost final : public RenderTextureHostSWGL {
   const RefPtr<gfx::FileHandleWrapper> mHandle;
   const Maybe<layers::GpuProcessTextureId> mGpuProcessTextureId;
   RefPtr<ID3D11Texture2D> mTexture;
+#if defined(GECKO_W10M)
+  bool UpdateTransferTexture();
+  RefPtr<ID3D11Texture2D> mTransferSource;
+  RefPtr<ID3D11Texture2D> mTransferTexture;
+#endif
   const uint32_t mArrayIndex;
   RefPtr<IDXGIKeyedMutex> mKeyedMutex;
   RefPtr<IDCompositionTexture> mDCompositionTexture;

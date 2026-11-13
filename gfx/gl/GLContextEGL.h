@@ -89,7 +89,7 @@ class GLContextEGL final : public GLContext {
 
   virtual bool ReleaseTexImage() override;
 
-  void SetEGLSurfaceOverride(EGLSurface surf);
+  bool SetEGLSurfaceOverride(EGLSurface surf);
   EGLSurface GetEGLSurfaceOverride() { return mSurfaceOverride; }
 
   virtual bool MakeCurrentImpl() const override;

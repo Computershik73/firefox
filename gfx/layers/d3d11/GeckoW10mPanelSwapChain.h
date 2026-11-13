@@ -20,6 +20,10 @@ bool GeckoW10mHasPanel();
 // pixel. See GeckoW10mPanelSwapChain.cpp.
 HRESULT GeckoW10mAttachSwapChainToPanel(IDXGISwapChain1* aSwapChain);
 
+// Keeps the state exported to the UWP host honest when the D3D device or its
+// swap chain is lost. The host uses false to resume software-frame copying.
+void GeckoW10mSetPanelPresenting(bool aPresenting);
+
 }  // namespace mozilla::layers
 
 #endif  // MOZILLA_GFX_GECKOW10MPANELSWAPCHAIN_H

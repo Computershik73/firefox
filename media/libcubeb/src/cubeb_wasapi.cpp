@@ -29,6 +29,26 @@
 #include <vector>
 #include <windef.h>
 #include <windows.h>
+#if defined(GECKO_W10M)
+#  include <atomic>
+#  include <cstdio>
+extern "C" void GeckoW10mNote(const char*);
+using UwpCaptureBroker = HRESULT (*)(void **);
+static std::atomic<UwpCaptureBroker> sUwpCaptureBroker{nullptr};
+static constexpr wchar_t kUwpCaptureId[] = L"strawfox-uwp-default-capture";
+
+extern "C" __declspec(dllexport) void
+gecko_w10m_set_capture_broker(UwpCaptureBroker broker)
+{
+  sUwpCaptureBroker.store(broker);
+}
+static void NoteCaptureStatus(const char* aStage, unsigned long aStatus) {
+  char line[128];
+  std::snprintf(line, sizeof(line), "microphone: %s status=0x%08lx", aStage,
+                aStatus);
+  GeckoW10mNote(line);
+}
+#endif
 /* clang-format off */
 /* These need to be included after windows.h */
 #include <mmsystem.h>
@@ -2325,6 +2345,19 @@ setup_wasapi_stream_one_side(cubeb_stream * stm,
   bool try_again = false;
   // This loops until we find a device that works, or we've exhausted all
   // possibilities.
+#if defined(GECKO_W10M)
+  auto broker = sUwpCaptureBroker.load();
+  const bool use_uwp_capture = direction == eCapture && !is_loopback &&
+                              broker && devid && wcscmp(devid, kUwpCaptureId) == 0;
+  if (use_uwp_capture) {
+    device = nullptr;
+    hr = broker(audio_client.receive_vpp());
+    NoteCaptureStatus("UWP activation", static_cast<unsigned long>(hr));
+    if (FAILED(hr) || !audio_client) {
+      return CUBEB_ERROR;
+    }
+  } else
+#endif
   do {
     if (devid) {
       hr = get_endpoint(device, devid);
@@ -2346,6 +2379,11 @@ setup_wasapi_stream_one_side(cubeb_stream * stm,
         } else {
           LOG("Could not get default %s endpoint, error: %lx\n", DIRECTION_NAME,
               hr);
+#if defined(GECKO_W10M)
+          if (direction == eCapture) {
+            NoteCaptureStatus("default endpoint", static_cast<unsigned long>(hr));
+          }
+#endif
         }
         return CUBEB_ERROR;
       }
@@ -2369,6 +2407,11 @@ setup_wasapi_stream_one_side(cubeb_stream * stm,
       LOG("Could not activate the device to get an audio"
           " client for %s: error: %lx\n",
           DIRECTION_NAME, hr);
+#if defined(GECKO_W10M)
+      if (direction == eCapture && !is_loopback) {
+        NoteCaptureStatus("device activation", static_cast<unsigned long>(hr));
+      }
+#endif
       // A particular device can't be activated because it has been
       // unplugged, try fall back to the default audio device.
       if (devid && hr == AUDCLNT_E_DEVICE_INVALIDATED && allow_fallback) {
@@ -2454,7 +2497,8 @@ setup_wasapi_stream_one_side(cubeb_stream * stm,
   // protocol.
   if (direction == eCapture) {
     stm->input_bluetooth_handsfree = false;
-
+  }
+  if (direction == eCapture && device) {
     wasapi_default_devices default_devices(stm->device_enumerator.get());
     cubeb_device_info device_info;
     if (wasapi_create_device(stm->context, device_info,
@@ -3622,6 +3666,11 @@ wasapi_enumerate_devices_internal(cubeb * context, cubeb_device_type type,
   }
 
   hr = enumerator->EnumAudioEndpoints(flow, state_mask, collection.receive());
+#if defined(GECKO_W10M)
+  if (flow == eCapture && FAILED(hr)) {
+    NoteCaptureStatus("endpoint enumeration", static_cast<unsigned long>(hr));
+  }
+#endif
   if (FAILED(hr)) {
     LOG("Could not enumerate audio endpoints: %lx", hr);
     return CUBEB_ERROR;
@@ -3632,6 +3681,11 @@ wasapi_enumerate_devices_internal(cubeb * context, cubeb_device_type type,
     LOG("IMMDeviceCollection::GetCount() failed: %lx", hr);
     return CUBEB_ERROR;
   }
+#if defined(GECKO_W10M)
+  if (flow == eCapture && cc == 0) {
+    GeckoW10mNote("microphone: no capture endpoints available");
+  }
+#endif
   cubeb_device_info * devices = new cubeb_device_info[cc];
   if (!devices)
     return CUBEB_ERROR;
@@ -3659,9 +3713,50 @@ static int
 wasapi_enumerate_devices(cubeb * context, cubeb_device_type type,
                          cubeb_device_collection * out)
 {
-  return wasapi_enumerate_devices_internal(
+  const int rv = wasapi_enumerate_devices_internal(
       context, type, out,
       DEVICE_STATE_ACTIVE | DEVICE_STATE_DISABLED | DEVICE_STATE_UNPLUGGED);
+#if defined(GECKO_W10M)
+  if (type == CUBEB_DEVICE_TYPE_INPUT) {
+    for (size_t i = 0; rv == CUBEB_OK && i < out->count; ++i) {
+      if (out->device[i].state == CUBEB_DEVICE_STATE_ENABLED &&
+          out->device[i].latency_hi != 0) {
+        return rv;
+      }
+    }
+
+    auto broker = sUwpCaptureBroker.load();
+    if (!broker || FAILED(broker(nullptr))) {
+      return rv;
+    }
+    const char * id = intern_device_id(context, kUwpCaptureId);
+    if (!id) {
+      return rv;
+    }
+    if (rv == CUBEB_OK) {
+      wasapi_device_collection_destroy(context, out);
+    }
+    auto * input = new cubeb_device_info[1]{};
+    input->devid = reinterpret_cast<cubeb_devid>(id);
+    input->device_id = id;
+    input->friendly_name = new char[sizeof("Default Xbox microphone")]{"Default Xbox microphone"};
+    input->group_id = new char[1]{};
+    input->type = CUBEB_DEVICE_TYPE_INPUT;
+    input->state = CUBEB_DEVICE_STATE_ENABLED;
+    input->preferred = CUBEB_DEVICE_PREF_ALL;
+    input->format = CUBEB_DEVICE_FMT_F32NE;
+    input->default_format = CUBEB_DEVICE_FMT_F32NE;
+    input->max_channels = 1;
+    input->min_rate = input->max_rate = input->default_rate = 48000;
+    input->latency_lo = 480;
+    input->latency_hi = 960;
+    out->device = input;
+    out->count = 1;
+    GeckoW10mNote("microphone: using the UWP default capture endpoint");
+    return CUBEB_OK;
+  }
+#endif
+  return rv;
 }
 
 static int

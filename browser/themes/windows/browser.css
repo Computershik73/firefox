@@ -92,6 +92,17 @@
   align-items: stretch;
 }
 
+/* The standalone GeckoW10m host is a UWP view rather than a DesktopMode
+ * window. It can be closed normally, but it does not expose desktop-style
+ * minimize or maximize/restore operations. */
+@media -moz-pref("widget.gecko-w10m.standalone-mode") {
+  .titlebar-min,
+  .titlebar-max,
+  .titlebar-restore {
+    display: none;
+  }
+}
+
 /* Window control buttons */
 
 .titlebar-button {

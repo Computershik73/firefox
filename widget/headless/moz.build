@@ -27,6 +27,13 @@ UNIFIED_SOURCES += [
     "HeadlessWidget.cpp",
 ]
 
+if CONFIG["MOZ_UWP"]:
+    SOURCES += [
+        "GeckoW10mMemoryDiagnostics.cpp",
+        "GeckoW10mMemoryPressure.cpp",
+        "GeckoW10mWindowRequests.cpp",
+    ]
+
 if widget_dir == "gtk":
     UNIFIED_SOURCES += [
         "HeadlessLookAndFeelGTK.cpp",

@@ -4027,7 +4027,14 @@ pref("devtools.remote.adb.extensionURL", "https://ftp.mozilla.org/pub/labs/devto
 // Should F12 open the Developer Tools toolbox.
 pref("devtools.f12_enabled", true);
 
-#if defined(NIGHTLY_BUILD) || defined(MOZ_DEV_EDITION)
+#if defined(GECKO_W10M)
+// The UWP host is used for local/web game compatibility. Some of those games
+// require SharedArrayBuffer but are served by hosts that cannot emit COOP/COEP.
+// Keep this exception scoped to the W10M port instead of weakening desktop
+// Firefox builds.
+pref("dom.postMessage.sharedArrayBuffer.bypassCOOP_COEP.insecure.enabled", true,
+     locked);
+#elif defined(NIGHTLY_BUILD) || defined(MOZ_DEV_EDITION)
 // Define in StaticPrefList.yaml and override here since StaticPrefList.yaml
 // doesn't provide a way to lock the pref
 pref("dom.postMessage.sharedArrayBuffer.bypassCOOP_COEP.insecure.enabled", false);

@@ -4,6 +4,11 @@
 
 #include "WindowsLocationProvider.h"
 
+#if defined(GECKO_W10M)
+#  include "mozilla/Sprintf.h"
+extern "C" void GeckoW10mNote(const char*);
+#endif
+
 #include "GeolocationPosition.h"
 #include "WindowsLocationParent.h"
 #include "mozilla/Logging.h"
@@ -68,6 +73,12 @@ void WindowsLocationProvider::MaybeCreateLocationActor() {
         return WindowsLocationPromise::CreateAndResolve(self->mActor, __func__);
       },
       [self](::mozilla::ipc::LaunchError&& err) {
+#if defined(GECKO_W10M)
+        char line[96];
+        SprintfLiteral(line, "location: Windows utility process failed (0x%08lx)",
+                       static_cast<unsigned long>(err.ErrorCode()));
+        GeckoW10mNote(line);
+#endif
         LOG("WindowsLocationProvider failed to connect to actor: [%s, %lX] "
             "(%p,%p,%p)",
             err.FunctionName().get(), err.ErrorCode(), self.get(),
@@ -185,6 +196,12 @@ void WindowsLocationProvider::RecvUpdate(
 }
 
 void WindowsLocationProvider::RecvFailed(uint16_t err) {
+#if defined(GECKO_W10M)
+  char line[72];
+  SprintfLiteral(line, "location: provider returned error %u",
+                 static_cast<unsigned>(err));
+  GeckoW10mNote(line);
+#endif
   LOG("WindowsLocationProvider::RecvFailed(%p)", this);
   // Cannot get current location at this time.
   if (!mCallback) {

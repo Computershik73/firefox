@@ -577,6 +577,17 @@ var BrowserCommands = {
   },
 
   downloadsUI() {
+    // The regular non-private Ctrl+J path opens the Places Library as a second
+    // native top-level window. DesktopMode runs Gecko in-process and cannot
+    // safely create a second compositor during that window's initial resize.
+    // about:downloads is the same downloads UI and is already stable inside
+    // the browser's existing compositor.
+    if (
+      Services.prefs.getBoolPref("widget.gecko-w10m.desktop-mode", false)
+    ) {
+      openTrustedLinkIn("about:downloads", "tab");
+      return;
+    }
     if (PrivateBrowsingUtils.isWindowPrivate(window)) {
       openTrustedLinkIn("about:downloads", "tab");
     } else {

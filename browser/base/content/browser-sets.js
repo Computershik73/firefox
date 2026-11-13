@@ -5,6 +5,102 @@
 document.addEventListener(
   "MozBeforeInitialXULLayout",
   () => {
+    // Keep the canonical browser chrome URL: actors such as Urlbar match it exactly.
+    if (Services.env.get("GECKO_W10M_XBOX_GAMEPAD") === "1") {
+      const actions = document.getElementById("page-action-buttons");
+      if (actions) {
+        const button = document.createXULElement("toolbarbutton");
+        button.id = "strawfox-gamepad-button";
+        button.setAttribute("tooltiptext", "Game Controls");
+        button.setAttribute("aria-label", "Game Controls");
+        const icon =
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="context-fill" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">' +
+          '<path d="M5 4.5h6c1.5 0 2.3 1 2.7 2.6l.9 3.4c.4 1.7-1.3 2.5-2.4 1.5l-1.7-1.6h-5L3.8 12c-1.1 1-2.8.2-2.4-1.5l.9-3.4C2.7 5.5 3.5 4.5 5 4.5Z"/>' +
+          '<path d="M5 6.5v2.6M3.7 7.8h2.6m4.2-.9h.1m1.4 1.7h.1"/></svg>';
+        button.style.listStyleImage =
+          "url(\"data:image/svg+xml," + encodeURIComponent(icon) + "\")";
+        button.style.setProperty("-moz-context-properties", "fill");
+        button.style.fill = "currentColor";
+        button.addEventListener("command", () => {
+          Services.obs.notifyObservers(null, "gecko-w10m-bridge", "gamepad-controls");
+        });
+        actions.insertBefore(button, document.getElementById("pageActionButton"));
+      }
+    }
+    const shellOptions = window.arguments?.[1];
+    const shellWindowId = shellOptions instanceof Ci.nsIPropertyBag2 &&
+      shellOptions.hasKey("desktopmode-window")
+      ? shellOptions.getPropertyAsAString("desktopmode-window") : null;
+    const shellAppMode = shellWindowId !== null && shellOptions.hasKey("desktopmode-app") &&
+      shellOptions.getPropertyAsBool("desktopmode-app");
+    const shellManaged =
+      Services.prefs.getBoolPref("widget.gecko-w10m.desktop-mode", false) &&
+      /^[1-9][0-9]*$/.test(shellWindowId || "");
+    if (shellManaged && shellAppMode) {
+      document.documentElement.setAttribute("desktopmode-app", "true");
+      document.documentElement.style.minWidth = "0px";
+      document.documentElement.style.minHeight = "0px";
+      document.getElementById("navigator-toolbox")?.setAttribute("hidden", "true");
+      document.getElementById("titlebar")?.setAttribute("hidden", "true");
+    }
+    const sendManagedCommand = command => {
+      const id = Cc["@mozilla.org/supports-string;1"].createInstance(Ci.nsISupportsString);
+      id.data = shellWindowId;
+      Services.obs.notifyObservers(id, "gecko-w10m-managed-window-command", String(command));
+    };
+    if (shellManaged && shellAppMode) {
+      let shellContext = null;
+      document.addEventListener("popupshowing", event => {
+        if (event.target.id !== "contentAreaContextMenu") return;
+        const context = gContextMenu;
+        event.preventDefault();
+        event.stopPropagation();
+        if (!context || !context.shouldDisplay) return;
+        shellContext = context;
+        const flags = (context.isContentSelected || context.onTextInput ? 1 : 0) |
+          (context.onTextInput ? 2 : 0) | (context.onImage ? 4 : 0);
+        sendManagedCommand(100 + flags);
+      });
+      const actionObserver = (subject, topic, action) => {
+        if (subject?.QueryInterface(Ci.nsISupportsString).data !== shellWindowId ||
+            !shellContext) return;
+        gContextMenu = shellContext;
+        const items = { copy: "context-copy", paste: "context-paste", saveimage: "context-saveimage" };
+        const item = document.getElementById(items[action]);
+        if (item && !item.hidden && !item.disabled) item.doCommand();
+        shellContext = null;
+        gContextMenu = null;
+      };
+      Services.obs.addObserver(actionObserver, "gecko-w10m-managed-context-action");
+      window.addEventListener("unload", () => {
+        Services.obs.removeObserver(actionObserver, "gecko-w10m-managed-context-action");
+        shellContext = null;
+      }, { once: true });
+    }
+    if (shellManaged) {
+      const navigation = (subject, topic, data) => {
+        if (subject?.QueryInterface(Ci.nsISupportsString).data !== shellWindowId) return;
+        const uri = Services.io.newURI(data);
+        if (!uri.schemeIs("https") && !uri.schemeIs("http")) return;
+        if (shellAppMode) {
+          gBrowser.loadURI(uri, { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() });
+        } else {
+          gBrowser.selectedTab = gBrowser.addTrustedTab(data, { skipAnimation: true });
+        }
+      };
+      const ready = subject => {
+        if (subject !== window) return;
+        const id = Cc["@mozilla.org/supports-string;1"].createInstance(Ci.nsISupportsString);
+        id.data = shellWindowId;
+        Services.obs.notifyObservers(id, "gecko-w10m-managed-navigation-ready", "ready");
+      };
+      Services.obs.addObserver(navigation, "gecko-w10m-managed-open-url");
+      Services.obs.addObserver(ready, "browser-delayed-startup-finished");
+      window.addEventListener("unload", () => {
+        Services.obs.removeObserver(navigation, "gecko-w10m-managed-open-url");
+        Services.obs.removeObserver(ready, "browser-delayed-startup-finished");
+      }, { once: true });
+    }
     const lazy = {};
     ChromeUtils.defineESModuleGetters(lazy, {
       TranslationsParent: "resource://gre/actors/TranslationsParent.sys.mjs",
@@ -14,6 +110,45 @@ document.addEventListener(
         "chrome://browser/content/usercontext/ContainerCreationPanel.mjs",
       Referrals: "resource:///modules/referrals/Referrals.sys.mjs",
     });
+
+    if (
+      Services.prefs.getBoolPref("widget.gecko-w10m.desktop-mode", false)
+    ) {
+      const sessionCloser = {
+        observe() {
+          if (shellManaged) return;
+          // XRE is process-global inside DesktopMode and cannot safely be
+          // initialized twice. Replace the live browser session with one clean
+          // home tab so closing releases pages, media and their content state
+          // while keeping the embedded runtime reusable.
+          const cleanTab = gBrowser.addTrustedTab("about:home", {
+            skipAnimation: true,
+          });
+          gBrowser.selectedTab = cleanTab;
+          for (const tab of [...gBrowser.tabs]) {
+            if (tab !== cleanTab) {
+              gBrowser.removeTab(tab, {
+                animate: false,
+                skipPermitUnload: true,
+              });
+            }
+          }
+        },
+      };
+      Services.obs.addObserver(
+        sessionCloser,
+        "gecko-w10m-close-browser-session"
+      );
+      window.addEventListener(
+        "unload",
+        () =>
+          Services.obs.removeObserver(
+            sessionCloser,
+            "gecko-w10m-close-browser-session"
+          ),
+        { once: true }
+      );
+    }
 
     // <commandset id="mainCommandSet"> defined in browser-sets.inc.xhtml
     document
@@ -80,18 +215,79 @@ document.addEventListener(
             BrowserCommands.closeTabOrWindow(event);
             break;
           case "cmd_closeWindow":
+            if (shellManaged) { sendManagedCommand(4); break; }
+            if (
+              Services.prefs.getBoolPref(
+                "widget.gecko-w10m.desktop-mode",
+                false
+              )
+            ) {
+              Services.obs.notifyObservers(
+                null,
+                "gecko-w10m-bridge",
+                '{"op":"window.close"}'
+              );
+              break;
+            }
             BrowserCommands.tryToCloseWindow(event);
             break;
           case "cmd_returnToOpener":
             BrowserCommands.returnToOpenerFromPiP(event);
             break;
           case "cmd_minimizeWindow":
+            if (shellManaged) { sendManagedCommand(1); break; }
+            if (
+              Services.prefs.getBoolPref(
+                "widget.gecko-w10m.desktop-mode",
+                false
+              )
+            ) {
+              Services.obs.notifyObservers(
+                null,
+                "gecko-w10m-bridge",
+                '{"op":"window.minimize"}'
+              );
+              break;
+            }
             window.minimize();
             break;
           case "cmd_maximizeWindow":
+            if (shellManaged) { sendManagedCommand(2); break; }
+            if (
+              Services.prefs.getBoolPref(
+                "widget.gecko-w10m.desktop-mode",
+                false
+              )
+            ) {
+              // Keep the real Gecko widget state in sync with DesktopMode.
+              // Merely changing the XUL attribute makes the caption button
+              // continue behaving as if the window were restored.
+              window.maximize();
+              Services.obs.notifyObservers(
+                null,
+                "gecko-w10m-bridge",
+                '{"op":"window.maximize"}'
+              );
+              break;
+            }
             window.maximize();
             break;
           case "cmd_restoreWindow":
+            if (shellManaged) { sendManagedCommand(3); break; }
+            if (
+              Services.prefs.getBoolPref(
+                "widget.gecko-w10m.desktop-mode",
+                false
+              )
+            ) {
+              window.restore();
+              Services.obs.notifyObservers(
+                null,
+                "gecko-w10m-bridge",
+                '{"op":"window.restore"}'
+              );
+              break;
+            }
             window.fullScreen ? BrowserCommands.fullScreen() : window.restore();
             break;
           case "cmd_toggleMute":

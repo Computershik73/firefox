@@ -32,6 +32,11 @@
 #include "wasm/WasmIonCompile.h"
 #include "wasm/WasmStubs.h"
 
+#if defined(GECKO_W10M)
+#  include "mozilla/Sprintf.h"
+extern "C" void GeckoW10mNote(const char* text);
+#endif
+
 using namespace js;
 using namespace js::jit;
 using namespace js::wasm;
@@ -695,6 +700,18 @@ bool ModuleGenerator::initTasks() {
       compileState_ != CompileState::LazyTier2) {
     parallel_ = true;
     numTasks = 2 * GetMaxWasmCompilationThreads();
+#if defined(GECKO_W10M)
+    if (codeMeta_->codeSectionSize() >= LargeWasmCompilationThreshold) {
+      numTasks = std::min(numTasks, LargeWasmCompilationTasks);
+      char note[160];
+      SprintfLiteral(note,
+                     "wasm: large module batching, code=%u bytes tasks=%u "
+                     "compile_state=%d",
+                     unsigned(codeMeta_->codeSectionSize()), unsigned(numTasks),
+                     int(compileState_));
+      GeckoW10mNote(note);
+    }
+#endif
   }
 
   const CodeTailMetadata* codeTailMeta = existingCodeTailMeta_;

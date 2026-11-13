@@ -50,6 +50,13 @@ XPCOMUtils.defineLazyPreferenceGetter(
   true
 );
 
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "geckoW10mDesktopMode",
+  "widget.gecko-w10m.desktop-mode",
+  false
+);
+
 import { Integration } from "resource://gre/modules/Integration.sys.mjs";
 
 Integration.downloads.defineESModuleGetter(
@@ -1005,6 +1012,21 @@ DownloadsViewUI.DownloadElementShell.prototype = {
 
   showDeletedOrMissing() {
     this.element.removeAttribute("exists");
+    // DesktopMode downloads to its private staging directory, then moves the
+    // completed file through the StorageFolder granted by FolderPicker.  The
+    // old staging pathname is deliberately gone, but that is a successful
+    // brokered export rather than a file that the user lost or deleted.
+    if (
+      lazy.geckoW10mDesktopMode &&
+      !this.download.deleted &&
+      this.download.succeeded &&
+      this.download.target.path?.includes("\\download-staging\\")
+    ) {
+      let label = lazy.DownloadsCommon.strings.stateCompleted;
+      this.showStatusWithDetails(label, label);
+      this.hideButton();
+      return;
+    }
     let stringKey;
     if (this.download.deleted && this.download.error?.becauseBlocked) {
       stringKey = "fileBlockedAndDeleted";

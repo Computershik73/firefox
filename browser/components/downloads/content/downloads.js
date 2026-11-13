@@ -668,7 +668,11 @@ var DownloadsPanel = {
 
     // Ensure the anchor is visible.  If that is not possible, show the panel
     // anchored to the top area of the window, near the default anchor position.
-    let anchor = DownloadsButton.getAnchor();
+    const shellAppMode =
+      document.documentElement.hasAttribute("desktopmode-app");
+    let anchor = shellAppMode
+      ? gBrowser.selectedBrowser
+      : DownloadsButton.getAnchor();
 
     if (!anchor) {
       DownloadsCommon.error("Downloads button cannot be found.");
@@ -696,7 +700,7 @@ var DownloadsPanel = {
       PanelMultiView.openPopup(
         this.panel,
         anchor,
-        "bottomright topright",
+        shellAppMode ? "topright topright" : "bottomright topright",
         0,
         0,
         false,

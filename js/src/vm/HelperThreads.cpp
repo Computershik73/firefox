@@ -33,6 +33,11 @@
 #include "vm/MutexIDs.h"
 #include "wasm/WasmGenerator.h"
 
+#if defined(GECKO_W10M)
+#  include "mozilla/Sprintf.h"
+extern "C" void GeckoW10mNote(const char* text);
+#endif
+
 using namespace js;
 
 using mozilla::TimeDuration;
@@ -1524,14 +1529,41 @@ void FreeDelazifyTask::runHelperThreadTask(AutoLockHelperThreadState& locked) {
 
 //== PromiseHelperTask ====================================================
 
+#if defined(GECKO_W10M)
+size_t GlobalHelperThreadState::runnablePromiseTaskIndex(
+    const AutoLockHelperThreadState& lock) {
+  bool largeRunning = false;
+  for (auto* task : helperTasks(lock)) {
+    if (task->threadType() == THREAD_TYPE_PROMISE_TASK &&
+        static_cast<PromiseHelperTask*>(task)->isLargeBufferedWasmCompilation()) {
+      largeRunning = true;
+      break;
+    }
+  }
+  auto& pending = promiseHelperTasks(lock);
+  for (size_t i = pending.length(); i > 0; --i) {
+    if (!largeRunning || !pending[i - 1]->isLargeBufferedWasmCompilation()) {
+      return i - 1;
+    }
+  }
+  return pending.length();
+}
+#endif
+
 bool GlobalHelperThreadState::canStartPromiseHelperTask(
     const AutoLockHelperThreadState& lock) {
   // PromiseHelperTasks can be wasm compilation tasks that in turn block on
   // wasm compilation so set isMaster = true.
-  return !promiseHelperTasks(lock).empty() &&
-         checkTaskThreadLimit(THREAD_TYPE_PROMISE_TASK,
-                              maxPromiseHelperThreads(),
-                              /*isMaster=*/true, lock);
+  if (promiseHelperTasks(lock).empty() ||
+      !checkTaskThreadLimit(THREAD_TYPE_PROMISE_TASK, maxPromiseHelperThreads(),
+                           /*isMaster=*/true, lock)) {
+    return false;
+  }
+#if defined(GECKO_W10M)
+  return runnablePromiseTaskIndex(lock) != promiseHelperTasks(lock).length();
+#else
+  return true;
+#endif
 }
 
 HelperThreadTask* GlobalHelperThreadState::maybeGetPromiseHelperTask(
@@ -1540,7 +1572,16 @@ HelperThreadTask* GlobalHelperThreadState::maybeGetPromiseHelperTask(
     return nullptr;
   }
 
+#if defined(GECKO_W10M)
+  auto& pending = promiseHelperTasks(lock);
+  const size_t index = runnablePromiseTaskIndex(lock);
+  MOZ_ASSERT(index < pending.length());
+  PromiseHelperTask* task = pending[index];
+  pending.erase(pending.begin() + index);
+  return task;
+#else
   return promiseHelperTasks(lock).popCopy();
+#endif
 }
 
 bool GlobalHelperThreadState::submitTask(PromiseHelperTask* task) {
@@ -1562,7 +1603,28 @@ void PromiseHelperTask::executeAndResolveAndDestroy(JSContext* cx) {
 void PromiseHelperTask::runHelperThreadTask(AutoLockHelperThreadState& lock) {
   {
     AutoUnlockHelperThreadState unlock(lock);
+#if defined(GECKO_W10M)
+    const bool large = isLargeBufferedWasmCompilation();
+    const auto began = large ? mozilla::TimeStamp::Now() : mozilla::TimeStamp();
+    if (large) {
+      char note[128];
+      SprintfLiteral(note, "wasm: large buffered compile started, code=%zu bytes",
+                     bufferedWasmCompilationBytes);
+      GeckoW10mNote(note);
+    }
+#endif
     execute();
+#if defined(GECKO_W10M)
+    if (large) {
+      char note[160];
+      SprintfLiteral(note,
+                     "wasm: large buffered compile finished, code=%zu bytes, "
+                     "elapsed=%.0f ms",
+                     bufferedWasmCompilationBytes,
+                     (mozilla::TimeStamp::Now() - began).ToMilliseconds());
+      GeckoW10mNote(note);
+    }
+#endif
   }
 
   // Don't release the lock between dispatching the resolve and destroy

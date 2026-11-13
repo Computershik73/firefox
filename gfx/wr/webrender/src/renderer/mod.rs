@@ -819,18 +819,23 @@ static GECKO_W10M_HOLES: std::sync::Mutex<Vec<(usize, bool, Option<DeviceRect>)>
 
 /// Offers every opaque YUV video of the frame to the video layer, once per
 /// frame, and remembers which tiles are to be holes.
-pub(crate) fn gecko_w10m_offer_videos(state: &CompositeState) {
+pub(crate) fn gecko_w10m_offer_videos(state: &CompositeState, enabled: bool) {
     let mut holes = match GECKO_W10M_HOLES.lock() {
         Ok(holes) => holes,
         Err(_) => return,
     };
     holes.clear();
+    if !enabled {
+        return;
+    }
     for (index, tile) in state.tiles.iter().enumerate() {
         if let CompositeTileSurface::ExternalSurface { external_surface_index } = tile.surface {
             if tile.kind != TileKind::Opaque || tile.clip_index.is_some() {
                 continue;
             }
-            let surface = &state.external_surfaces[external_surface_index.0];
+            let Some(surface) = state.external_surfaces.get(external_surface_index.0) else {
+                continue;
+            };
             if let (ResolvedExternalSurfaceColorData::Yuv { .. }, Some(id)) =
                 (&surface.color_data, surface.external_image_id)
             {

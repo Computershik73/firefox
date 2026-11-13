@@ -174,6 +174,11 @@ class RendererOGL {
   // false for normal GTK windows. Track the higher-level Pause/Resume lifecycle
   // separately so paused-window resource trimming is platform-independent.
   bool mPausedForResourceTrimming = false;
+#if defined(GECKO_W10M)
+  uint64_t mIndependentWindowId = 0;
+  bool mIndependentGraphicsFailed = false;
+  bool HandleIndependentGraphicsFailure(const char* aStage);
+#endif
 
 #ifdef MOZ_WIDGET_ANDROID
   struct ScreenPixelsRequest {

@@ -25,13 +25,13 @@
 //
 // Declared rather than included -- the panel belongs to the headless widget,
 // and gfx has no business including widget headers.
-extern "C" void* gecko_w10m_egl_native_window();
+extern "C" void* gecko_w10m_egl_window_for_key(const void* aKey);
 extern "C" void GeckoW10mNote(const char* text);
 #  include "mozilla/Sprintf.h"
 #  define GET_NATIVE_WINDOW_FROM_REAL_WIDGET(aWidget) \
-    ((EGLNativeWindowType)gecko_w10m_egl_native_window())
+    ((EGLNativeWindowType)gecko_w10m_egl_window_for_key(aWidget))
 #  define GET_NATIVE_WINDOW_FROM_COMPOSITOR_WIDGET(aWidget) \
-    ((EGLNativeWindowType)gecko_w10m_egl_native_window())
+    ((EGLNativeWindowType)gecko_w10m_egl_window_for_key(reinterpret_cast<const void*>(aWidget->GetWidgetKey())))
 #elif defined(XP_WIN)
 #  define GET_NATIVE_WINDOW_FROM_REAL_WIDGET(aWidget) \
     ((EGLNativeWindowType)aWidget->GetNativeData(NS_NATIVE_WINDOW))
@@ -481,10 +481,9 @@ bool GLContextEGL::ReleaseTexImage() {
   return true;
 }
 
-void GLContextEGL::SetEGLSurfaceOverride(EGLSurface surf) {
+bool GLContextEGL::SetEGLSurfaceOverride(EGLSurface surf) {
   mSurfaceOverride = surf;
-  DebugOnly<bool> ok = MakeCurrent(true);
-  MOZ_ASSERT(ok);
+  return MakeCurrent(true);
 }
 
 bool GLContextEGL::MakeCurrentImpl() const {
@@ -511,7 +510,8 @@ bool GLContextEGL::MakeCurrentImpl() const {
 }
 
 bool GLContextEGL::IsCurrentImpl() const {
-  return mEgl->mLib->fGetCurrentContext() == mContext;
+  return mEgl->mLib->fGetCurrentDisplay() == mEgl->mDisplay &&
+         mEgl->mLib->fGetCurrentContext() == mContext;
 }
 
 bool GLContextEGL::RenewSurface(CompositorWidget* aWidget) {

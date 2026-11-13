@@ -36,6 +36,14 @@ already_AddRefed<PlatformDecoderModule> MFMediaEngineDecoderModule::Create() {
 bool MFMediaEngineDecoderModule::SupportsConfig(const TrackInfo& aConfig) {
   RefPtr<PlatformDecoderModule> module = RemoteDecoderModule::Create(
       RemoteMediaIn::UtilityProcess_MFMediaEngineCDM);
+  // RemoteDecoderModule is only available in a content process. GeckoW10m
+  // runs Gecko in the packaged application's main process, so Create()
+  // legitimately returns null. Treat that as unsupported and let the media
+  // decoder fall back to the regular WMF/DXVA path instead of dereferencing
+  // a null module while reading video metadata.
+  if (!module) {
+    return false;
+  }
   return !module->Supports(SupportDecoderParams(aConfig), nullptr).isEmpty();
 }
 

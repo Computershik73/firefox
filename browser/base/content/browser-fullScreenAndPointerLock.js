@@ -409,6 +409,16 @@ var FullScreen = {
     } else {
       document.documentElement.removeAttribute("inFullscreen");
     }
+    // GeckoW10m's native window is a XAML surface owned by DesktopMode. The
+    // widget fullscreen transition can complete before the chrome document's
+    // DOM-fullscreen bookkeeping, so inDOMFullscreen is not a reliable hook
+    // for hiding Firefox's own titlebar/toolbox in this embedding. Keep a
+    // separate, port-only attribute tied to the widget transition itself.
+    document.documentElement.toggleAttribute(
+      "geckoW10mFullscreen",
+      aWillEnterFullscreen &&
+        Services.prefs.getBoolPref("widget.gecko-w10m.desktop-mode", false)
+    );
   },
 
   get fullScreenToggler() {

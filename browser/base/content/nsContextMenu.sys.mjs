@@ -1859,6 +1859,35 @@ export class nsContextMenu {
         );
         image.src = dataURL;
 
+        // DesktopMode owns the desktop and already provides the native
+        // wallpaper flow through nsIShellService.  The regular Firefox
+        // confirmation window becomes a second headless compositor surface;
+        // creating and resizing that modal surface in-process can crash the
+        // shell before the wallpaper request is dispatched.  Apply the image
+        // directly here, using the same fill mode that the dialog defaults to.
+        if (
+          Services.prefs.getBoolPref(
+            "widget.gecko-w10m.desktop-mode",
+            false
+          )
+        ) {
+          const applyBackground = () =>
+            this.window.getShellService().setDesktopBackground(
+              image,
+              Ci.nsIShellService.BACKGROUND_FILL,
+              imageName
+            );
+          // Setting src starts image decoding asynchronously.  The shell
+          // service requires a populated imgIRequest, just like the old dialog
+          // did after the user had time to inspect its preview.
+          if (image.complete && image.naturalWidth) {
+            applyBackground();
+          } else {
+            image.addEventListener("load", applyBackground, { once: true });
+          }
+          return;
+        }
+
         // Confirm since it's annoying if you hit this accidentally.
         const kDesktopBackgroundURL =
           "chrome://browser/content/setDesktopBackground.xhtml";

@@ -713,6 +713,14 @@ export class TabsPanel extends TabsListBase {
    * @param {DragEvent} event
    */
   _onDragStart(event) {
+    if (
+      Services.prefs.getBoolPref("widget.gecko-w10m.desktop-mode", false) ||
+      Services.prefs.getBoolPref("widget.gecko-w10m.standalone-mode", false)
+    ) {
+      event.preventDefault();
+      return;
+    }
+
     const row = this._getTargetRowFromEvent(event);
     if (!row) {
       return;

@@ -11,9 +11,20 @@
 #include "mozilla/Types.h"
 #include "mozilla/mozalloc_oom.h"
 
+#if defined(GECKO_W10M)
+#  include "../../../memory/mozalloc/GeckoW10mNote.h"
+#endif
+
 // MOZ_Crash wrapper for use by rust, since MOZ_Crash is an inline function.
 extern "C" void RustMozCrash(const char* aFilename, int aLine,
                              const char* aReason) {
+#if defined(GECKO_W10M)
+  // UWP has no usable stderr at this point. Preserve the Rust panic payload
+  // before MOZ_Crash deliberately breaks and writes through null.
+  gecko_w10m::Note("Rust MOZ_CRASH:");
+  gecko_w10m::Note(aReason ? aReason : "(no reason)");
+  gecko_w10m::Note(aFilename ? aFilename : "(no filename)");
+#endif
   MOZ_Crash(aFilename, aLine, aReason);
 }
 

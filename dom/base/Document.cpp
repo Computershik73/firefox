@@ -3717,7 +3717,23 @@ nsresult Document::StartDocumentLoad(const char* aCommand, nsIChannel* aChannel,
     CheckIsBadPolicy(policy, docShell->GetBrowsingContext(), aChannel);
 
     // Setting the opener policy on a discarded context has no effect.
+#if defined(GECKO_W10M)
+    // Desktop Gecko replaces the top-level BrowsingContext when a navigation
+    // enters or leaves a COOP+COEP isolated group.  GeckoW10m intentionally
+    // runs without that multiprocess handoff, so committing the transition on
+    // the existing context fails CanSet and MOZ_CRASHes.  Keep the current,
+    // already-enforced policy when the in-place transition is not permitted.
+    auto* browsingContext = docShell->GetBrowsingContext();
+    auto requireCORP =
+        nsILoadInfo::OPENER_POLICY_SAME_ORIGIN_EMBEDDER_POLICY_REQUIRE_CORP;
+    if (browsingContext->GetOpenerPolicy() == policy ||
+        (browsingContext->GetOpenerPolicy() != requireCORP &&
+         policy != requireCORP)) {
+      (void)browsingContext->SetOpenerPolicy(policy);
+    }
+#else
     (void)docShell->GetBrowsingContext()->SetOpenerPolicy(policy);
+#endif
   }
 
   ApplyCspFromLoadInfo(loadInfo);

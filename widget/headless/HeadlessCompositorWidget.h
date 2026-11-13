@@ -43,6 +43,27 @@ class HeadlessCompositorWidget final : public CompositorWidget,
   // hardware path these are drawn in software and composited by the shell
   // over the GPU picture, so RenderCompositor::Create asks.
   bool IsOverlay() const { return mIsOverlay; }
+  bool IsExternalWindow() const { return mIsExternalWindow; }
+  bool RequiresSoftwareComposition() const;
+  void SetExternalWindow(bool aExternal);
+  static int32_t CopyExternalFrame(void* aDest, int32_t aCapacity,
+                                   int32_t* aWidth, int32_t* aHeight,
+                                   uint64_t* aSerial);
+  static bool HasExternalWindow();
+  static bool IsSoftwareMainPresenting();
+  // Registry ABI v1: IDs are never reused. Binding is immutable for the
+  // compositor lifetime so an EGL context cannot accidentally change panels.
+  static uint32_t ListWindowIds(uint64_t* aIds, uint32_t aCapacity);
+  static bool BindWindowPanel(uint64_t aId, void* aPanel);
+  static bool PrepareWindowPanel(uint64_t aId, void* aPanel);
+  static void* PanelForWidgetKey(uintptr_t aKey, bool* aManaged = nullptr);
+  static void ForgetWindowPanel(uint64_t aId);
+  static void ManagedFramePresented(uintptr_t aKey);
+  static void PublishManagedPixels(uintptr_t aKey, int32_t aWidth,
+                                   int32_t aHeight, const uint8_t* aPixels);
+  static int32_t CopyManagedFrame(uint64_t aId, void* aDest, int32_t aCapacity,
+      int32_t* aWidth, int32_t* aHeight, uint64_t* aSerial, int32_t* aSoftware);
+
 #endif
 
   // CompositorWidget Overrides
@@ -86,6 +107,7 @@ class HeadlessCompositorWidget final : public CompositorWidget,
   // menu and the window underneath it took turns writing the same pixels and
   // the shell showed whatever was there when it looked -- which is what the
   // streaks across the screen were.
+  uint64_t mWindowId = 0;
   UniquePtr<uint8_t[]> mPixels;
   size_t mCapacity = 0;
   int32_t mWidth = 0;
@@ -97,11 +119,20 @@ class HeadlessCompositorWidget final : public CompositorWidget,
   // of it. About Nightly is a dialog, and treating it as a window of its
   // own is what put it and the browser in a fight over the same frame.
   bool mIsOverlay = false;
+  bool mIsExternalWindow = false;
+  bool mIsManagedWindow = false;
+  int32_t mManagedFrameSource = 0;  // 0 pending, 1 software, 2 GPU
+  uint64_t mExternalSerial = 0;
   // The size this window's buffer was last fully painted at. Until it matches
   // the current size, the buffer holds the previous picture at the previous
   // row length and must not be composited.
   int32_t mPaintedWidth = 0;
   int32_t mPaintedHeight = 0;
+  // StartRemoteDrawing exposes mPixels directly to Skia. Keep the shared
+  // frame lock for the complete paint, not just while dimensions are changed,
+  // so the UWP host can never copy or observe a buffer while it is being
+  // reallocated/written.
+  bool mFrameLockHeldForDrawing = false;
   mozilla::Atomic<bool> mVisible{true};
   DataMutex<LayoutDeviceIntPoint> mOrigin;
 #endif

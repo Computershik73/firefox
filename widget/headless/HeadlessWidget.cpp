@@ -7,8 +7,28 @@
 
 #if defined(GECKO_W10M)
 #  include "mozilla/Atomics.h"
+#  include "mozilla/PointerLockManager.h"
 #  include "mozilla/Sprintf.h"
 extern "C" void GeckoW10mNote(const char* text);
+extern "C" void gecko_w10m_window_destroyed(uint64_t aId);
+extern "C" void gecko_w10m_window_created(uint64_t aId);
+extern "C" void gecko_w10m_window_text_focus_changed(uint64_t aId, bool aWanted, bool aFresh);
+
+namespace {
+void (*gGeckoW10mPointerLockSink)(int32_t) = nullptr;
+}
+
+extern "C" __declspec(dllexport) void gecko_w10m_set_pointer_lock_sink(
+    void (*aSink)(int32_t)) {
+  gGeckoW10mPointerLockSink = aSink;
+}
+
+extern "C" __declspec(dllexport) void gecko_w10m_exit_pointer_lock() {
+  NS_DispatchToMainThread(NS_NewRunnableFunction(
+      "gecko_w10m_exit_pointer_lock", []() {
+        mozilla::PointerLockManager::Unlock("GeckoW10m host Escape");
+      }));
+}
 #endif
 
 #include "BasicEvents.h"
@@ -32,6 +52,12 @@ extern "C" void GeckoW10mNote(const char* text);
 #include "mozilla/widget/PlatformWidgetTypes.h"
 #include "mozilla/widget/Screen.h"
 #include "nsIScreen.h"
+#include "nsThreadUtils.h"
+#if defined(GECKO_W10M)
+#  include "mozilla/widget/nsAutoRollup.h"
+#  include "nsIRollupListener.h"
+extern "C" bool gecko_w10m_managed_viewport(uint64_t, int32_t*, int32_t*);
+#endif
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -111,17 +137,111 @@ HeadlessWidget::~HeadlessWidget() {
 namespace {
 // Raw, and main thread only. A strong reference here would keep a window
 // alive past its own teardown, which is worse than the discipline.
+mozilla::Atomic<uint64_t> sNextGeckoW10mWindowId{0};
+std::vector<HeadlessWidget*> sGeckoW10mRegisteredWindows;
 HeadlessWidget* sShownWidget = nullptr;
+HeadlessWidget* sExternalWidget = nullptr;
 // Popups in creation order; the last visible one under a point is on top.
 // The shell delivers every tap to the browser window, and an operating system
 // would have delivered it to the popup window under the finger instead, so
 // that is done here.
 std::vector<HeadlessWidget*> sGeckoW10mPopups;
+void (*sGeckoW10mCursorSink)(int32_t) = nullptr;
 }  // namespace
+
+extern "C" __declspec(dllexport) void gecko_w10m_set_cursor_sink(
+    void (*aSink)(int32_t)) {
+  sGeckoW10mCursorSink = aSink;
+}
+
+void HeadlessWidget::SetCursor(const Cursor& aCursor) {
+  nsIWidget::SetCursor(aCursor);
+  if (sGeckoW10mCursorSink) {
+    sGeckoW10mCursorSink(static_cast<int32_t>(aCursor.mDefaultCursor));
+  }
+}
+
+uint64_t HeadlessWidget::AllocateWindowId() { return ++sNextGeckoW10mWindowId; }
+
+already_AddRefed<HeadlessWidget> HeadlessWidget::WindowById(uint64_t aId) {
+  MOZ_ASSERT(NS_IsMainThread());
+  for (auto* window : sGeckoW10mRegisteredWindows) {
+    if (window->mGeckoW10mWindowId == aId) {
+      RefPtr<HeadlessWidget> result = window;
+      return result.forget();
+    }
+  }
+  return nullptr;
+}
 
 HeadlessWidget* HeadlessWidget::ShownWidget() {
   MOZ_ASSERT(NS_IsMainThread());
+  if (sExternalWidget && sExternalWidget->IsVisible()) {
+    RefPtr<HeadlessWidget> active = GetActiveWindow();
+    if (active == sExternalWidget) {
+      return sExternalWidget;
+    }
+  }
   return sShownWidget;
+}
+
+HeadlessWidget* HeadlessWidget::MainWidget() {
+  MOZ_ASSERT(NS_IsMainThread());
+  return sShownWidget;
+}
+
+HeadlessWidget* HeadlessWidget::ExternalWidget() {
+  MOZ_ASSERT(NS_IsMainThread());
+  return sExternalWidget && sExternalWidget->IsVisible() ? sExternalWidget
+                                                         : nullptr;
+}
+
+void HeadlessWidget::ActivateExternalWidget(bool aExternal) {
+  MOZ_ASSERT(NS_IsMainThread());
+  HeadlessWidget* target = aExternal ? ExternalWidget() : sShownWidget;
+  if (target) {
+    target->RaiseWindow();
+  }
+}
+
+void HeadlessWidget::GeckoW10mSetExternalWindow(bool aExternal) {
+  if (mGeckoW10mExternalWindow == aExternal) {
+    return;
+  }
+  mGeckoW10mExternalWindow = aExternal;
+  if (aExternal) {
+    sExternalWidget = this;
+  } else if (sExternalWidget == this) {
+    sExternalWidget = nullptr;
+  }
+  if (mCompositorWidget) {
+    mCompositorWidget->SetExternalWindow(aExternal);
+  }
+}
+
+void HeadlessWidget::GeckoW10mUpdateWindowRole() {
+  // A real secondary top-level/dialog remains external for the lifetime of
+  // its native widget. Popup panels are always attached browser chrome.
+  if (mGeckoW10mManagedWindow) {
+    GeckoW10mSetExternalWindow(false);
+    return;
+  }
+  bool external = mGeckoW10mExternalWindow ||
+                  mWindowType == WindowType::Dialog;
+  if (mWindowType == WindowType::TopLevel) {
+    // The graphics sanity window is shown and hidden before the browser. A
+    // later top-level is external only while the real browser is still shown.
+    external = external ||
+               (sShownWidget && sShownWidget != this &&
+                sShownWidget->IsVisible());
+  } else if (mWindowType == WindowType::Popup) {
+    // Panels are browser chrome, even when Firefox makes them as tall as the
+    // browser (the hamburger menu is 740x1296 at 2x on Xbox). Promoting by
+    // size mistook that menu for a DesktopMode window. Actual Library/
+    // Downloads windows arrive as a second TopLevel and are handled above.
+    external = false;
+  }
+  GeckoW10mSetExternalWindow(external);
 }
 
 namespace {
@@ -188,6 +308,10 @@ void HeadlessWidget::SetInputContext(const InputContext& aContext,
   const bool wanted =
       aContext.mIMEState.mEnabled == IMEEnabled::Enabled ||
       aContext.mIMEState.mEnabled == IMEEnabled::Password;
+  gecko_w10m_window_text_focus_changed(mGeckoW10mWindowId, wanted,
+      aAction.mFocusChange != InputContextAction::FOCUS_NOT_CHANGED ||
+      aAction.mCause == InputContextAction::CAUSE_MOUSE ||
+      aAction.mCause == InputContextAction::CAUSE_TOUCH);
   if (wanted) {
     sTextInputKind = KindOf(aContext);
     // Focus moving onto a field, or a field being clicked while it has the
@@ -204,8 +328,17 @@ void HeadlessWidget::SetInputContext(const InputContext& aContext,
 
 void HeadlessWidget::Destroy() {
 #if defined(GECKO_W10M)
+  HeadlessCompositorWidget::ForgetWindowPanel(mGeckoW10mWindowId);
+  gecko_w10m_window_destroyed(mGeckoW10mWindowId);
+  sGeckoW10mRegisteredWindows.erase(
+      std::remove(sGeckoW10mRegisteredWindows.begin(),
+                  sGeckoW10mRegisteredWindows.end(), this),
+      sGeckoW10mRegisteredWindows.end());
   if (sShownWidget == this) {
     sShownWidget = nullptr;
+  }
+  if (sExternalWidget == this) {
+    sExternalWidget = nullptr;
   }
   for (auto it = sGeckoW10mPopups.begin(); it != sGeckoW10mPopups.end(); ++it) {
     if (*it == this) {
@@ -244,13 +377,35 @@ nsresult HeadlessWidget::Create(nsIWidget* aParent,
                                 const LayoutDeviceIntRect& aRect,
                                 const widget::InitData& aInitData) {
   BaseCreate(aParent, aInitData);
+#if defined(GECKO_W10M)
+  MOZ_ASSERT(NS_IsMainThread());
+  mGeckoW10mManagedWindow = aInitData.mGeckoW10mWindowId != 0;
+  mGeckoW10mWindowId = mGeckoW10mManagedWindow
+      ? aInitData.mGeckoW10mWindowId : AllocateWindowId();
+  sGeckoW10mRegisteredWindows.push_back(this);
+  gecko_w10m_window_created(mGeckoW10mWindowId);
+#endif
   mBounds = aRect;
-  mRestoreBounds = aRect;
+#if defined(GECKO_W10M)
+  if (mGeckoW10mManagedWindow) {
+    int32_t width = 0, height = 0;
+    if (gecko_w10m_managed_viewport(mGeckoW10mWindowId, &width, &height)) {
+      mBounds.SizeTo(LayoutDeviceIntSize(width, height));
+    }
+  }
+#endif
+  mRestoreBounds = mBounds;
   mAlwaysOnTop = aInitData.mAlwaysOnTop;
 #if defined(GECKO_W10M)
   if (mWindowType == WindowType::Popup) {
+    GeckoW10mNote("popup-trace: popup widget created");
     sGeckoW10mPopups.push_back(this);
   }
+  // Establish the role before WebRender asks for its compositor. Doing this
+  // only in Show/Resize is too late: a secondary top-level can otherwise be
+  // constructed as the main hardware window, steal the main frame slots, and
+  // leave the real browser's panel blank after a resize/maximize.
+  GeckoW10mUpdateWindowRole();
 #endif
   return NS_OK;
 }
@@ -300,10 +455,14 @@ int32_t gGeckoW10mPendingHeight = 0;
 
 void HeadlessWidget::Show(bool aState) {
 #if defined(GECKO_W10M)
+  if (aState) {
+    GeckoW10mUpdateWindowRole();
+  }
   if (mCompositorWidget) {
     mCompositorWidget->NotifyVisibilityChanged(aState);
   }
-  if (aState && mWindowType == WindowType::TopLevel) {
+  if (aState && mWindowType == WindowType::TopLevel &&
+      !mGeckoW10mExternalWindow && !mGeckoW10mManagedWindow) {
     // Last one shown wins, which after startup is the browser window: the
     // graphics sanity test shows and hides one of its own before it.
     sShownWidget = this;
@@ -317,6 +476,10 @@ void HeadlessWidget::Show(bool aState) {
             }
           }));
     }
+  }
+  if (mGeckoW10mExternalWindow) {
+    sExternalWidget = aState ? this : (sExternalWidget == this ? nullptr
+                                                               : sExternalWidget);
   }
 #endif
   mVisible = aState;
@@ -446,6 +609,11 @@ void HeadlessWidget::ResizeInternal(int32_t aWidth, int32_t aHeight,
 #endif
   ConstrainSize(&aWidth, &aHeight);
 #if defined(GECKO_W10M)
+  if (mGeckoW10mManagedWindow) {
+    gecko_w10m_managed_viewport(mGeckoW10mWindowId, &aWidth, &aHeight);
+  }
+#endif
+#if defined(GECKO_W10M)
   // ConstrainSize knows only the minimum and maximum the front end asked for;
   // nothing in the path brings a window down to the size of the display. On a
   // desktop a dialog wider than the screen is merely a window wider than the
@@ -467,6 +635,19 @@ void HeadlessWidget::ResizeInternal(int32_t aWidth, int32_t aHeight,
     }
   }
 #endif
+#if defined(GECKO_W10M)
+  GeckoW10mUpdateWindowRole();
+
+  // Gecko may answer WindowResized by assigning the exact same dimensions
+  // again. Forwarding that no-op back to the listener recursively created
+  // thousands of popup resizes in one millisecond and ended in a WinRT
+  // fail-fast. Native widget backends do not emit a resize notification when
+  // the native size did not change; headless should behave the same way.
+  if (mBounds.width == aWidth && mBounds.height == aHeight) {
+    return;
+  }
+#endif
+
   mBounds.SizeTo(LayoutDeviceIntSize(aWidth, aHeight));
 #if defined(GECKO_W10M)
   {
@@ -599,6 +780,16 @@ void HeadlessWidget::GeckoW10mSetDpi(int32_t aDpi) {
 }
 
 float HeadlessWidget::GetDPI() { return sGeckoW10mDpi; }
+
+void HeadlessWidget::UpdateWindowDraggingRegion(
+    const LayoutDeviceIntRegion& aRegion) {
+  mDraggableRegion = aRegion;
+}
+
+bool HeadlessWidget::GeckoW10mPointIsDraggable(
+    const LayoutDeviceIntPoint& aPoint) const {
+  return mDraggableRegion.Contains(aPoint);
+}
 #endif
 
 nsresult HeadlessWidget::MakeFullScreen(bool aFullScreen) {
@@ -614,24 +805,20 @@ nsresult HeadlessWidget::MakeFullScreen(bool aFullScreen) {
   }
 
 #if defined(GECKO_W10M)
-  // Order is the whole fix here.
-  //
-  // The window is resized first, synchronously, to the rectangle the shell
-  // reports as the screen -- which is the whole display, the size this window
-  // will have once the status bar and the navigation bar are out of the way.
-  // Only then does the size-mode change go out, and only then does the page
-  // hear "fullscreenchange". So the page builds its fullscreen player once,
-  // already at the final size.
-  //
-  // Doing it the other way round is what kept throwing the player back into a
-  // window: the shell hid the bars, the room grew a moment later, and the page
-  // was handed a resize in the middle of its own transition. vkvideo's player
-  // answers a resize by rebuilding itself, which removes the element that
-  // asked for fullscreen, and Gecko has no choice but to leave.
-  //
-  // The shell is told as well, because hiding the bars is its job; by the time
-  // it has, the window is already the size it will measure, so nothing resizes
-  // twice.
+  // Preserve the ordering used by the original Gecko W10M host. The screen
+  // rectangle is the final DesktopMode desktop size, while the current Shell
+  // window is only the viewport. Queue the outer-window transition first,
+  // synchronously resize Gecko to that final screen rectangle, and only then
+  // publish the size-mode change to DOM fullscreen. When the XAML layout
+  // catches up it reports the same dimensions instead of resizing a playing
+  // video for a second time in the middle of its fullscreen transition.
+  if (mGeckoW10mManagedWindow) {
+    // DOM fullscreen in a Web App stays inside its Shell-owned viewport.
+    // Never send this window's transition to the primary browser's global
+    // fullscreen callback or resize it to the primary headless screen.
+    if (mWidgetListener) mWidgetListener->SizeModeChanged(mSizeMode);
+    return NS_OK;
+  }
   GeckoW10mFullscreenChanged(aFullScreen);
   nsIWidget::InfallibleMakeFullScreen(aFullScreen);
   if (mWidgetListener) {
@@ -691,13 +878,46 @@ nsresult HeadlessWidget::SynthesizeNativeMouseEvent(
     nsISynthesizedEventCallback* aCallback) {
   AutoSynthesizedEventCallbackNotifier notifier(aCallback);
 #if defined(GECKO_W10M)
-  if (mWindowType == WindowType::TopLevel) {
-    for (auto it = sGeckoW10mPopups.rbegin(); it != sGeckoW10mPopups.rend(); ++it) {
+  nsAutoRollup autoRollup;
+  RefPtr<HeadlessWidget> deathGrip(this);
+  if (mNativePointerLocked) {
+    if (aNativeMessage == NativeMouseMessage::Move) {
+      return NS_OK;
+    }
+    aPoint = WidgetToScreenOffset() +
+             LayoutDeviceIntPoint(mBounds.Width() / 2, mBounds.Height() / 2);
+  } else if (mWindowType == WindowType::TopLevel) {
+    for (auto it = sGeckoW10mPopups.rbegin();
+         it != sGeckoW10mPopups.rend(); ++it) {
       HeadlessWidget* popup = *it;
-      if (popup->mVisible && !popup->mDestroyed &&
+      if (popup != sExternalWidget && popup->mVisible && !popup->mDestroyed &&
           popup->mBounds.Contains(aPoint.x, aPoint.y)) {
         return popup->SynthesizeNativeMouseEvent(aPoint, aNativeMessage, aButton,
                                                  aModifierFlags, nullptr);
+      }
+    }
+
+    // A native widget backend closes an open popup before delivering a mouse
+    // down outside it. Headless has no OS window message to trigger that
+    // rollup, so do the equivalent here after establishing that the point did
+    // not belong to any popup widget.
+    if (aNativeMessage == NativeMouseMessage::ButtonDown) {
+      if (nsIRollupListener* listener = GetActiveRollupListener()) {
+        nsIRollupListener::RollupOptions options{
+            0, &aPoint, nsIRollupListener::AllowAnimations::Yes};
+        bool consume = false;
+        if (aButton == MouseButton::ePrimary) {
+          nsIContent* lastRollup = nullptr;
+          consume = listener->Rollup(options, &lastRollup);
+          nsAutoRollup::SetLastRollup(lastRollup);
+        } else {
+          consume = listener->Rollup(options);
+        }
+        // Windows deliberately lets a right click continue after dismissing
+        // the old popup so it can open the new context menu.
+        if (consume && aButton != MouseButton::eSecondary) {
+          return NS_OK;
+        }
       }
     }
   }
@@ -728,8 +948,57 @@ nsresult HeadlessWidget::SynthesizeNativeMouseEvent(
   }
   event.AssignEventTime(WidgetEventTime());
   DispatchInputEvent(&event);
+#if defined(GECKO_W10M)
+  // Native Windows produces WM_CONTEXTMENU after a right-button release.
+  // Headless has no HWND/DefWindowProc to produce it, so mirror that native
+  // sequence here; mousedown/up alone do not open Firefox's context menu.
+  if (msg == eMouseUp && aButton == MouseButton::eSecondary &&
+      !mNativePointerLocked) {
+    WidgetMouseEvent contextMenu(true, eContextMenu, this,
+                                 WidgetMouseEvent::eReal);
+    contextMenu.mRefPoint = aPoint - WidgetToScreenOffset();
+    contextMenu.mClickCount = 1;
+    contextMenu.AssignEventTime(WidgetEventTime());
+    GeckoW10mNote("popup-trace: contextmenu dispatch begin");
+    DispatchInputEvent(&contextMenu);
+    GeckoW10mNote("popup-trace: contextmenu dispatch end");
+  }
+#endif
   return NS_OK;
 }
+
+#if defined(GECKO_W10M)
+void HeadlessWidget::LockNativePointer(NativePointerLockMode aMode) {
+  mNativePointerLocked = true;
+  if (gGeckoW10mPointerLockSink) {
+    gGeckoW10mPointerLockSink(1);
+  }
+  GeckoW10mNote(aMode == NativePointerLockMode::Unadjusted
+                    ? "pointer-lock: locked (unadjusted)"
+                    : "pointer-lock: locked");
+}
+
+void HeadlessWidget::UnlockNativePointer() {
+  mNativePointerLocked = false;
+  if (gGeckoW10mPointerLockSink) {
+    gGeckoW10mPointerLockSink(0);
+  }
+  GeckoW10mNote("pointer-lock: unlocked");
+}
+
+void HeadlessWidget::GeckoW10mSynthesizeRelativeMouseMove(
+    LayoutDeviceIntPoint aMovement) {
+  if (!mNativePointerLocked || (!aMovement.x && !aMovement.y)) {
+    return;
+  }
+  WidgetMouseEvent event(true, eMouseMove, this, WidgetMouseEvent::eReal);
+  event.mRefPoint = LayoutDeviceIntPoint(mBounds.Width() / 2,
+                                         mBounds.Height() / 2);
+  event.mMovement = Some(aMovement);
+  event.AssignEventTime(WidgetEventTime());
+  DispatchInputEvent(&event);
+}
+#endif
 
 nsresult HeadlessWidget::SynthesizeNativeMouseScrollEvent(
     mozilla::LayoutDeviceIntPoint aPoint, uint32_t aNativeMessage,
@@ -737,14 +1006,42 @@ nsresult HeadlessWidget::SynthesizeNativeMouseScrollEvent(
     nsIWidget::NativeModifiers aModifierFlags, uint32_t aAdditionalFlags,
     nsISynthesizedEventCallback* aCallback) {
   AutoSynthesizedEventCallbackNotifier notifier(aCallback);
+#if defined(GECKO_W10M)
+  // Firefox chrome popups (including the application menu) are independent
+  // widgets. The shell owns one full-screen input surface, so route the wheel
+  // to the topmost visible popup under the pointer just as mouse clicks are.
+  if (mWindowType == WindowType::TopLevel) {
+    for (auto it = sGeckoW10mPopups.rbegin(); it != sGeckoW10mPopups.rend();
+         ++it) {
+      HeadlessWidget* popup = *it;
+      if (popup != sExternalWidget && popup->mVisible && !popup->mDestroyed &&
+          popup->mBounds.Contains(aPoint.x, aPoint.y)) {
+        return popup->SynthesizeNativeMouseScrollEvent(
+            aPoint, aNativeMessage, aDeltaX, aDeltaY, aDeltaZ, aModifierFlags,
+            aAdditionalFlags, nullptr);
+      }
+    }
+  }
+#endif
   // The various platforms seem to handle scrolling deltas differently,
   // but the following seems to emulate it well enough.
   WidgetWheelEvent event(true, eWheel, this);
   event.mDeltaMode = MOZ_HEADLESS_SCROLL_DELTA_MODE;
-  event.mIsNoLineOrPageDelta = true;
   event.mDeltaX = -aDeltaX * MOZ_HEADLESS_SCROLL_MULTIPLIER;
   event.mDeltaY = -aDeltaY * MOZ_HEADLESS_SCROLL_MULTIPLIER;
   event.mDeltaZ = -aDeltaZ * MOZ_HEADLESS_SCROLL_MULTIPLIER;
+#if defined(GECKO_W10M) && defined(XP_WIN)
+  // Match WinMouseScrollHandler rather than the generic headless test event.
+  // XUL scrollboxes consume the integral line delta; APZ also uses the wheel
+  // tick to group successive notches into one transaction.
+  event.mIsNoLineOrPageDelta = false;
+  event.mLineOrPageDeltaX = static_cast<int32_t>(event.mDeltaX);
+  event.mLineOrPageDeltaY = static_cast<int32_t>(event.mDeltaY);
+  event.mWheelTicksX = -aDeltaX / 120.0;
+  event.mWheelTicksY = -aDeltaY / 120.0;
+#else
+  event.mIsNoLineOrPageDelta = true;
+#endif
   event.mRefPoint = aPoint - WidgetToScreenOffset();
   event.AssignEventTime(WidgetEventTime());
   DispatchInputEvent(&event);
@@ -766,7 +1063,7 @@ nsresult HeadlessWidget::SynthesizeNativeTouchPoint(
   if (mWindowType == WindowType::TopLevel) {
     for (auto it = sGeckoW10mPopups.rbegin(); it != sGeckoW10mPopups.rend(); ++it) {
       HeadlessWidget* popup = *it;
-      if (popup->mVisible && !popup->mDestroyed &&
+      if (popup != sExternalWidget && popup->mVisible && !popup->mDestroyed &&
           popup->mBounds.Contains(aPoint.x, aPoint.y)) {
         return popup->SynthesizeNativeTouchPoint(aPointerId, aPointerState,
                                                  aPoint, aPointerPressure,

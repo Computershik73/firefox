@@ -16,6 +16,7 @@
 #include "BinaryPath.h"
 #include "gfxUtils.h"
 #include "imgIContainer.h"
+#include "imgIEncoder.h"
 #include "imgIRequest.h"
 #include "imgITools.h"
 #include "mozilla/dom/Element.h"
@@ -44,6 +45,7 @@
 #include "nsIPrefService.h"
 #include "nsIStringBundle.h"
 #include "nsITimer.h"
+#include "nsIURI.h"
 #include "nsIWindowsRegKey.h"
 #include "nsIXULAppInfo.h"
 #include "nsLocalFile.h"
@@ -107,6 +109,18 @@ using namespace ABI::Windows::UI::StartScreen;
 
 using namespace mozilla;
 using mozilla::intl::Localization;
+
+#if defined(GECKO_W10M)
+namespace {
+using GeckoW10mWallpaperSink = void (*)(const wchar_t* path);
+GeckoW10mWallpaperSink gGeckoW10mWallpaperSink = nullptr;
+}  // namespace
+
+extern "C" __declspec(dllexport) void gecko_w10m_set_wallpaper_sink(
+    GeckoW10mWallpaperSink aSink) {
+  gGeckoW10mWallpaperSink = aSink;
+}
+#endif
 
 struct SysFreeStringDeleter {
   void operator()(BSTR aPtr) { ::SysFreeString(aPtr); }
@@ -836,6 +850,94 @@ nsWindowsShellService::SetDesktopBackground(dom::Element* aElement,
   nsCOMPtr<imgIContainer> container;
   rv = request->GetImage(getter_AddRefs(container));
   if (!container) return NS_ERROR_FAILURE;
+
+#if defined(GECKO_W10M)
+  if (gGeckoW10mWallpaperSink) {
+    // For ordinary network images, let DesktopMode download the original
+    // resource asynchronously. Encoding a multi-megapixel image to PNG here
+    // blocks Gecko's main thread and, in the in-process host, makes the whole
+    // desktop appear frozen. Keep the decoded-image path below for blob/data
+    // and other non-reusable sources.
+    nsCOMPtr<nsIURI> imageURI;
+    if (NS_SUCCEEDED(request->GetFinalURI(getter_AddRefs(imageURI))) &&
+        imageURI) {
+      bool isHttp = false;
+      bool isHttps = false;
+      if ((NS_SUCCEEDED(imageURI->SchemeIs("http", &isHttp)) && isHttp) ||
+          (NS_SUCCEEDED(imageURI->SchemeIs("https", &isHttps)) && isHttps)) {
+        nsAutoCString spec;
+        if (NS_SUCCEEDED(imageURI->GetSpec(spec)) && !spec.IsEmpty()) {
+          NS_ConvertUTF8toUTF16 wideSpec(spec);
+          gGeckoW10mWallpaperSink(wideSpec.get());
+          return NS_OK;
+        }
+      }
+    }
+
+    // The regular Windows implementation below maps the decoded surface and
+    // writes a legacy BMP before touching the registry.  That path is both
+    // unnecessary for DesktopMode and unsafe for some GPU-backed image
+    // surfaces used by the headless UWP host.  Re-encode the already decoded
+    // image through imagelib instead.  This also works for blob:, data: and
+    // authenticated images, for which downloading the source URL again would
+    // not be equivalent to the image on which the user clicked.
+    nsCOMPtr<imgITools> imgTools =
+        do_GetService("@mozilla.org/image/tools;1", &rv);
+    NS_ENSURE_SUCCESS(rv, rv);
+    NS_ENSURE_TRUE(imgTools, NS_ERROR_FAILURE);
+
+    nsCOMPtr<nsIInputStream> encoded;
+    rv = imgTools->EncodeImage(container, "image/png"_ns, u""_ns,
+                               getter_AddRefs(encoded));
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    nsCOMPtr<imgIEncoder> encoder = do_QueryInterface(encoded, &rv);
+    NS_ENSURE_SUCCESS(rv, rv);
+    NS_ENSURE_TRUE(encoder, NS_ERROR_FAILURE);
+
+    uint32_t size = 0;
+    rv = encoder->GetImageBufferUsed(&size);
+    NS_ENSURE_SUCCESS(rv, rv);
+    NS_ENSURE_TRUE(size, NS_ERROR_FAILURE);
+
+    char* bytes = nullptr;
+    rv = encoder->GetImageBuffer(&bytes);
+    NS_ENSURE_SUCCESS(rv, rv);
+    NS_ENSURE_TRUE(bytes, NS_ERROR_FAILURE);
+
+    nsCOMPtr<nsIFile> file;
+    rv = NS_GetSpecialDirectory(NS_OS_TEMP_DIR, getter_AddRefs(file));
+    NS_ENSURE_SUCCESS(rv, rv);
+    NS_ENSURE_TRUE(file, NS_ERROR_FAILURE);
+    rv = file->Append(u"Strawfox Desktop Background.png"_ns);
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = file->CreateUnique(nsIFile::NORMAL_FILE_TYPE, 0600);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    nsCOMPtr<nsIOutputStream> stream;
+    rv = NS_NewLocalFileOutputStream(getter_AddRefs(stream), file);
+    NS_ENSURE_SUCCESS(rv, rv);
+    NS_ENSURE_TRUE(stream, NS_ERROR_FAILURE);
+
+    uint32_t written = 0;
+    rv = stream->Write(bytes, size, &written);
+    nsresult closeRv = stream->Close();
+    if (NS_FAILED(rv) || written != size || NS_FAILED(closeRv)) {
+      (void)file->Remove(false);
+      return NS_FAILED(rv) ? rv : NS_ERROR_FAILURE;
+    }
+
+    nsAutoString path;
+    rv = file->GetPath(path);
+    if (NS_FAILED(rv)) {
+      (void)file->Remove(false);
+      return rv;
+    }
+
+    gGeckoW10mWallpaperSink(path.get());
+    return NS_OK;
+  }
+#endif
 
   // get the file name from localized strings, e.g. "Desktop Background", then
   // append the extension (".bmp").

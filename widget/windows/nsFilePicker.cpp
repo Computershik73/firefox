@@ -13,6 +13,7 @@
 #include <winuser.h>
 
 #include <utility>
+#include <array>
 
 #include "ContentAnalysis.h"
 #include "WinUtils.h"
@@ -21,6 +22,7 @@
 #include "mozilla/Components.h"
 #include "mozilla/Logging.h"
 #include "mozilla/ProfilerLabels.h"
+#include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_widget.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/dom/BrowsingContext.h"
@@ -45,6 +47,7 @@
 #include "nsReadableUtils.h"
 #include "nsString.h"
 #include "nsToolkit.h"
+#include "nsThreadUtils.h"
 #include "nsWindow.h"
 
 using mozilla::LogLevel;
@@ -59,6 +62,33 @@ constinit UniquePtr<char16_t[], nsFilePicker::FreeDeleter>
     nsFilePicker::sLastUsedUnicodeDirectory;
 
 #define MAX_EXTENSION_LENGTH 10
+
+#if defined(GECKO_W10M)
+using GeckoW10mFilePickerSink = int32_t (*)(int32_t, const char*, const char*,
+                                            const char*, char*, int32_t);
+static GeckoW10mFilePickerSink gGeckoW10mFilePickerSink = nullptr;
+
+extern "C" __declspec(dllexport) void gecko_w10m_set_file_picker_sink(
+    GeckoW10mFilePickerSink aSink) {
+  gGeckoW10mFilePickerSink = aSink;
+}
+
+extern "C" __declspec(dllexport) void gecko_w10m_set_download_directory(
+    const wchar_t* aPath) {
+  if (!aPath || !*aPath) {
+    return;
+  }
+  nsString path;
+  path.Assign(reinterpret_cast<const char16_t*>(aPath));
+  NS_DispatchToMainThread(NS_NewRunnableFunction(
+      "gecko_w10m_set_download_directory", [path = std::move(path)]() {
+        mozilla::Preferences::SetInt("browser.download.folderList", 2);
+        mozilla::Preferences::SetBool("browser.download.useDownloadDir", true);
+        mozilla::Preferences::SetString("browser.download.dir", path);
+        mozilla::Preferences::SetString("browser.download.lastDir", path);
+      }));
+}
+#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 // Helper classes
@@ -106,8 +136,13 @@ NS_IMPL_ISUPPORTS(nsFilePicker, nsIFilePicker)
 NS_IMETHODIMP nsFilePicker::Init(
     mozilla::dom::BrowsingContext* aBrowsingContext, const nsAString& aTitle,
     nsIFilePicker::Mode aMode, nsISupports* aGlobal) {
-  // Don't attempt to open a real file-picker in headless mode.
-  if (gfxPlatform::IsHeadless()) {
+  // GeckoW10m is headless only because XAML owns the window. Its picker is
+  // supplied by that host rather than by an HWND-backed widget.
+  if (gfxPlatform::IsHeadless()
+#if defined(GECKO_W10M)
+      && !gGeckoW10mFilePickerSink
+#endif
+  ) {
     return NS_ERROR_NOT_AVAILABLE;
   }
 
@@ -481,6 +516,25 @@ using fd_async::AsyncExecute;
  */
 RefPtr<mozilla::MozPromise<bool, nsFilePicker::Error, true>>
 nsFilePicker::ShowFolderPicker(const nsString& aInitialDir) {
+#if defined(GECKO_W10M)
+  if (gfxPlatform::IsHeadless()) {
+    using Promise = mozilla::MozPromise<bool, Error, true>;
+    if (!gGeckoW10mFilePickerSink) {
+      return Promise::CreateAndResolve(false, __func__);
+    }
+
+    NS_ConvertUTF16toUTF8 title(mTitle);
+    std::array<char, 64 * 1024> path{};
+    if (!gGeckoW10mFilePickerSink(static_cast<int32_t>(modeGetFolder),
+                                  title.get(), "", "", path.data(),
+                                  static_cast<int32_t>(path.size()))) {
+      return Promise::CreateAndResolve(false, __func__);
+    }
+    CopyUTF8toUTF16(nsDependentCString(path.data()), mUnicodeFile);
+    return Promise::CreateAndResolve(!mUnicodeFile.IsEmpty(), __func__);
+  }
+#endif
+
   namespace fd = ::mozilla::widget::filedialog;
   nsTArray<fd::Command> commands = {
       fd::SetOptions(FOS_PICKFOLDERS),
@@ -537,6 +591,47 @@ nsFilePicker::ShowFilePicker(const nsString& aInitialDir) {
     return Promise::CreateAndReject(std::move(error),
                                     "nsFilePicker::ShowFilePicker");
   };
+
+#if defined(GECKO_W10M)
+  if (gfxPlatform::IsHeadless()) {
+    if (!gGeckoW10mFilePickerSink) {
+      return Promise::CreateAndResolve(false, __func__);
+    }
+
+    NS_ConvertUTF16toUTF8 title(mTitle);
+    NS_ConvertUTF16toUTF8 defaultName(mDefaultFilename);
+    nsAutoCString extensions;
+    for (auto const& filter : mFilterList) {
+      if (!extensions.IsEmpty()) extensions.Append(';');
+      AppendUTF16toUTF8(filter.filter, extensions);
+    }
+
+    std::array<char, 64 * 1024> paths{};
+    if (!gGeckoW10mFilePickerSink(static_cast<int32_t>(mMode), title.get(),
+                                  defaultName.get(), extensions.get(),
+                                  paths.data(),
+                                  static_cast<int32_t>(paths.size()))) {
+      return Promise::CreateAndResolve(false, __func__);
+    }
+
+    nsDependentCString encoded(paths.data());
+    if (mMode != modeOpenMultiple) {
+      CopyUTF8toUTF16(encoded, mUnicodeFile);
+      return Promise::CreateAndResolve(!mUnicodeFile.IsEmpty(), __func__);
+    }
+
+    for (const auto& path : encoded.Split('\n')) {
+      if (path.IsEmpty()) continue;
+      nsCOMPtr<nsIFile> file;
+      nsString wide;
+      CopyUTF8toUTF16(path, wide);
+      if (NS_SUCCEEDED(NS_NewLocalFile(wide, getter_AddRefs(file)))) {
+        mFiles.AppendObject(file);
+      }
+    }
+    return Promise::CreateAndResolve(!mFiles.IsEmpty(), __func__);
+  }
+#endif
 
   namespace fd = ::mozilla::widget::filedialog;
   nsTArray<fd::Command> commands;
@@ -758,8 +853,11 @@ nsresult nsFilePicker::Open(nsIFilePickerShownCallback* aCallback) {
     return NS_OK;
   }
 
-  // Don't attempt to open a real file-picker in headless mode.
-  if (gfxPlatform::IsHeadless()) {
+  if (gfxPlatform::IsHeadless()
+#if defined(GECKO_W10M)
+      && !gGeckoW10mFilePickerSink
+#endif
+  ) {
     return nsresult::NS_ERROR_NOT_AVAILABLE;
   }
 

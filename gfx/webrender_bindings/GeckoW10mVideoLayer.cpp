@@ -902,9 +902,19 @@ extern "C" __declspec(dllexport) void gecko_w10m_video_layer_ack(
 // device pixels; aCovered, how many of the page's tiles do. True: the display
 // shows it, draw a transparent hole -- over aRects[12..16] alone when that is
 // set, the part the panel shows; WebRender draws the video in the rest.
+// The hardware overlay panel belongs to the primary browser. Private windows
+// composite their videos into their own EGL surface instead of stealing it.
+static thread_local bool sPrivateVideoRenderer = false;
+extern "C" int gecko_w10m_private_video_scope(int active) {
+  const int previous = sPrivateVideoRenderer ? 1 : 0;
+  sPrivateVideoRenderer = active != 0;
+  return previous;
+}
+
 extern "C" int32_t gecko_w10m_video_layer_frame(uint64_t aExternalImageId,
                                                 float* aRects,
                                                 int32_t aCovered) {
+  if (sPrivateVideoRenderer) return 0;
   return Layer().Offer(mozilla::wr::ToExternalImageId(aExternalImageId), aRects,
                        aCovered);
 }

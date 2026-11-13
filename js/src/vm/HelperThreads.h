@@ -38,6 +38,11 @@ namespace js {
 class AutoLockHelperThreadState;
 struct PromiseHelperTask;
 
+#if defined(GECKO_W10M)
+static constexpr size_t LargeWasmCompilationThreshold = 16 * 1024 * 1024;
+static constexpr uint32_t LargeWasmCompilationTasks = 2;
+#endif
+
 namespace frontend {
 struct InitialStencilAndDelazifications;
 }

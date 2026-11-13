@@ -180,7 +180,7 @@ class GLLibraryEGL final {
 
   std::shared_ptr<EglDisplay> CreateDisplay(const EGLCreateDisplayFlags& aFlags,
                                             nsACString* const out_failureId);
-  std::shared_ptr<EglDisplay> CreateDisplay(ID3D11Device*);
+  std::shared_ptr<EglDisplay> CreateDisplay(ID3D11Device*, bool aOwnDevice = false);
   std::shared_ptr<EglDisplay> CreateDisplayForMetalDevice(
       uint64_t aMetalDeviceRegistryID);
   std::shared_ptr<EglDisplay> DefaultDisplay(nsACString* const out_failureId);
@@ -253,6 +253,7 @@ class GLLibraryEGL final {
   }
 
   EGLContext fGetCurrentContext() const { WRAP(fGetCurrentContext()); }
+  EGLDisplay fGetCurrentDisplay() const { WRAP(fGetCurrentDisplay()); }
 
   EGLBoolean fBindAPI(EGLenum api) const { WRAP(fBindAPI(api)); }
 
@@ -610,6 +611,7 @@ class GLLibraryEGL final {
     EGLBoolean(GLAPIENTRY* fTerminate)(EGLDisplay dpy);
     EGLSurface(GLAPIENTRY* fGetCurrentSurface)(EGLint);
     EGLContext(GLAPIENTRY* fGetCurrentContext)(void);
+    EGLDisplay(GLAPIENTRY* fGetCurrentDisplay)(void);
     EGLBoolean(GLAPIENTRY* fMakeCurrent)(EGLDisplay dpy, EGLSurface draw,
                                          EGLSurface read, EGLContext ctx);
     EGLBoolean(GLAPIENTRY* fDestroyContext)(EGLDisplay dpy, EGLContext ctx);
@@ -766,6 +768,10 @@ class EglDisplay final {
   std::bitset<UnderlyingValue(EGLExtension::Max)> mAvailableExtensions;
 
   bool mShouldLeakEGLDisplay = false;
+  // Only explicitly isolated displays own their EGLDevice wrapper. Legacy
+  // displays retain their existing lifetime policy.
+  friend class GLLibraryEGL;
+  EGLDeviceEXT mOwnedDevice = nullptr;
 
   struct PrivateUseOnly final {};
 

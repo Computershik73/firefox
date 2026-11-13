@@ -40,6 +40,17 @@ RenderCompositorSWGL::RenderCompositorSWGL(
 RenderCompositorSWGL::~RenderCompositorSWGL() {
   LOG("RenderCompositorSWGL::~RenderCompositorSWGL()");
 
+  // A short-lived popup can tear its renderer down after StartCompositing but
+  // before EndFrame/CancelFrame.  In that case SWGL still has the widget's
+  // DrawTarget installed as its default framebuffer.  Destroying the context
+  // first leaves that mapping live while the DrawTarget and the headless
+  // popup buffer are being released, which can turn the final SWGL writes into
+  // a null/stale-buffer access.  Finish the mapping while both the context and
+  // the widget are still alive.  CommitMappedBuffer(false) also detaches the
+  // framebuffer before handing the DrawTarget back to the widget.
+  if (mDT) {
+    CommitMappedBuffer(false);
+  }
   wr_swgl_destroy_context(mContext);
 }
 

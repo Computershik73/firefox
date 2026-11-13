@@ -15,6 +15,11 @@
 #include <cstdio>
 
 #if defined(ANGLE_ENABLE_WINDOWS_UWP)
+#    include <atomic>
+#    include <mutex>
+#    include <d3d11sdklayers.h>
+#    include <d3d11on12.h>
+#    include <dxgi1_4.h>
 #    include "libANGLE/renderer/d3d/d3d11/winrt/NativeWindow11WinRT.h"
 #endif
 
@@ -46,6 +51,315 @@ namespace rx
 
 namespace
 {
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+// A shared CPU breadcrumb ring preserves ordering across different windows.
+// It performs no file I/O until a failure; GPU probes below never wait.
+std::mutex sCommandMutex;
+char sCommands[128][448] = {};
+unsigned long long sCommandSequence = 0;
+std::atomic<unsigned> sChainIds{0};
+
+void RememberCommand(const char *line, bool dump)
+{
+    std::lock_guard<std::mutex> lock(sCommandMutex);
+    snprintf(sCommands[sCommandSequence % 128], sizeof(sCommands[0]), "%s", line);
+    ++sCommandSequence;
+    if (!dump) return;
+    AngleUwpNote("angle: commands-v1 history begin (CPU submission order, not GPU completion)");
+    const auto start = sCommandSequence > 128 ? sCommandSequence - 128 : 0;
+    for (auto i = start; i < sCommandSequence; ++i)
+    {
+        char note[512];
+        snprintf(note, sizeof(note), "angle: breadcrumb seq=%llu %s", i, sCommands[i % 128]);
+        AngleUwpNote(note);
+    }
+    AngleUwpNote("angle: commands-v1 history end");
+}
+
+class PanelGraphicsTrace
+{
+  public:
+    PanelGraphicsTrace(ID3D11Device *device, int oldWidth, int oldHeight, int width, int height,
+                       const char *operation = "resize")
+        : mDevice(device), mOldWidth(oldWidth), mOldHeight(oldHeight), mWidth(width), mHeight(height),
+          mOperation(operation), mStart(::GetTickCount64()), mId(++sNextId)
+    {
+        mDevice->AddRef();
+        Stage("begin");
+        MemoryBudget();
+    }
+
+    ~PanelGraphicsTrace()
+    {
+        char stage[112];
+        snprintf(stage, sizeof(stage), "end egl=0x%04x last=%s", mEglResult, mLastStage);
+        Stage(stage);
+        if (mEglResult != EGL_SUCCESS || FAILED(mDevice->GetDeviceRemovedReason()))
+        {
+            MemoryBudget();
+            DebugMessages();
+            if (FAILED(mDevice->GetDeviceRemovedReason())) DriverRemovalData();
+        }
+        mDevice->Release();
+    }
+
+    void Stage(const char *stage, HRESULT result = S_OK, bool hasResult = false)
+    {
+        char hr[20] = "n/a";
+        if (hasResult)
+        {
+            snprintf(hr, sizeof(hr), "0x%08lx", static_cast<unsigned long>(result));
+        }
+        const HRESULT reason = mDevice->GetDeviceRemovedReason();
+        char note[384];
+        snprintf(note, sizeof(note),
+                 "angle: diag: %s#%u tid=%lu +%llums %dx%d->%dx%d %s hr=%s device=0x%08lx/%s",
+                 mOperation, mId, static_cast<unsigned long>(::GetCurrentThreadId()),
+                 static_cast<unsigned long long>(::GetTickCount64() - mStart),
+                 mOldWidth, mOldHeight, mWidth, mHeight, stage, hr,
+                 static_cast<unsigned long>(reason), ReasonName(reason));
+        AngleUwpNote(note);
+        snprintf(mLastStage, sizeof(mLastStage), "%s", stage);
+    }
+
+    EGLint Finish(EGLint result)
+    {
+        mEglResult = result;
+        return result;
+    }
+
+    void ProbeGpuCompletion(ID3D11DeviceContext *context)
+    {
+        constexpr ULONGLONG timeoutMs = 250;
+        Stage("gpu.drain.begin v4 timeout=250ms");
+        if (FAILED(mDevice->GetDeviceRemovedReason()))
+        {
+            Stage("gpu.drain.device-already-lost");
+            return;
+        }
+
+        D3D11_QUERY_DESC desc = {};
+        desc.Query = D3D11_QUERY_EVENT;
+        ID3D11Query *query = nullptr;
+        HRESULT hr = mDevice->CreateQuery(&desc, &query);
+        Stage("gpu.drain.CreateQuery", hr, true);
+        if (FAILED(hr))
+        {
+            SafeRelease(query);
+            Stage("gpu.drain.unavailable; completion-unproven", hr, true);
+            return;
+        }
+
+        const ULONGLONG start = ::GetTickCount64();
+        context->End(query);
+        context->Flush();
+        BOOL completed = FALSE;
+        unsigned polls = 0;
+        const char *outcome = "timeout; completion-unproven";
+        while (true)
+        {
+            ++polls;
+            hr = context->GetData(query, &completed, sizeof(completed),
+                                  D3D11_ASYNC_GETDATA_DONOTFLUSH);
+            if (FAILED(mDevice->GetDeviceRemovedReason()))
+            {
+                outcome = "device-lost-before-resize";
+                break;
+            }
+            if (FAILED(hr))
+            {
+                outcome = "query-failed; completion-unproven";
+                break;
+            }
+            if (hr == S_OK && completed)
+            {
+                outcome = "complete";
+                break;
+            }
+            if (::GetTickCount64() - start >= timeoutMs)
+            {
+                break;
+            }
+            ::Sleep(1);
+        }
+        char stage[160];
+        snprintf(stage, sizeof(stage), "gpu.drain.%s elapsed=%llums polls=%u completed=%d",
+                 outcome, static_cast<unsigned long long>(::GetTickCount64() - start),
+                 polls, completed != FALSE);
+        Stage(stage, hr, true);
+        SafeRelease(query);
+    }
+
+    void MemoryBudget()
+    {
+        IDXGIDevice *dxgi = nullptr;
+        IDXGIAdapter *adapter = nullptr;
+        IDXGIAdapter3 *adapter3 = nullptr;
+        HRESULT hr = mDevice->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void **>(&dxgi));
+        if (SUCCEEDED(hr)) hr = dxgi->GetAdapter(&adapter);
+        if (SUCCEEDED(hr)) hr = adapter->QueryInterface(__uuidof(IDXGIAdapter3),
+                                                       reinterpret_cast<void **>(&adapter3));
+        DXGI_QUERY_VIDEO_MEMORY_INFO info = {};
+        if (SUCCEEDED(hr)) hr = adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info);
+        char note[256];
+        snprintf(note, sizeof(note),
+                 "angle: diag: %s#%u VRAM hr=0x%08lx usage=%lluMB budget=%lluMB reserved=%lluMB flags=0x%x FL=0x%x",
+                 mOperation, mId, static_cast<unsigned long>(hr),
+                 static_cast<unsigned long long>(info.CurrentUsage / (1024 * 1024)),
+                 static_cast<unsigned long long>(info.Budget / (1024 * 1024)),
+                 static_cast<unsigned long long>(info.CurrentReservation / (1024 * 1024)),
+                 mDevice->GetCreationFlags(), static_cast<unsigned>(mDevice->GetFeatureLevel()));
+        AngleUwpNote(note);
+        SafeRelease(adapter3);
+        SafeRelease(adapter);
+        SafeRelease(dxgi);
+    }
+
+  private:
+    static const char *ReasonName(HRESULT reason)
+    {
+        switch (reason)
+        {
+            case S_OK: return "OK";
+            case DXGI_ERROR_DEVICE_REMOVED: return "REMOVED";
+            case DXGI_ERROR_DEVICE_RESET: return "RESET";
+            case DXGI_ERROR_DEVICE_HUNG: return "HUNG";
+            case DXGI_ERROR_DRIVER_INTERNAL_ERROR: return "DRIVER_INTERNAL_ERROR";
+            case DXGI_ERROR_INVALID_CALL: return "INVALID_CALL";
+            case E_OUTOFMEMORY: return "OUT_OF_MEMORY";
+            default: return "OTHER";
+        }
+    }
+
+    void DriverRemovalData()
+    {
+        // Query existing interfaces only: no D3D12 DLL imports, new device,
+        // resource recreation or device-recovery behavior in this observer.
+        ID3D11On12Device1 *bridge = nullptr;
+        ID3D12Device *underlying = nullptr;
+        ID3D12DeviceRemovedExtendedData *dred = nullptr;
+        const HRESULT bridgeHr = mDevice->QueryInterface(__uuidof(ID3D11On12Device1),
+                                                         reinterpret_cast<void **>(&bridge));
+        const HRESULT deviceHr = bridge ? bridge->GetD3D12Device(__uuidof(ID3D12Device),
+                                               reinterpret_cast<void **>(&underlying)) : E_NOINTERFACE;
+        const HRESULT dredHr = underlying ? underlying->QueryInterface(
+            __uuidof(ID3D12DeviceRemovedExtendedData), reinterpret_cast<void **>(&dred)) : E_NOINTERFACE;
+        char note[384];
+        snprintf(note, sizeof(note),
+            "angle: diag: driver-removal-v1 on12=0x%08lx device12=0x%08lx dred=0x%08lx reason12=0x%08lx",
+            static_cast<unsigned long>(bridgeHr), static_cast<unsigned long>(deviceHr),
+            static_cast<unsigned long>(dredHr),
+            static_cast<unsigned long>(underlying ? underlying->GetDeviceRemovedReason() : E_NOINTERFACE));
+        AngleUwpNote(note);
+        if (dred)
+        {
+            D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT crumbs = {};
+            const HRESULT crumbsHr = dred->GetAutoBreadcrumbsOutput(&crumbs);
+            D3D12_DRED_PAGE_FAULT_OUTPUT fault = {};
+            const HRESULT faultHr = dred->GetPageFaultAllocationOutput(&fault);
+            snprintf(note, sizeof(note),
+                "angle: diag: driver-removal-v1 breadcrumbs=0x%08lx present=%d pagefault=0x%08lx gpuVA=0x%llx",
+                static_cast<unsigned long>(crumbsHr), int(crumbs.pHeadAutoBreadcrumbNode != nullptr),
+                static_cast<unsigned long>(faultHr), static_cast<unsigned long long>(fault.PageFaultVA));
+            AngleUwpNote(note);
+            auto *node = SUCCEEDED(crumbsHr) ? crumbs.pHeadAutoBreadcrumbNode : nullptr;
+            for (unsigned n = 0; node && n < 16; ++n, node = node->pNext)
+            {
+                const UINT total = node->BreadcrumbCount;
+                const UINT last = node->pLastBreadcrumbValue ? *node->pLastBreadcrumbValue : 0;
+                const UINT completed = last < total ? last : total;
+                snprintf(note, sizeof(note),
+                    "angle: diag: driver-removal-v1 list=%u queue=%p commandList=%p total=%u completed=%u counter=%d history=%d",
+                    n, static_cast<void *>(node->pCommandQueue), static_cast<void *>(node->pCommandList),
+                    total, last, int(node->pLastBreadcrumbValue != nullptr), int(node->pCommandHistory != nullptr));
+                AngleUwpNote(note);
+                // DRED owns these arrays for the device lifetime. Do not log
+                // names, marker strings, shader contents or user data.
+                if (!node->pLastBreadcrumbValue || !node->pCommandHistory) continue;
+                const UINT retainedBegin = total > 65536 ? total - 65536 : 0;
+                const UINT nearCompleted = completed > 3 ? completed - 3 : 0;
+                const UINT begin = nearCompleted > retainedBegin ? nearCompleted : retainedBegin;
+                const UINT remaining = total - completed;
+                const UINT end = completed + (remaining < 5 ? remaining : 5);
+                for (UINT i = begin; i < end; ++i)
+                {
+                    snprintf(note, sizeof(note),
+                        "angle: diag: driver-removal-v1 list=%u index=%u operation=%u completed=%d",
+                        n, i, unsigned(node->pCommandHistory[i % 65536]), int(i < completed));
+                    AngleUwpNote(note);
+                }
+            }
+            if (SUCCEEDED(faultHr))
+            {
+                const D3D12_DRED_ALLOCATION_NODE *heads[] = {
+                    fault.pHeadExistingAllocationNode, fault.pHeadRecentFreedAllocationNode};
+                for (unsigned kind = 0; kind < 2; ++kind)
+                {
+                    auto *allocation = heads[kind];
+                    for (unsigned n = 0; allocation && n < 8; ++n, allocation = allocation->pNext)
+                    {
+                        snprintf(note, sizeof(note),
+                            "angle: diag: driver-removal-v1 allocation=%s index=%u type=%u",
+                            kind == 0 ? "existing" : "recently-freed", n, unsigned(allocation->AllocationType));
+                        AngleUwpNote(note);
+                    }
+                }
+            }
+        }
+        SafeRelease(dred);
+        SafeRelease(underlying);
+        SafeRelease(bridge);
+    }
+
+    void DebugMessages()
+    {
+        ID3D11InfoQueue *queue = nullptr;
+        const HRESULT hr = mDevice->QueryInterface(__uuidof(ID3D11InfoQueue),
+                                                   reinterpret_cast<void **>(&queue));
+        if (FAILED(hr))
+        {
+            char note[128];
+            snprintf(note, sizeof(note), "angle: diag: %s#%u D3D11 InfoQueue unavailable 0x%08lx",
+                     mOperation, mId, static_cast<unsigned long>(hr));
+            AngleUwpNote(note);
+            return;
+        }
+        const UINT64 count = queue->GetNumStoredMessagesAllowedByRetrievalFilter();
+        char summary[128];
+        snprintf(summary, sizeof(summary), "angle: diag: %s#%u D3D11 InfoQueue messages=%llu",
+                 mOperation, mId, static_cast<unsigned long long>(count));
+        AngleUwpNote(summary);
+        for (UINT64 i = count > 32 ? count - 32 : 0; i < count; ++i)
+        {
+            alignas(D3D11_MESSAGE) unsigned char storage[2048];
+            SIZE_T bytes = sizeof(storage);
+            auto *message = reinterpret_cast<D3D11_MESSAGE *>(storage);
+            if (SUCCEEDED(queue->GetMessage(i, message, &bytes)))
+            {
+                char note[640];
+                snprintf(note, sizeof(note), "angle: diag: %s#%u D3D11 id=%u severity=%u %.480s",
+                         mOperation, mId, static_cast<unsigned>(message->ID),
+                         static_cast<unsigned>(message->Severity),
+                         message->pDescription ? message->pDescription : "(no description)");
+                AngleUwpNote(note);
+            }
+        }
+        queue->Release();
+    }
+
+    ID3D11Device *mDevice;
+    int mOldWidth, mOldHeight, mWidth, mHeight;
+    const char *mOperation;
+    ULONGLONG mStart;
+    unsigned mId;
+    EGLint mEglResult = 0;
+    char mLastStage[80] = "begin";
+    static std::atomic<unsigned> sNextId;
+};
+
+std::atomic<unsigned> PanelGraphicsTrace::sNextId{0};
+#endif
+
 // To avoid overflow in QPC to Microseconds calculations, since we multiply
 // by kMicrosecondsPerSecond, then the QPC value should not exceed
 // (2^63 - 1) / 1E6. If it exceeds that threshold, we divide then multiply.
@@ -60,6 +374,19 @@ bool NeedsOffscreenTexture(Renderer11 *renderer, NativeWindow11 *nativeWindow, E
            !(renderer->presentPathFastEnabled() && nativeWindow->getNativeWindow());
 }
 }  // anonymous namespace
+
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+// Called by Gecko at the first reset detection, before it releases cached GPU
+// resources. Optional dynamic export, not an import required by the engine.
+extern "C" __declspec(dllexport) void angle_uwp_dump_device_removed(void *device)
+{
+    if (!device) return;
+    auto *d3d = static_cast<ID3D11Device *>(device);
+    if (SUCCEEDED(d3d->GetDeviceRemovedReason())) return;
+    PanelGraphicsTrace trace(d3d, 0, 0, 0, 0, "reset-before-cleanup");
+    trace.Finish(EGL_CONTEXT_LOST);
+}
+#endif
 
 SwapChain11::SwapChain11(Renderer11 *renderer,
                          NativeWindow11 *nativeWindow,
@@ -113,12 +440,113 @@ SwapChain11::SwapChain11(Renderer11 *renderer,
     ASSERT(success);
 
     mQPCFrequency = counterFreqency.QuadPart;
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    mDiagnosticId = ++sChainIds;
+    traceCommand("created", S_OK, true);
+#endif
 }
 
 SwapChain11::~SwapChain11()
 {
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    traceCommand("destroy");
+    for (auto &probe : mProgress) SafeRelease(probe.query);
+#endif
     release();
 }
+
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+void SwapChain11::traceCommand(const char *stage, HRESULT result, bool resources)
+{
+    auto *device = mRenderer->getDevice();
+    const HRESULT reason = device->GetDeviceRemovedReason();
+    const bool lost = FAILED(reason) && !mDiagnosticLost;
+    mDiagnosticLost |= FAILED(reason);
+    char note[448];
+    snprintf(note, sizeof(note),
+        "tick=%llu chain=%u frame=%u tid=%lu stage=%s self=%p panel=%p swap=%p "
+        "device=%p context=%p size=%dx%d buffers=%dx%d copy=%d orientation=0x%x interval=%u "
+        "hr=0x%08lx reason=0x%08lx",
+        static_cast<unsigned long long>(::GetTickCount64()), mDiagnosticId,
+        mDiagnosticFrame, static_cast<unsigned long>(::GetCurrentThreadId()), stage,
+        static_cast<void *>(this), reinterpret_cast<void *>(mNativeWindow->getNativeWindow()),
+        static_cast<void *>(mSwapChain), static_cast<void *>(device),
+        static_cast<void *>(mRenderer->getDeviceContext()), mWidth, mHeight,
+        mBufferWidth, mBufferHeight, int(mNeedsOffscreenTexture), unsigned(mOrientation),
+        mSwapInterval, static_cast<unsigned long>(result), static_cast<unsigned long>(reason));
+    RememberCommand(note, lost);
+    if (lost || FAILED(result) || mDiagnosticFrame <= 3)
+    {
+        char output[480];
+        snprintf(output, sizeof(output), "angle: commands-v1 %s", note);
+        AngleUwpNote(output);
+    }
+    if (lost || resources)
+    {
+        const TextureHelper11 *textures[] = {&mBackBufferTexture, &mOffscreenTexture};
+        for (unsigned i = 0; i < 2; ++i)
+        {
+            // This is a descriptor of our own GPU resource, never file/user data.
+            auto *texture = textures[i]->get();
+            if (!texture) continue;
+            D3D11_TEXTURE2D_DESC desc = {};
+            textures[i]->getDesc(&desc);
+            snprintf(note, sizeof(note),
+                "angle: commands-v1 chain=%u resource=%s ptr=%p %ux%u format=%u "
+                "samples=%u quality=%u mip=%u array=%u bind=0x%x misc=0x%x flags=0x%x",
+                mDiagnosticId, i == 0 ? "backbuffer" : "offscreen", static_cast<void *>(texture),
+                desc.Width, desc.Height, unsigned(desc.Format), desc.SampleDesc.Count,
+                desc.SampleDesc.Quality, desc.MipLevels, desc.ArraySize, desc.BindFlags,
+                desc.MiscFlags, device->GetCreationFlags());
+            AngleUwpNote(note);
+        }
+    }
+    if (lost)
+    {
+        PanelGraphicsTrace failure(device, mWidth, mHeight, mWidth, mHeight, "command-device-loss");
+        failure.Stage(stage, result, true);
+        failure.Finish(EGL_CONTEXT_LOST);
+    }
+}
+
+void SwapChain11::probeProgress(const char *stage)
+{
+    auto *device = mRenderer->getDevice();
+    auto *context = mRenderer->getDeviceContext();
+    for (auto &probe : mProgress)
+    {
+        if (!probe.query) continue;
+        BOOL completed = FALSE;
+        const HRESULT hr = context->GetData(probe.query, &completed, sizeof(completed),
+                                            D3D11_ASYNC_GETDATA_DONOTFLUSH);
+        if (hr != S_OK && !FAILED(hr)) continue;
+        char label[160];
+        snprintf(label, sizeof(label), "gpu-%s checkpoint=%s submitted-frame=%u completed=%d elapsed=%llums",
+                 FAILED(hr) ? "query-failed" : "query-result", probe.stage, probe.frame,
+                 int(completed != FALSE),
+                 static_cast<unsigned long long>(::GetTickCount64() - probe.submitted));
+        traceCommand(label, hr);
+        SafeRelease(probe.query);
+    }
+    if (FAILED(device->GetDeviceRemovedReason()) ||
+        (mDiagnosticFrame > 48 && mDiagnosticFrame % 120 != 0)) return;
+    for (auto &probe : mProgress)
+    {
+        if (probe.query) continue;
+        D3D11_QUERY_DESC desc = {};
+        desc.Query = D3D11_QUERY_EVENT;
+        const HRESULT hr = device->CreateQuery(&desc, &probe.query);
+        if (FAILED(hr)) { traceCommand("CreateQuery-failed", hr); return; }
+        probe.stage = stage;
+        probe.frame = mDiagnosticFrame;
+        probe.submitted = ::GetTickCount64();
+        context->End(probe.query);
+        traceCommand(stage);
+        return;
+    }
+    traceCommand("gpu-probe-capacity-pending");
+}
+#endif
 
 void SwapChain11::release()
 {
@@ -142,12 +570,114 @@ void SwapChain11::release()
     mPassThroughVS.reset();
     mPassThroughOrResolvePS.reset();
     mPassThroughRS.reset();
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    mPassThroughResourcesInit = false;
+    mBufferWidth = 0;
+    mBufferHeight = 0;
+    mSourceSizeDirty = false;
+#endif
 
     if (!mAppCreatedShareHandle)
     {
         mShareHandle = nullptr;
     }
 }
+
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+void SwapChain11::bufferSizeFor(EGLint width, EGLint height,
+                                EGLint *bufferWidth, EGLint *bufferHeight) const
+{
+    *bufferWidth = width;
+    *bufferHeight = height;
+    LONG capacityWidth = 0;
+    LONG capacityHeight = 0;
+    if (mCapacityMode != 0 && !mSourceSizeBroken &&
+        AngleUwpPanelCapacity(&capacityWidth, &capacityHeight,
+                              static_cast<const NativeWindow11WinRT *>(mNativeWindow)) &&
+        capacityWidth >= width && capacityHeight >= height)
+    {
+        *bufferWidth = capacityWidth;
+        *bufferHeight = capacityHeight;
+    }
+}
+
+EGLint SwapChain11::updateSourceSize(DisplayD3D *displayD3D)
+{
+    UINT readWidth = 0;
+    UINT readHeight = 0;
+    const HRESULT hr = AngleUwpSetSourceSize(mSwapChain, mWidth, mHeight,
+                                             mBufferWidth, mBufferHeight, mCapacityMode,
+                                             &readWidth, &readHeight,
+                                             static_cast<const NativeWindow11WinRT *>(mNativeWindow));
+    const HRESULT reason = mRenderer->getDevice()->GetDeviceRemovedReason();
+    if (mSourceSizeNotes++ < 40 || FAILED(hr) || FAILED(reason))
+    {
+        char note[320];
+        snprintf(note, sizeof(note),
+                 "angle: diag: source-size v6 %dx%d of buffers %dx%d mode=%d hr=0x%08lx "
+                 "readback=%ux%u device=0x%08lx copy=%d",
+                 mWidth, mHeight, mBufferWidth, mBufferHeight, mCapacityMode,
+                 static_cast<unsigned long>(hr), readWidth, readHeight,
+                 static_cast<unsigned long>(reason), mNeedsOffscreenTexture ? 1 : 0);
+        AngleUwpNote(note);
+    }
+    if (FAILED(reason) || d3d11::isDeviceLostError(hr))
+    {
+        return EGL_CONTEXT_LOST;
+    }
+    if (SUCCEEDED(hr))
+    {
+        mSourceSizeDirty = false;
+        return EGL_SUCCESS;
+    }
+
+    // A refused crop must not leave a larger buffer stretched across the panel.
+    mSourceSizeBroken = true;
+    const EGLint width = mWidth;
+    const EGLint height = mHeight;
+    AngleUwpNote("angle: diag: source-size refused; rebuilding exact-size chain without capacity");
+    const HRESULT detached =
+        static_cast<NativeWindow11WinRT *>(mNativeWindow)->detachSwapChainForResize();
+    if (FAILED(detached))
+    {
+        return d3d11::isDeviceLostError(detached) ? EGL_CONTEXT_LOST : EGL_BAD_NATIVE_WINDOW;
+    }
+    mCapacityMode = 0;
+    auto *stateManager = mRenderer->getStateManager();
+    stateManager->setRenderTarget(nullptr, nullptr);
+    stateManager->setShaderResource(gl::ShaderType::Fragment, 0, nullptr);
+    release();
+    mRenderer->getDeviceContext()->Flush();
+    mNextSourceSizeRemake = 0;
+    const EGLint result = remakeAfterSourceSizeFailure(displayD3D, width, height);
+    return result == EGL_SUCCESS ? EGL_BAD_ALLOC : result;
+}
+
+EGLint SwapChain11::remakeAfterSourceSizeFailure(DisplayD3D *displayD3D,
+                                                EGLint width, EGLint height)
+{
+    if (FAILED(mRenderer->getDevice()->GetDeviceRemovedReason()))
+    {
+        return EGL_CONTEXT_LOST;
+    }
+    const ULONGLONG now = ::GetTickCount64();
+    if (now < mNextSourceSizeRemake)
+    {
+        return EGL_BAD_ALLOC;
+    }
+    mNextSourceSizeRemake = now + 1000;
+    const EGLint result = reset(displayD3D, width, height, mSwapInterval);
+    char note[160];
+    snprintf(note, sizeof(note), "angle: diag: exact-size chain rebuild %dx%d egl=0x%04x",
+             width, height, result);
+    AngleUwpNote(note);
+    if (result != EGL_SUCCESS)
+    {
+        release();
+    }
+    return result;
+}
+#endif
 
 void SwapChain11::releaseOffscreenColorBuffer()
 {
@@ -178,7 +708,16 @@ EGLint SwapChain11::resetOffscreenBuffers(DisplayD3D *displayD3D,
         }
     }
 
-    EGLint result = resetOffscreenDepthBuffer(displayD3D, backbufferWidth, backbufferHeight);
+    int depthWidth = backbufferWidth;
+    int depthHeight = backbufferHeight;
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    if (!mNeedsOffscreenTexture && mBufferWidth > 0 && mBufferHeight > 0)
+    {
+        depthWidth = mBufferWidth;
+        depthHeight = mBufferHeight;
+    }
+#endif
+    EGLint result = resetOffscreenDepthBuffer(displayD3D, depthWidth, depthHeight);
     if (result != EGL_SUCCESS)
     {
         return result;
@@ -379,10 +918,17 @@ EGLint SwapChain11::resetOffscreenColorBuffer(DisplayD3D *displayD3D,
         deviceContext->CopySubresourceRegion(mOffscreenTexture.get(), 0, 0, yoffset, 0,
                                              previousOffscreenTexture.get(), 0, &sourceBox);
 
+        // The panel is presented after resetOffscreenBuffers commits its new size.
+#if !defined(ANGLE_ENABLE_WINDOWS_UWP)
         if (mSwapChain)
         {
-            swapRect(displayD3D, 0, 0, backbufferWidth, backbufferHeight);
+            const EGLint result = swapRect(displayD3D, 0, 0, backbufferWidth, backbufferHeight);
+            if (result != EGL_SUCCESS)
+            {
+                return result;
+            }
         }
+#endif
     }
 
     return EGL_SUCCESS;
@@ -501,6 +1047,44 @@ EGLint SwapChain11::resize(DisplayD3D *displayD3D, EGLint backbufferWidth, EGLin
     }
 
     // Can only call resize if we have already created our swap buffer and resources
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    if (!mSwapChain && mSourceSizeBroken)
+    {
+        return remakeAfterSourceSizeFailure(displayD3D, backbufferWidth, backbufferHeight);
+    }
+    if (mCapacityMode != 0 && !mSourceSizeBroken && mSwapChain &&
+        backbufferWidth <= mBufferWidth && backbufferHeight <= mBufferHeight)
+    {
+        const EGLint oldWidth = mWidth;
+        const EGLint oldHeight = mHeight;
+        if (mNeedsOffscreenTexture)
+        {
+            const EGLint result = resetOffscreenBuffers(displayD3D, backbufferWidth, backbufferHeight);
+            if (result != EGL_SUCCESS)
+            {
+                return result;
+            }
+        }
+        else
+        {
+            mWidth = backbufferWidth;
+            mHeight = backbufferHeight;
+            if (backbufferWidth > oldWidth || backbufferHeight > oldHeight)
+            {
+                const float blank[4] = {};
+                mRenderer->getDeviceContext()->ClearRenderTargetView(mBackBufferRTView.get(), blank);
+            }
+        }
+        mFirstSwap = true;
+        mSourceSizeDirty = true;
+        char note[224];
+        snprintf(note, sizeof(note),
+                 "angle: diag: resize v6 %dx%d->%dx%d by source size; buffers stay %dx%d; no ResizeBuffers",
+                 oldWidth, oldHeight, mWidth, mHeight, mBufferWidth, mBufferHeight);
+        AngleUwpNote(note);
+        return EGL_SUCCESS;
+    }
+#endif
     ASSERT(mSwapChain && mBackBufferTexture.valid() && mBackBufferRTView.valid() &&
            mBackBufferSRView.valid());
 
@@ -509,31 +1093,99 @@ EGLint SwapChain11::resize(DisplayD3D *displayD3D, EGLint backbufferWidth, EGLin
     // panel changes size and the swap chain and offscreen buffers are made
     // again.
     const ULONGLONG resizeStart = ::GetTickCount64();
+    PanelGraphicsTrace trace(device, mWidth, mHeight, backbufferWidth, backbufferHeight);
+    const auto finish = [&trace](EGLint result) { return trace.Finish(result); };
+    trace.ProbeGpuCompletion(mRenderer->getDeviceContext());
+    const HRESULT beforeResizeReason = device->GetDeviceRemovedReason();
+    if (FAILED(beforeResizeReason))
+    {
+        trace.Stage("resize.skipped; device-lost-before-buffer-release", beforeResizeReason, true);
+        release();
+        return finish(EGL_CONTEXT_LOST);
+    }
+    trace.Stage("unbind.begin");
+    StateManager11 *stateManager = mRenderer->getStateManager();
+    stateManager->setRenderTarget(nullptr, nullptr);
+    stateManager->setShaderResource(gl::ShaderType::Fragment, 0, nullptr);
+    trace.Stage("unbind.end");
+#else
+    const auto finish = [](EGLint result) { return result; };
 #endif
 
     mBackBufferTexture.reset();
     mBackBufferRTView.reset();
     mBackBufferSRView.reset();
 
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    trace.Stage("backbuffers.released; Flush.begin");
+    mRenderer->getDeviceContext()->Flush();
+    trace.Stage("Flush.end; GetDesc.begin");
+#endif
+
     // Resize swap chain
     DXGI_SWAP_CHAIN_DESC desc;
     HRESULT hr = mSwapChain->GetDesc(&desc);
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    trace.Stage("GetDesc.end", hr, true);
+#endif
     if (FAILED(hr))
     {
         ERR() << "Error reading swap chain description, " << gl::FmtHR(hr);
         release();
-        return EGL_BAD_ALLOC;
+        return finish(EGL_BAD_ALLOC);
     }
 
-    hr = mSwapChain->ResizeBuffers(desc.BufferCount, backbufferWidth, backbufferHeight,
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    trace.Stage("panel.detach.begin v5");
+    const HRESULT detachResult =
+        static_cast<NativeWindow11WinRT *>(mNativeWindow)->detachSwapChainForResize();
+    trace.Stage("panel.detach.end", detachResult, true);
+    const HRESULT detachDeviceReason = device->GetDeviceRemovedReason();
+    if (FAILED(detachResult) || FAILED(detachDeviceReason))
+    {
+        trace.Stage("resize.skipped; panel-detach-failed-or-device-lost");
+        release();
+        return finish(FAILED(detachDeviceReason) || d3d11::isDeviceLostError(detachResult)
+                          ? EGL_CONTEXT_LOST
+                          : EGL_BAD_NATIVE_WINDOW);
+    }
+    {
+        char stage[160];
+        snprintf(stage, sizeof(stage), "ResizeBuffers.begin buffers=%u format=%u usage=0x%x flags=0x%x",
+                 desc.BufferCount, static_cast<unsigned>(desc.BufferDesc.Format),
+                 desc.BufferUsage, desc.Flags);
+        trace.Stage(stage);
+    }
+#endif
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    const ULONGLONG resizeBuffersStart = ::GetTickCount64();
+#endif
+    EGLint bufferWidth = backbufferWidth;
+    EGLint bufferHeight = backbufferHeight;
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    bufferSizeFor(backbufferWidth, backbufferHeight, &bufferWidth, &bufferHeight);
+    AngleUwpNote("angle: diag: native buffer resize required; requested size exceeds retained capacity or capacity disabled");
+#endif
+    hr = mSwapChain->ResizeBuffers(desc.BufferCount, bufferWidth, bufferHeight,
                                    getSwapChainNativeFormat(), 0);
 #if defined(ANGLE_ENABLE_WINDOWS_UWP)
-    const ULONGLONG resizeBuffersMs = ::GetTickCount64() - resizeStart;
+    const ULONGLONG resizeBuffersMs = ::GetTickCount64() - resizeBuffersStart;
+    trace.Stage("ResizeBuffers.end", hr, true);
+    const HRESULT afterResizeReason = device->GetDeviceRemovedReason();
+    if (SUCCEEDED(hr) && FAILED(afterResizeReason))
+    {
+        trace.Stage("resize.returned-success-with-lost-device", afterResizeReason, true);
+        release();
+        return finish(EGL_CONTEXT_LOST);
+    }
     if (FAILED(hr))
     {
-        char note[128];
-        snprintf(note, sizeof(note), "angle: swap chain resize to %dx%d failed -> 0x%08lx",
-                 backbufferWidth, backbufferHeight, static_cast<unsigned long>(hr));
+        char note[192];
+        snprintf(note, sizeof(note),
+                 "angle: ResizeBuffers %dx%d -> %dx%d failed 0x%08lx, device reason 0x%08lx",
+                 mWidth, mHeight, backbufferWidth, backbufferHeight,
+                 static_cast<unsigned long>(hr),
+                 static_cast<unsigned long>(device->GetDeviceRemovedReason()));
         AngleUwpNote(note);
     }
 #endif
@@ -548,53 +1200,117 @@ EGLint SwapChain11::resize(DisplayD3D *displayD3D, EGLint backbufferWidth, EGLin
             HRESULT reason = device->GetDeviceRemovedReason();
             ERR() << "Device lost in SwapChain11::resize " << gl::FmtHR(hr)
                   << ", reason: " << gl::FmtHR(reason);
-            return EGL_CONTEXT_LOST;
+            return finish(EGL_CONTEXT_LOST);
         }
         else
         {
-            return EGL_BAD_ALLOC;
+            return finish(EGL_BAD_ALLOC);
         }
     }
 
     ID3D11Texture2D *backbufferTexture = nullptr;
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    trace.Stage("panel.rebind.begin v5");
+    hr = static_cast<NativeWindow11WinRT *>(mNativeWindow)->onSwapChainResized(mSwapChain);
+    trace.Stage("panel.rebind.end", hr, true);
+    const HRESULT rebindDeviceReason = device->GetDeviceRemovedReason();
+    if (FAILED(hr) || FAILED(rebindDeviceReason))
+    {
+        release();
+        return finish(FAILED(rebindDeviceReason) || d3d11::isDeviceLostError(hr)
+                          ? EGL_CONTEXT_LOST
+                          : EGL_BAD_NATIVE_WINDOW);
+    }
+    trace.Stage("GetBuffer.begin");
+#endif
     hr                                 = mSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D),
                                                                reinterpret_cast<void **>(&backbufferTexture));
-    ASSERT(SUCCEEDED(hr));
-    if (SUCCEEDED(hr))
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    trace.Stage("GetBuffer.end", hr, true);
+#endif
+    if (FAILED(hr))
+    {
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+        char note[160];
+        snprintf(note, sizeof(note), "angle: resized GetBuffer failed 0x%08lx, device reason 0x%08lx",
+                 static_cast<unsigned long>(hr),
+                 static_cast<unsigned long>(device->GetDeviceRemovedReason()));
+        AngleUwpNote(note);
+#endif
+        release();
+        return finish(d3d11::isDeviceLostError(hr) ? EGL_CONTEXT_LOST : EGL_BAD_ALLOC);
+    }
     {
         const auto &format =
             d3d11::Format::Get(mOffscreenRenderTargetFormat, mRenderer->getRenderer11DeviceCaps());
         mBackBufferTexture.set(backbufferTexture, format);
         mBackBufferTexture.setInternalName("BackBufferTexture");
 
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+        D3D11_TEXTURE2D_DESC bufferDesc = {};
+        backbufferTexture->GetDesc(&bufferDesc);
+        char stage[160];
+        snprintf(stage, sizeof(stage), "CreateRTV.begin texture=%ux%u format=%u bind=0x%x usage=%u samples=%u",
+                 bufferDesc.Width, bufferDesc.Height, static_cast<unsigned>(bufferDesc.Format),
+                 bufferDesc.BindFlags, static_cast<unsigned>(bufferDesc.Usage), bufferDesc.SampleDesc.Count);
+        trace.Stage(stage);
+#endif
         angle::Result result = mRenderer->allocateResourceNoDesc(
             displayD3D, mBackBufferTexture.get(), &mBackBufferRTView);
-        ASSERT(result != angle::Result::Stop);
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+        trace.Stage(result == angle::Result::Stop ? "CreateRTV.end STOP" : "CreateRTV.end OK");
+#endif
+        if (result == angle::Result::Stop)
+        {
+            const HRESULT reason = device->GetDeviceRemovedReason();
+            release();
+            return finish(FAILED(reason) ? EGL_CONTEXT_LOST : EGL_BAD_ALLOC);
+        }
         mBackBufferRTView.setInternalName("BackBufferRTV");
 
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+        trace.Stage("CreateSRV.begin");
+#endif
         result = mRenderer->allocateResourceNoDesc(displayD3D, mBackBufferTexture.get(),
                                                    &mBackBufferSRView);
-        ASSERT(result != angle::Result::Stop);
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+        trace.Stage(result == angle::Result::Stop ? "CreateSRV.end STOP" : "CreateSRV.end OK");
+#endif
+        if (result == angle::Result::Stop)
+        {
+            const HRESULT reason = device->GetDeviceRemovedReason();
+            release();
+            return finish(FAILED(reason) ? EGL_CONTEXT_LOST : EGL_BAD_ALLOC);
+        }
         mBackBufferSRView.setInternalName("BackBufferSRV");
     }
 
     mFirstSwap = true;
 
 #if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    mBufferWidth = mBackBufferTexture.getExtents().width;
+    mBufferHeight = mBackBufferTexture.getExtents().height;
+    mSourceSizeDirty = mCapacityMode != 0;
+    trace.Stage("offscreen.reset.begin");
     const EGLint offscreenResult =
         resetOffscreenBuffers(displayD3D, backbufferWidth, backbufferHeight);
+    trace.Stage(offscreenResult == EGL_SUCCESS ? "offscreen.reset.end OK" : "offscreen.reset.end FAIL");
+    if (offscreenResult != EGL_SUCCESS)
+    {
+        return finish(offscreenResult);
+    }
     {
         char note[160];
         snprintf(note, sizeof(note),
-                 "angle: swap chain resized to %dx%d in %llu ms (ResizeBuffers %llu ms)",
+                 "angle: swap chain resized to %dx%d in %llu ms (ResizeBuffers %llu ms), EGL 0x%04x",
                  backbufferWidth, backbufferHeight,
                  static_cast<unsigned long long>(::GetTickCount64() - resizeStart),
-                 static_cast<unsigned long long>(resizeBuffersMs));
+                 static_cast<unsigned long long>(resizeBuffersMs), offscreenResult);
         AngleUwpNote(note);
     }
-    return offscreenResult;
+    return finish(offscreenResult);
 #else
-    return resetOffscreenBuffers(displayD3D, backbufferWidth, backbufferHeight);
+    return finish(resetOffscreenBuffers(displayD3D, backbufferWidth, backbufferHeight));
 #endif
 }
 
@@ -669,9 +1385,21 @@ EGLint SwapChain11::reset(DisplayD3D *displayD3D,
 
     if (mNativeWindow->getNativeWindow())
     {
+        EGLint bufferWidth = backbufferWidth;
+        EGLint bufferHeight = backbufferHeight;
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+        mCapacityMode = mSourceSizeBroken ? 0 : AngleUwpCapacityMode(
+            static_cast<const NativeWindow11WinRT *>(mNativeWindow));
+        bufferSizeFor(backbufferWidth, backbufferHeight, &bufferWidth, &bufferHeight);
+        char note[192];
+        snprintf(note, sizeof(note), "angle: diag: capacity v6 mode=%d surface=%dx%d buffers=%dx%d copy=%d",
+                 mCapacityMode, backbufferWidth, backbufferHeight, bufferWidth, bufferHeight,
+                 mNeedsOffscreenTexture ? 1 : 0);
+        AngleUwpNote(note);
+#endif
         HRESULT hr = mNativeWindow->createSwapChain(
-            device, mRenderer->getDxgiFactory(), getSwapChainNativeFormat(), backbufferWidth,
-            backbufferHeight, mNeedsOffscreenTexture ? 1 : getD3DSamples(), &mSwapChain);
+            device, mRenderer->getDxgiFactory(), getSwapChainNativeFormat(), bufferWidth,
+            bufferHeight, mNeedsOffscreenTexture ? 1 : getD3DSamples(), &mSwapChain);
 
         if (FAILED(hr))
         {
@@ -698,6 +1426,12 @@ EGLint SwapChain11::reset(DisplayD3D *displayD3D,
         hr                             = mSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D),
                                                                reinterpret_cast<LPVOID *>(&backbufferTex));
         ASSERT(SUCCEEDED(hr));
+        if (FAILED(hr))
+        {
+            const HRESULT reason = device->GetDeviceRemovedReason();
+            release();
+            return FAILED(reason) || d3d11::isDeviceLostError(hr) ? EGL_CONTEXT_LOST : EGL_BAD_ALLOC;
+        }
         const auto &format =
             d3d11::Format::Get(mOffscreenRenderTargetFormat, mRenderer->getRenderer11DeviceCaps());
         mBackBufferTexture.set(backbufferTex, format);
@@ -706,14 +1440,34 @@ EGLint SwapChain11::reset(DisplayD3D *displayD3D,
         angle::Result result = mRenderer->allocateResourceNoDesc(
             displayD3D, mBackBufferTexture.get(), &mBackBufferRTView);
         ASSERT(result != angle::Result::Stop);
+        if (result == angle::Result::Stop)
+        {
+            const HRESULT reason = device->GetDeviceRemovedReason();
+            release();
+            return FAILED(reason) ? EGL_CONTEXT_LOST : EGL_BAD_ALLOC;
+        }
         mBackBufferRTView.setInternalName("BackBufferRTV");
 
         result = mRenderer->allocateResourceNoDesc(displayD3D, mBackBufferTexture.get(),
                                                    &mBackBufferSRView);
         ASSERT(result != angle::Result::Stop);
+        if (result == angle::Result::Stop)
+        {
+            const HRESULT reason = device->GetDeviceRemovedReason();
+            release();
+            return FAILED(reason) ? EGL_CONTEXT_LOST : EGL_BAD_ALLOC;
+        }
         mBackBufferSRView.setInternalName("BackBufferSRV");
     }
 
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    if (mSwapChain)
+    {
+        mBufferWidth = mBackBufferTexture.getExtents().width;
+        mBufferHeight = mBackBufferTexture.getExtents().height;
+        mSourceSizeDirty = mCapacityMode != 0;
+    }
+#endif
     mFirstSwap = true;
 
     return resetOffscreenBuffers(displayD3D, backbufferWidth, backbufferHeight);
@@ -843,6 +1597,17 @@ EGLint SwapChain11::swapRect(DisplayD3D *displayD3D,
         height = mHeight;
     }
 #endif
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    ++mDiagnosticFrame;
+    char rectangle[160];
+    const bool validRect = x >= 0 && y >= 0 && width >= 0 && height >= 0 &&
+        static_cast<int64_t>(x) + width <= mWidth &&
+        static_cast<int64_t>(y) + height <= mHeight;
+    snprintf(rectangle, sizeof(rectangle), "swapRect-before-copy rect=%d,%d %dx%d valid=%d",
+             x, y, width, height, int(validRect));
+    traceCommand(rectangle, validRect ? S_OK : E_INVALIDARG, mDiagnosticFrame <= 3);
+    probeProgress("before-copy");
+#endif
     if (mNeedsOffscreenTexture)
     {
         EGLint result = copyOffscreenToBackbuffer(displayD3D, x, y, width, height);
@@ -852,7 +1617,15 @@ EGLint SwapChain11::swapRect(DisplayD3D *displayD3D,
         }
     }
 
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    traceCommand("swapRect-after-copy");
+    probeProgress("after-copy");
+#endif
     EGLint result = present(displayD3D, x, y, width, height);
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    traceCommand("swapRect-after-present", result == EGL_SUCCESS ? S_OK : E_FAIL);
+    probeProgress("after-present");
+#endif
     return result;
 }
 
@@ -869,6 +1642,9 @@ EGLint SwapChain11::copyOffscreenToBackbuffer(DisplayD3D *displayD3D,
 
     if (initPassThroughResources(displayD3D) == angle::Result::Stop)
     {
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+        traceCommand("copy-resource-init-failed", E_FAIL);
+#endif
         return EGL_BAD_ALLOC;
     }
 
@@ -880,6 +1656,9 @@ EGLint SwapChain11::copyOffscreenToBackbuffer(DisplayD3D *displayD3D,
         deviceContext->Map(mQuadVB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
     if (FAILED(result))
     {
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+        traceCommand("copy-vertex-Map-failed", result);
+#endif
         return EGL_BAD_ACCESS;
     }
 
@@ -913,6 +1692,9 @@ EGLint SwapChain11::copyOffscreenToBackbuffer(DisplayD3D *displayD3D,
     d3d11::SetPositionTexCoordVertex(&vertices[3], x2, y2, u2, v2);
 
     deviceContext->Unmap(mQuadVB.get(), 0);
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    traceCommand("copy-quad-uploaded", result);
+#endif
 
     StateManager11 *stateManager = mRenderer->getStateManager();
 
@@ -939,7 +1721,13 @@ EGLint SwapChain11::copyOffscreenToBackbuffer(DisplayD3D *displayD3D,
     stateManager->setSimplePixelTextureAndSampler(mOffscreenSRView, mPassThroughSampler);
 
     // Draw
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    traceCommand("copy-before-draw");
+#endif
     deviceContext->Draw(4, 0);
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    traceCommand("copy-after-draw");
+#endif
 
     return EGL_SUCCESS;
 }
@@ -948,6 +1736,13 @@ EGLint SwapChain11::present(DisplayD3D *displayD3D, EGLint x, EGLint y, EGLint w
 {
     if (!mSwapChain)
     {
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+        if (mSourceSizeBroken && mWidth > 0 && mHeight > 0)
+        {
+            const EGLint result = remakeAfterSourceSizeFailure(displayD3D, mWidth, mHeight);
+            return result == EGL_SUCCESS ? EGL_BAD_ALLOC : result;
+        }
+#endif
         return EGL_SUCCESS;
     }
 
@@ -977,8 +1772,19 @@ EGLint SwapChain11::present(DisplayD3D *displayD3D, EGLint x, EGLint y, EGLint w
         mRenderer->getStateManager()->invalidateRenderTarget();
         return EGL_SUCCESS;
     }
+    if (mCapacityMode != 0 && mSourceSizeDirty)
+    {
+        const EGLint sourceResult = updateSourceSize(displayD3D);
+        if (sourceResult != EGL_SUCCESS)
+        {
+            return sourceResult;
+        }
+    }
 #endif
 
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    traceCommand("Present-call");
+#endif
     // Use IDXGISwapChain1::Present1 with a dirty rect if DXGI 1.2 is available.
     // Dirty rect present is not supported with a multisampled swapchain.
     if (mSwapChain1 != nullptr && mEGLSamples <= 1)
@@ -1002,6 +1808,29 @@ EGLint SwapChain11::present(DisplayD3D *displayD3D, EGLint x, EGLint y, EGLint w
         result = mSwapChain->Present(swapInterval, 0);
     }
 
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+    traceCommand("Present-return", result);
+    if (mFirstSwap)
+    {
+        char note[96];
+        snprintf(note, sizeof(note), "angle: first present result 0x%08lx",
+                 static_cast<unsigned long>(result));
+        AngleUwpNote(note);
+    }
+    if (FAILED(result))
+    {
+        PanelGraphicsTrace trace(mRenderer->getDevice(), mWidth, mHeight, mWidth, mHeight,
+                                 "present-failure");
+        trace.Stage("Present returned", result, true);
+        trace.Finish(d3d11::isDeviceLostError(result) ? EGL_CONTEXT_LOST : EGL_BAD_SURFACE);
+        char note[192];
+        snprintf(note, sizeof(note),
+                 "angle: present %dx%d failed 0x%08lx, device reason 0x%08lx",
+                 mWidth, mHeight, static_cast<unsigned long>(result),
+                 static_cast<unsigned long>(mRenderer->getDevice()->GetDeviceRemovedReason()));
+        AngleUwpNote(note);
+    }
+#endif
     mFirstSwap = false;
 
     // Some swapping mechanisms such as DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL unbind the current render
@@ -1022,6 +1851,9 @@ EGLint SwapChain11::present(DisplayD3D *displayD3D, EGLint x, EGLint y, EGLint w
     else if (FAILED(result))
     {
         ERR() << "Present failed with " << gl::FmtHR(result);
+#if defined(ANGLE_ENABLE_WINDOWS_UWP)
+        return d3d11::isDeviceLostError(result) ? EGL_CONTEXT_LOST : EGL_BAD_SURFACE;
+#endif
     }
 
 #if defined(ANGLE_ENABLE_WINDOWS_UWP)

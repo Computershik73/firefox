@@ -97,6 +97,8 @@ void NoteHr(const char* aWhat, HRESULT aHr) {
 
 namespace mozilla::layers {
 
+void GeckoW10mSetPanelPresenting(bool aPresenting) { sPresenting = aPresenting; }
+
 bool GeckoW10mHasPanel() { return gecko_w10m_egl_native_window() != nullptr; }
 
 HRESULT GeckoW10mAttachSwapChainToPanel(IDXGISwapChain1* aSwapChain) {
@@ -167,7 +169,7 @@ HRESULT GeckoW10mAttachSwapChainToPanel(IDXGISwapChain1* aSwapChain) {
            scaleX, scaleY, static_cast<unsigned long>(scaled));
   GeckoW10mNote(note);
 
-  sPresenting = true;
+  GeckoW10mSetPanelPresenting(true);
   return S_OK;
 }
 

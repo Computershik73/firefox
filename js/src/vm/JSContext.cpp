@@ -302,6 +302,7 @@ void JSContext::onOutOfMemory() {
 // Defined in toolkit/xre/Bootstrap.cpp: one line to a file the shell names,
 // for when there is no debugger, no console and no MOZ_LOG yet.
 extern "C" void GeckoW10mNote(const char* text);
+extern "C" void GeckoW10mAllocationFailure(const char*, uint64_t, uint32_t);
 
 // InitSelfHostedCode fails here with the engine genuinely reporting out of
 // memory, on a device using 23 MB of the 2048 MB it is allowed. Something is
@@ -318,6 +319,7 @@ static void GeckoW10mNoteOom(const char* kind, void* from) {
   if (gGeckoW10mOomReports++ >= 8) {
     return;
   }
+  GeckoW10mAllocationFailure("js-oom-size-unknown", 0, 0);
   // A raw address means nothing in the next process -- ASLR moves the module
   // between runs and the log is read afterwards. Measuring against a symbol in
   // the same library makes it portable: look ReportLargeOutOfMemory up in the

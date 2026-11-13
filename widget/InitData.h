@@ -83,6 +83,9 @@ enum class PiPType : uint8_t {
 // Basic struct for widget initialization data.
 // @see Create member function of nsIWidget
 struct InitData {
+#if defined(GECKO_W10M)
+  uint64_t mGeckoW10mWindowId = 0;
+#endif
   WindowType mWindowType = WindowType::TopLevel;
   BorderStyle mBorderStyle = BorderStyle::Default;
   PopupType mPopupHint = PopupType::Panel;

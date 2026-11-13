@@ -306,7 +306,7 @@ static std::shared_ptr<EglDisplay> GetAndInitWARPDisplay(
 }
 
 std::shared_ptr<EglDisplay> GLLibraryEGL::CreateDisplay(
-    ID3D11Device* const d3d11Device) {
+    ID3D11Device* const d3d11Device, bool aOwnDevice) {
   StaticMutexAutoLock lock(sMutex);
   EGLDeviceEXT eglDevice =
       fCreateDeviceANGLE(LOCAL_EGL_D3D11_DEVICE_ANGLE, d3d11Device, nullptr);
@@ -323,6 +323,7 @@ std::shared_ptr<EglDisplay> GLLibraryEGL::CreateDisplay(
                                            eglDevice, attrib_list);
   if (!display) {
     gfxCriticalNote << "Failed to get EGLDisplay of D3D11Device";
+    if (aOwnDevice) fReleaseDeviceANGLE(eglDevice);
     return nullptr;
   }
 
@@ -344,8 +345,10 @@ std::shared_ptr<EglDisplay> GLLibraryEGL::CreateDisplay(
           << "Failed to initialize EGLDisplay for WebRender error: "
           << gfx::hexa(err);
     }
+    if (aOwnDevice) fReleaseDeviceANGLE(eglDevice);
     return nullptr;
   }
+  if (aOwnDevice) ret->mOwnedDevice = eglDevice;
   return ret;
 }
 
@@ -620,6 +623,7 @@ bool GLLibraryEGL::Init(nsACString* const out_failureId) {
                                   SYMBOL(Terminate),
                                   SYMBOL(GetCurrentSurface),
                                   SYMBOL(GetCurrentContext),
+                                  SYMBOL(GetCurrentDisplay),
                                   SYMBOL(MakeCurrent),
                                   SYMBOL(DestroyContext),
                                   SYMBOL(CreateContext),
@@ -939,6 +943,7 @@ EglDisplay::~EglDisplay() {
     return;
   }
   fTerminate();
+  if (mOwnedDevice) mLib->fReleaseDeviceANGLE(mOwnedDevice);
   mLib->mActiveDisplays.erase(mDisplay);
 }
 

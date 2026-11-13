@@ -12,10 +12,18 @@ namespace gfx {
 using namespace std;
 
 optional<DisplayConfig> GetDisplayConfig() {
+#if defined(GECKO_W10M)
+  // The GeckoW10m port renders to the shell-provided headless surface rather
+  // than a desktop display path.  On Xbox, GetDisplayConfigBufferSizes may
+  // report success without filling its output counts; treating those
+  // uninitialised values as vector sizes turns this harmless query into a
+  // bogus OOM during SpiderMonkey start-up.
+  return {};
+#else
   LONG result;
 
-  UINT32 numPaths;
-  UINT32 numModes;
+  UINT32 numPaths = 0;
+  UINT32 numModes = 0;
   vector<DISPLAYCONFIG_PATH_INFO> paths;
   vector<DISPLAYCONFIG_MODE_INFO> modes;
   do {
@@ -40,6 +48,7 @@ optional<DisplayConfig> GetDisplayConfig() {
   paths.resize(numPaths);
 
   return DisplayConfig{paths, modes};
+#endif
 }
 
 bool HasScaledResolution() {

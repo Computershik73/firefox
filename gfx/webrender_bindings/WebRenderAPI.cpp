@@ -36,6 +36,10 @@ static mozilla::LazyLogModule sWrDLLog("wr.dl");
   MOZ_LOG(sWrDLLog, LogLevel::Debug, ("WRDL(%p): " __VA_ARGS__))
 
 extern const mozilla::XREAppData* gAppData;
+#if defined(GECKO_W10M)
+extern "C" uint64_t gecko_w10m_managed_id_for_widget(mozilla::widget::CompositorWidget*);
+extern "C" void gecko_w10m_window_graphics_failed(uint64_t);
+#endif
 
 namespace mozilla {
 
@@ -254,10 +258,15 @@ RefPtr<WebRenderAPI::CreatePromise> WebRenderAPI::Create(
         auto* const gl =
             (compositor->gl() && !swgl) ? compositor->gl() : nullptr;
         RenderThread* const renderThread = RenderThread::Get();
-        auto* const progCache = (renderThread->GetProgramCache() && !swgl)
+        bool privateGraphics = false;
+#if defined(GECKO_W10M)
+        const uint64_t managedWindowId = gecko_w10m_managed_id_for_widget(compositor->GetWidget());
+        privateGraphics = gl && managedWindowId;
+#endif
+        auto* const progCache = (renderThread->GetProgramCache() && !swgl && !privateGraphics)
                                     ? renderThread->GetProgramCache()->Raw()
                                     : nullptr;
-        auto* const shaders = (renderThread->GetShaders() && !swgl)
+        auto* const shaders = (renderThread->GetShaders() && !swgl && !privateGraphics)
                                   ? renderThread->GetShaders()->RawShaders()
                                   : nullptr;
 
@@ -272,12 +281,18 @@ RefPtr<WebRenderAPI::CreatePromise> WebRenderAPI::Create(
           if (!versionCheck) {
             gfxCriticalNote << "GL context version (" << gl->Version()
                             << ") insufficent for hardware WebRender";
+#if defined(GECKO_W10M)
+            if (managedWindowId) gecko_w10m_window_graphics_failed(managedWindowId);
+#endif
             return CreatePromise::CreateAndReject(
                 "GL context version insufficient"_ns, __func__);
           }
         }
 
         if (gl && !gl->MakeCurrent()) {
+#if defined(GECKO_W10M)
+          if (managedWindowId) gecko_w10m_window_graphics_failed(managedWindowId);
+#endif
           return CreatePromise::CreateAndReject(
               "Failed to make GL context current"_ns, __func__);
         }
@@ -314,6 +329,9 @@ RefPtr<WebRenderAPI::CreatePromise> WebRenderAPI::Create(
           MOZ_ASSERT(errorMessage);
           error.AssignASCII(errorMessage);
           wr_api_free_error_msg(errorMessage);
+#if defined(GECKO_W10M)
+          if (managedWindowId) gecko_w10m_window_graphics_failed(managedWindowId);
+#endif
           return CreatePromise::CreateAndReject(error, __func__);
         }
         MOZ_ASSERT(wrRenderer);

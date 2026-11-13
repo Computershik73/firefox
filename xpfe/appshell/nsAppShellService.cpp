@@ -17,6 +17,9 @@
 #include "mozilla/widget/InitData.h"
 #include "nsWidgetsCID.h"
 #include "nsIWidget.h"
+#if defined(GECKO_W10M)
+extern "C" uint64_t gecko_w10m_claim_window_uri(nsIURI* aUri);
+#endif
 
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsAppShellService.h"
@@ -474,6 +477,11 @@ nsresult nsAppShellService::JustCreateTopWindow(
 #endif
 
   widget::InitData widgetInitData;
+#if defined(GECKO_W10M)
+  if (!aIsHiddenWindow) {
+    widgetInitData.mGeckoW10mWindowId = gecko_w10m_claim_window_uri(aUrl);
+  }
+#endif
   if (aIsHiddenWindow) {
     widgetInitData.mWindowType = widget::WindowType::Invisible;
   } else {

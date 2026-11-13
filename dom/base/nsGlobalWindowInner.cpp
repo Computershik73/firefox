@@ -3,6 +3,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsGlobalWindowInner.h"
+#if defined(GECKO_W10M)
+#  include "mozilla/Atomics.h"
+#endif
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -6725,8 +6728,30 @@ void nsGlobalWindowInner::DisableOrientationChangeListener() {
 }
 #endif
 
+#if defined(GECKO_W10M)
+static mozilla::Atomic<uint32_t, mozilla::Relaxed> sGamepadHelpRequests{0};
+
+extern "C" __declspec(dllexport) uint32_t gecko_w10m_gamepad_help_requests() {
+  return sGamepadHelpRequests;
+}
+#endif
+
 void nsGlobalWindowInner::SetHasGamepadEventListener(
     bool aHasGamepad /* = true*/) {
+#if defined(GECKO_W10M)
+  if (aHasGamepad && XRE_IsParentProcess() && !IsChromeWindow()) {
+    if (auto* context = GetBrowsingContext()) {
+      if (auto* outer = context->Top()->GetDOMWindow()) {
+        auto* top = nsGlobalWindowInner::Cast(outer->GetCurrentInnerWindow());
+        if (top && !top->IsChromeWindow() && !top->IsBackgroundInternal() &&
+            !top->mGamepadHelpRequested) {
+          top->mGamepadHelpRequested = true;
+          ++sGamepadHelpRequests;
+        }
+      }
+    }
+  }
+#endif
   mHasGamepad = aHasGamepad;
   if (aHasGamepad) {
     EnableGamepadUpdates();

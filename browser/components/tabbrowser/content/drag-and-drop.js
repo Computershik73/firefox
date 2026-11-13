@@ -77,6 +77,14 @@
     // Event handlers
 
     handle_dragstart(event) {
+      if (
+        Services.prefs.getBoolPref("widget.gecko-w10m.desktop-mode", false) ||
+        Services.prefs.getBoolPref("widget.gecko-w10m.standalone-mode", false)
+      ) {
+        event.preventDefault();
+        return;
+      }
+
       if (this._tabbrowserTabs._isCustomizing) {
         return;
       }

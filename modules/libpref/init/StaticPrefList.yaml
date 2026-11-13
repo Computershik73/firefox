@@ -8727,18 +8727,25 @@
 #if defined(GECKO_W10M)
 # Hardware WebRender draws straight into the panel's swap chain instead of an
 # ANGLE offscreen texture that is copied to it on every present -- one whole
-# pass over the screen less a frame. False goes back to the copy.
+# pass over the screen less a frame. The direct path leaves the alpha channel
+# of the composition buffer undefined on Xbox and can make an otherwise valid
+# frame completely transparent to XAML. Keep the stable ANGLE copy path as the
+# default; it is still GPU-to-GPU and does not read the frame back to the CPU.
 - name: gfx.webrender.gecko-w10m.direct-back-buffer
   type: bool
-  value: true
+  value: false
   mirror: once
 
-# A playing video goes to the display as a hardware overlay of its own, under
-# the browser's layer, and WebRender leaves a transparent hole for it
-# (gfx/webrender_bindings/GeckoW10mVideoLayer.cpp). False: WebRender draws it.
+# The separate NV12 composition swap chain is not safe on Xbox: creating it
+# can remove the D3D device (DXGI_ERROR_DEVICE_REMOVED), which leaves media
+# playing audio while both WebRender and DXVA lose their device. Keep the
+# implementation available for diagnostics, but render video through
+# WebRender by default. This preserves the compositor's device and still lets
+# DXVA hand its textures directly to WebRender. It can be enabled explicitly
+# on hardware known to support the extra composition surface.
 - name: gfx.webrender.gecko-w10m.video-overlay
   type: bool
-  value: true
+  value: false
   mirror: once
 #endif
 
@@ -14250,6 +14257,22 @@
   type: uint32_t
   value: 180000
   mirror: always
+
+#if defined(GECKO_W10M)
+# Watch the largest contiguous free region in the process address space.
+# The watcher runs outside the main thread and is disabled when set to 0.
+- name: memory.gecko-w10m.address-space.low-mb
+  type: RelaxedAtomicUint32
+  value: 96
+  mirror: always
+
+# Minimum interval for pressure re-evaluation. The controller additionally
+# limits expensive collections according to their measured cost and benefit.
+- name: memory.gecko-w10m.pressure-rearm-ms
+  type: RelaxedAtomicUint32
+  value: 30000
+  mirror: always
+#endif
 
 #---------------------------------------------------------------------------
 # Prefs starting with "middlemouse."

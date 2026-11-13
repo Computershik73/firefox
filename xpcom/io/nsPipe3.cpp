@@ -26,8 +26,30 @@
 #include "nsStreamUtils.h"
 #include "nsString.h"
 #include "nsThreadUtils.h"
+#ifdef GECKO_W10M
+#  include "mozilla/Atomics.h"
+#  include "nsIMemoryReporter.h"
+#endif
 
 using namespace mozilla;
+
+#ifdef GECKO_W10M
+namespace {
+Atomic<uint64_t> sPipePendingFreeBytes{0};
+MOZ_DEFINE_MALLOC_SIZE_OF(GeckoW10mPipeSegmentSizeOf)
+struct GeckoW10mPipeSegmentDeleter {
+  void operator()(char* segment) const {
+    const uint64_t bytes = GeckoW10mPipeSegmentSizeOf(segment);
+    free(segment);
+    sPipePendingFreeBytes -= bytes;
+  }
+};
+using PipeFreePtr = UniquePtr<char, GeckoW10mPipeSegmentDeleter>;
+}  // namespace
+extern "C" uint64_t GeckoW10mGetPendingPipeBytes() {
+  return sPipePendingFreeBytes;
+}
+#endif
 
 #ifdef LOG
 #  undef LOG
@@ -188,12 +210,21 @@ class nsPipeEvents {
   }
 
   inline void FreeSegment(mozilla::UniqueFreePtr<char> aSegment) {
+#ifdef GECKO_W10M
+    sPipePendingFreeBytes += GeckoW10mPipeSegmentSizeOf(aSegment.get());
+    mSegmentsToFree.AppendElement(PipeFreePtr(aSegment.release()));
+#else
     mSegmentsToFree.AppendElement(std::move(aSegment));
+#endif
   }
 
  private:
   AutoTArray<CallbackHolder, 4> mCallbacks;
+#ifdef GECKO_W10M
+  AutoTArray<PipeFreePtr, 4> mSegmentsToFree;
+#else
   AutoTArray<mozilla::UniqueFreePtr<char>, 4> mSegmentsToFree;
+#endif
 };
 
 //-----------------------------------------------------------------------------

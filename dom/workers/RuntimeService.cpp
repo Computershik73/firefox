@@ -1578,6 +1578,13 @@ nsresult RuntimeService::Init() {
     NS_WARNING("Failed to register for memory pressure notifications!");
   }
 
+#if defined(GECKO_W10M)
+  if (NS_FAILED(
+          obs->AddObserver(this, MEMORY_PRESSURE_STOP_OBSERVER_TOPIC, false))) {
+    NS_WARNING("Failed to register for the end of memory pressure!");
+  }
+#endif
+
   if (NS_FAILED(
           obs->AddObserver(this, NS_IOSERVICE_OFFLINE_STATUS_TOPIC, false))) {
     NS_WARNING("Failed to register for offline notification event!");
@@ -1883,6 +1890,13 @@ void RuntimeService::Cleanup() {
               obs->RemoveObserver(this, MEMORY_PRESSURE_OBSERVER_TOPIC))) {
         NS_WARNING("Failed to unregister for memory pressure notifications!");
       }
+
+#if defined(GECKO_W10M)
+      if (NS_FAILED(
+              obs->RemoveObserver(this, MEMORY_PRESSURE_STOP_OBSERVER_TOPIC))) {
+        NS_WARNING("Failed to unregister for the end of memory pressure!");
+      }
+#endif
 
       if (NS_FAILED(
               obs->RemoveObserver(this, NS_IOSERVICE_OFFLINE_STATUS_TOPIC))) {

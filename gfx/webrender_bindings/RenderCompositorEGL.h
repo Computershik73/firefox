@@ -6,11 +6,19 @@
 #define MOZILLA_GFX_RENDERCOMPOSITOR_EGL_H
 
 #include "GLTypes.h"
+#include "nsTArray.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/webrender/RenderCompositor.h"
 
+#if defined(GECKO_W10M)
+#  include <queue>
+struct ID3D11Device;
+struct ID3D11Query;
+#endif
+
 namespace mozilla {
 
+namespace layers { class FenceD3D11; }
 namespace wr {
 
 class RenderCompositorEGL : public RenderCompositor {
@@ -19,7 +27,8 @@ class RenderCompositorEGL : public RenderCompositor {
       const RefPtr<widget::CompositorWidget>& aWidget, nsACString& aError);
 
   explicit RenderCompositorEGL(const RefPtr<widget::CompositorWidget>& aWidget,
-                               RefPtr<gl::GLContext>&& aGL);
+                               RefPtr<gl::GLContext>&& aGL,
+                               bool aReadbackSurface = false);
   virtual ~RenderCompositorEGL();
 
   bool BeginFrame() override;
@@ -41,6 +50,9 @@ class RenderCompositorEGL : public RenderCompositor {
   // "Unsupported layers backend" -- which is what kept every frame on the CPU
   // even once hardware decoding was enabled and texture sharing worked.
   bool UseANGLE() const override { return true; }
+  gfx::DeviceResetReason IsContextLost(bool aForce) override;
+  RenderedFrameId GetLastCompletedFrameId() override;
+  RenderedFrameId UpdateFrameId() override;
 #else
   bool UseANGLE() const override { return false; }
 #endif
@@ -70,6 +82,30 @@ class RenderCompositorEGL : public RenderCompositor {
   RefPtr<gl::GLContext> mGL;
 
   EGLSurface mEGLSurface;
+#if defined(GECKO_W10M)
+  bool mReadbackSurface = false;
+  gfx::IntSize mReadbackSize;
+  nsTArray<uint8_t> mReadbackPixels;
+  uint32_t mSlowReadbackNotes = 0;
+  bool PublishReadback();
+  bool EnsureReadbackTarget();
+  void DestroyReadbackTarget();
+  GLuint mReadbackFramebuffer = 0;
+  GLuint mReadbackTexture = 0;
+  GLuint mReadbackDepth = 0;
+  RefPtr<layers::FenceD3D11> mReadFence;
+  bool mReadFenceSignaled = false;
+  bool mReadFenceRequired = false;
+  RefPtr<ID3D11Device> mPrivateDevice;
+  uint64_t mPrivateWindowId = 0;
+  bool mPrivateFailureNoted = false;
+  bool mPrivateSyncFailed = false;
+  RefPtr<ID3D11Device> DiagnosticDevice() const;
+  void InsertFrameCompletionQuery(RenderedFrameId aFrameId);
+  std::queue<std::pair<RenderedFrameId, RefPtr<ID3D11Query>>> mFrameQueries;
+  RefPtr<ID3D11Query> mRecycledFrameQuery;
+  RenderedFrameId mLastCompletedFrameId;
+#endif
 
   // Whether we are in the process of handling a NEW_SURFACE error. On Android
   // this is used to allow the widget an opportunity to recover from the first
@@ -86,6 +122,12 @@ class RenderCompositorEGL : public RenderCompositor {
                                                   EGLint, EGLint, EGLint,
                                                   EGLint);
   PostSubBufferFn mPostSubBuffer = nullptr;
+  // Bounded diagnostics: distinguish rendering failures from Present failures
+  // and verify the surface selected on the shared render-thread GL context.
+  void TraceFrameRouting(const char* aStage);
+  uint64_t mRoutingFrame = 0;
+  uint32_t mRoutingFailures = 0;
+
   // A new size, or a present that failed, means the next frame is drawn
   // and presented whole.
   LayoutDeviceIntSize mPresentedSize;

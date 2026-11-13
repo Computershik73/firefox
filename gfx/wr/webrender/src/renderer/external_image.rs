@@ -41,33 +41,30 @@ pub(super) fn update_deferred_resolves(
 
         device.reset_state();
 
-        let texture = match image.source {
-            ExternalImageSource::NativeTexture(texture_id) => {
-                ExternalTexture::new(
-                    texture_id,
-                    texture_target,
-                    image.uv,
-                    deferred_resolve.rendering,
-                )
-            }
+        let texture_id = match image.source {
+            ExternalImageSource::NativeTexture(texture_id) => texture_id,
             ExternalImageSource::Invalid => {
-                warn!("Invalid ext-image");
-                debug!(
-                    "For ext_id:{:?}, channel:{}.",
-                    ext_image.id,
-                    ext_image.channel_index
+                warn!(
+                    "Invalid external image {:?}, channel {}",
+                    ext_image.id, ext_image.channel_index,
                 );
-                ExternalTexture::new(
-                    0,
-                    texture_target,
-                    image.uv,
-                    deferred_resolve.rendering,
-                )
+                0
             }
             ExternalImageSource::RawData(_) => {
-                panic!("Raw external data is not expected for deferred resolves!");
+                warn!(
+                    "External image {:?}, channel {} returned raw data for a {:?} texture",
+                    ext_image.id, ext_image.channel_index, texture_target,
+                );
+                0
             }
         };
+
+        let texture = ExternalTexture::new(
+            texture_id,
+            texture_target,
+            image.uv,
+            deferred_resolve.rendering,
+        );
 
         external_images.insert(DeferredResolveIndex(i as u32), texture);
 

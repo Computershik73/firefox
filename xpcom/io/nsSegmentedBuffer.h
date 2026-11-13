@@ -75,6 +75,9 @@ class nsSegmentedBuffer {
 
  protected:
   uint32_t mSegmentSize;
+#ifdef GECKO_W10M
+  uint64_t mDiagnosticOwnedBytes = 0;
+#endif
   char** mSegmentArray;
   uint32_t mSegmentArrayCount;
   int32_t mFirstSegmentIndex;

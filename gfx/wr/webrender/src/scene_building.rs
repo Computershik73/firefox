@@ -1466,7 +1466,11 @@ impl<'a> SceneBuilder<'a> {
             DisplayItem::HitTest(ref info) => {
                 tracy_rs::profile_scope!("hit_test");
 
-                let spatial_node_index = self.get_space(info.spatial_id);
+                let mapper = self.id_to_index_mapper_stack.last().unwrap();
+                let Some(&spatial_node_index) = mapper.spatial_node_map.get(&info.spatial_id) else {
+                    warn!("Discarding hit test with missing spatial node {:?}", info.spatial_id);
+                    return;
+                };
 
                 let rect = info.rect;
 

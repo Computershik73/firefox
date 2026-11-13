@@ -23,8 +23,10 @@
 #if defined(GECKO_W10M)
 #  include "mozilla/Sprintf.h"
 #  include "nsString.h"
+#  include "nsPrintfCString.h"
 extern "C" void GeckoW10mNote(const char* text);
-extern "C" bool gecko_w10m_widget_is_overlay(mozilla::widget::CompositorWidget* aWidget);
+extern "C" uint64_t gecko_w10m_managed_id_for_widget(mozilla::widget::CompositorWidget*);
+extern "C" bool gecko_w10m_widget_needs_software(mozilla::widget::CompositorWidget* aWidget);
 #endif
 
 #ifdef XP_WIN
@@ -210,6 +212,18 @@ void wr_partial_present_compositor_set_buffer_damage_region(
 /* static */
 UniquePtr<RenderCompositor> RenderCompositor::Create(
     const RefPtr<widget::CompositorWidget>& aWidget, nsACString& aError) {
+#if defined(GECKO_W10M)
+  if (gecko_w10m_managed_id_for_widget(aWidget.get())) {
+    if (!gecko_w10m_widget_needs_software(aWidget.get())) {
+      auto privateCompositor = RenderCompositorEGL::Create(aWidget, aError);
+      if (privateCompositor) return privateCompositor;
+      GeckoW10mNote(nsPrintfCString("gfx: private-window-v1 creation failed: %s; window-only software fallback",
+          nsPromiseFlatCString(aError).get()).get());
+    }
+    // Never fall back to the primary device/context when private creation fails.
+    return RenderCompositorSWGL::Create(aWidget, aError);
+  }
+#endif
   if (aWidget->GetCompositorOptions().UseSoftwareWebRender()) {
 #ifdef XP_DARWIN
     // Mac uses NativeLayerCA
@@ -225,13 +239,11 @@ UniquePtr<RenderCompositor> RenderCompositor::Create(
     }
 #endif
 #if defined(GECKO_W10M)
-    // One XAML SwapChainPanel, and it belongs to the browser window. Menus,
-    // panels and dialogs are drawn in software into the widget's own buffer
-    // and laid over it by the shell; only the browser window is composited by
-    // D3D11, which presents to the panel. That is the path for GPUs that stop
-    // at feature level 9_3, where hardware WebRender cannot run.
-    if (gecko_w10m_widget_is_overlay(aWidget.get())) {
-      GeckoW10mNote("gfx: an overlay window -- software compositor over the panel");
+    // Unbound menus and legacy secondary windows use their software buffers.
+    // A managed Shell root with its own panel may try the normal compositor
+    // path; software WebRender itself remains governed by Gecko's gfx options.
+    if (gecko_w10m_widget_needs_software(aWidget.get())) {
+      GeckoW10mNote("gfx: widget requires software composition; see compositor route");
       return RenderCompositorSWGL::Create(aWidget, aError);
     }
     GeckoW10mNote("gfx: software WebRender, trying the D3D11 compositor");
@@ -275,12 +287,10 @@ UniquePtr<RenderCompositor> RenderCompositor::Create(
   // makes a composition swap chain for it -- so the frame is handed to the
   // system compositor as a texture instead of being copied out through main
   // memory.
-  // Menus, panels and dialogs are windows of their own. There is one panel
-  // and it belongs to the browser window, so these are drawn in software --
-  // into the compositor widget's own buffer, as on the software path -- and
-  // the shell lays that buffer over the GPU picture.
-  if (gecko_w10m_widget_is_overlay(aWidget.get())) {
-    GeckoW10mNote("gfx: an overlay window -- software compositor over the panel");
+  // Managed Shell roots can use their dedicated panel. Legacy menus and
+  // secondary windows retain software composition over the primary picture.
+  if (gecko_w10m_widget_needs_software(aWidget.get())) {
+    GeckoW10mNote("gfx: widget requires software composition; see compositor route");
     return RenderCompositorSWGL::Create(aWidget, aError);
   }
   GeckoW10mNote("gfx: making the EGL compositor");

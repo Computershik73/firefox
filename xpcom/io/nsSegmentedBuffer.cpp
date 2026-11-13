@@ -7,6 +7,20 @@
 #include "nsNetCID.h"
 #include "nsServiceManagerUtils.h"
 #include "nsThreadUtils.h"
+#ifdef GECKO_W10M
+#  include "mozilla/Atomics.h"
+#  include "nsIMemoryReporter.h"
+namespace {
+mozilla::Atomic<uint64_t> sSegmentOwnedBytes{0};
+mozilla::Atomic<uint64_t> sSegmentPendingFreeBytes{0};
+MOZ_DEFINE_MALLOC_SIZE_OF(GeckoW10mSegmentSizeOf)
+}  // namespace
+extern "C" void GeckoW10mGetSegmentedBufferBytes(uint64_t* owned,
+                                                 uint64_t* pending) {
+  *owned = sSegmentOwnedBytes;
+  *pending = sSegmentPendingFreeBytes;
+}
+#endif
 
 static constexpr uint32_t kSegmentedBufferFreeOMTThreshold = 128;
 
@@ -57,6 +71,11 @@ char* nsSegmentedBuffer::AppendNewSegment(
     return nullptr;
   }
   mSegmentArray[mLastSegmentIndex] = seg;
+#ifdef GECKO_W10M
+  const uint64_t bytes = GeckoW10mSegmentSizeOf(seg);
+  mDiagnosticOwnedBytes += bytes;
+  sSegmentOwnedBytes += bytes;
+#endif
   mLastSegmentIndex = ModSegArraySize(mLastSegmentIndex + 1);
   return seg;
 }
@@ -65,6 +84,11 @@ mozilla::UniqueFreePtr<char> nsSegmentedBuffer::PopFirstSegment() {
   NS_ASSERTION(mSegmentArray[mFirstSegmentIndex] != nullptr,
                "deleting bad segment");
   mozilla::UniqueFreePtr<char> segment(mSegmentArray[mFirstSegmentIndex]);
+#ifdef GECKO_W10M
+  const uint64_t bytes = GeckoW10mSegmentSizeOf(segment.get());
+  mDiagnosticOwnedBytes -= bytes;
+  sSegmentOwnedBytes -= bytes;
+#endif
   mSegmentArray[mFirstSegmentIndex] = nullptr;
   int32_t last = ModSegArraySize(mLastSegmentIndex - 1);
   if (mFirstSegmentIndex == last) {
@@ -79,6 +103,11 @@ mozilla::UniqueFreePtr<char> nsSegmentedBuffer::PopLastSegment() {
   int32_t last = ModSegArraySize(mLastSegmentIndex - 1);
   NS_ASSERTION(mSegmentArray[last] != nullptr, "deleting bad segment");
   mozilla::UniqueFreePtr<char> segment(mSegmentArray[last]);
+#ifdef GECKO_W10M
+  const uint64_t bytes = GeckoW10mSegmentSizeOf(segment.get());
+  mDiagnosticOwnedBytes -= bytes;
+  sSegmentOwnedBytes -= bytes;
+#endif
   mSegmentArray[last] = nullptr;
   mLastSegmentIndex = last;
   return segment;
@@ -87,8 +116,17 @@ mozilla::UniqueFreePtr<char> nsSegmentedBuffer::PopLastSegment() {
 bool nsSegmentedBuffer::ReallocLastSegment(size_t aNewSize) {
   int32_t last = ModSegArraySize(mLastSegmentIndex - 1);
   NS_ASSERTION(mSegmentArray[last] != nullptr, "realloc'ing bad segment");
+#ifdef GECKO_W10M
+  const uint64_t oldBytes = GeckoW10mSegmentSizeOf(mSegmentArray[last]);
+#endif
   char* newSegment = (char*)realloc(mSegmentArray[last], aNewSize);
   if (newSegment) {
+#ifdef GECKO_W10M
+    const uint64_t newBytes = GeckoW10mSegmentSizeOf(newSegment);
+    mDiagnosticOwnedBytes = mDiagnosticOwnedBytes - oldBytes + newBytes;
+    sSegmentOwnedBytes -= oldBytes;
+    sSegmentOwnedBytes += newBytes;
+#endif
     mSegmentArray[last] = newSegment;
     return true;
   }
@@ -96,19 +134,32 @@ bool nsSegmentedBuffer::ReallocLastSegment(size_t aNewSize) {
 }
 
 void nsSegmentedBuffer::Clear() {
+#ifdef GECKO_W10M
+  const uint64_t pendingBytes = std::exchange(mDiagnosticOwnedBytes, 0);
+  sSegmentOwnedBytes -= pendingBytes;
+  sSegmentPendingFreeBytes += pendingBytes;
+#endif
   // Clear out the buffer's members back to their initial state.
   uint32_t arrayCount =
       std::exchange(mSegmentArrayCount, NS_SEGMENTARRAY_INITIAL_COUNT);
   char** segmentArray = std::exchange(mSegmentArray, nullptr);
   mFirstSegmentIndex = mLastSegmentIndex = 0;
 
-  auto freeSegmentArray = [arrayCount, segmentArray]() {
+  auto freeSegmentArray = [arrayCount, segmentArray
+#ifdef GECKO_W10M
+                           ,
+                           pendingBytes
+#endif
+  ]() {
     for (uint32_t i = 0; i < arrayCount; ++i) {
       if (segmentArray[i]) {
         free(segmentArray[i]);
       }
     }
     free(segmentArray);
+#ifdef GECKO_W10M
+    sSegmentPendingFreeBytes -= pendingBytes;
+#endif
   };
 
   if (segmentArray) {

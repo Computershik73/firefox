@@ -16,6 +16,9 @@
 // clang-format on
 
 #include "Gamepad.h"
+#include "mozilla/Maybe.h"
+#include "mozilla/StaticMutex.h"
+#include "mozilla/StaticPtr.h"
 #include "mozilla/dom/GamepadPlatformService.h"
 #include "mozilla/dom/GamepadRemapping.h"
 #include "mozilla/ipc/BackgroundParent.h"
@@ -1201,7 +1204,98 @@ class StopWindowsGamepadServiceRunnable final : public Runnable {
   ~StopWindowsGamepadServiceRunnable() = default;
 };
 
+
+#if defined(GECKO_W10M)
+struct XboxGamepadReading {
+  uint32_t generation = 0;
+  uint32_t buttons = 0;
+  bool connected = false;
+  double triggers[2] = {};
+  double axes[kStandardGamepadAxes] = {};
+};
+
+StaticMutex sXboxGamepadMutex;
+XboxGamepadReading sXboxGamepad MOZ_GUARDED_BY(sXboxGamepadMutex);
+StaticRefPtr<nsITimer> sXboxGamepadTimer;
+Maybe<GamepadHandle> sXboxGamepadHandle;
+XboxGamepadReading sLastXboxReading;
+
+bool UsesXboxGamepadHost() {
+  wchar_t value[2] = {};
+  return GetEnvironmentVariableW(L"GECKO_W10M_XBOX_GAMEPAD", value, 2) == 1 &&
+         value[0] == L'1';
+}
+
+void PollXboxGamepad(nsITimer*, void*) {
+  XboxGamepadReading reading;
+  {
+    StaticMutexAutoLock lock(sXboxGamepadMutex);
+    reading = sXboxGamepad;
+  }
+  RefPtr<GamepadPlatformService> service =
+      GamepadPlatformService::GetParentService();
+  if (!service) {
+    return;
+  }
+  if (sXboxGamepadHandle &&
+      (!reading.connected || reading.generation != sLastXboxReading.generation)) {
+    service->RemoveGamepad(*sXboxGamepadHandle);
+    sXboxGamepadHandle.reset();
+    sLastXboxReading = {};
+  }
+  if (!reading.connected) {
+    return;
+  }
+  if (!sXboxGamepadHandle) {
+    sXboxGamepadHandle.emplace(service->AddGamepad(
+        "Xbox Controller", GamepadMappingType::Standard, GamepadHand::_empty,
+        kStandardGamepadButtons, kStandardGamepadAxes, 0, 0, 0));
+  }
+
+  for (uint32_t index = 0; index < kStandardGamepadButtons; ++index) {
+    if (index == 6 || index == 7) {
+      double value = reading.triggers[index - 6];
+      if (value != sLastXboxReading.triggers[index - 6]) {
+        service->NewButtonEvent(*sXboxGamepadHandle, index, value >= 0.12,
+                                value > 0.0, value);
+      }
+    } else {
+      const uint32_t bit = 1u << index;
+      if ((reading.buttons ^ sLastXboxReading.buttons) & bit) {
+        service->NewButtonEvent(*sXboxGamepadHandle, index,
+                                (reading.buttons & bit) != 0);
+      }
+    }
+  }
+  for (uint32_t index = 0; index < kStandardGamepadAxes; ++index) {
+    if (reading.axes[index] != sLastXboxReading.axes[index]) {
+      service->NewAxisMoveEvent(*sXboxGamepadHandle, index, reading.axes[index]);
+    }
+  }
+  sLastXboxReading = reading;
+}
+#endif
+
 }  // namespace
+
+#if defined(GECKO_W10M)
+extern "C" __declspec(dllexport) void gecko_w10m_xbox_gamepad_state(
+    int32_t aConnected, uint32_t aButtons, double aLT, double aRT, double aLX,
+    double aLY, double aRX, double aRY) {
+  StaticMutexAutoLock lock(sXboxGamepadMutex);
+  if (sXboxGamepad.connected != (aConnected != 0)) {
+    ++sXboxGamepad.generation;
+  }
+  sXboxGamepad.connected = aConnected != 0;
+  sXboxGamepad.buttons = aButtons;
+  sXboxGamepad.triggers[0] = aLT;
+  sXboxGamepad.triggers[1] = aRT;
+  sXboxGamepad.axes[0] = aLX;
+  sXboxGamepad.axes[1] = aLY;
+  sXboxGamepad.axes[2] = aRX;
+  sXboxGamepad.axes[3] = aRY;
+}
+#endif
 
 namespace mozilla::dom {
 
@@ -1209,6 +1303,19 @@ using namespace mozilla::ipc;
 
 void StartGamepadMonitoring() {
   AssertIsOnBackgroundThread();
+#if defined(GECKO_W10M)
+  if (UsesXboxGamepadHost()) {
+    if (!sXboxGamepadTimer) {
+      sXboxGamepadTimer = NS_NewTimer();
+      if (sXboxGamepadTimer) {
+        sXboxGamepadTimer->InitWithNamedFuncCallback(
+            PollXboxGamepad, nullptr, 8, nsITimer::TYPE_REPEATING_SLACK,
+            "PollXboxGamepad"_ns);
+      }
+    }
+    return;
+  }
+#endif
 
   if (gMonitorThread || gService) {
     return;
@@ -1221,6 +1328,17 @@ void StartGamepadMonitoring() {
 
 void StopGamepadMonitoring() {
   AssertIsOnBackgroundThread();
+#if defined(GECKO_W10M)
+  if (UsesXboxGamepadHost()) {
+    if (sXboxGamepadTimer) {
+      sXboxGamepadTimer->Cancel();
+      sXboxGamepadTimer = nullptr;
+    }
+    sXboxGamepadHandle.reset();
+    sLastXboxReading = {};
+    return;
+  }
+#endif
 
   if (sIsShutdown) {
     return;
@@ -1236,6 +1354,11 @@ void SetGamepadLightIndicatorColor(const Tainted<GamepadHandle>& aGamepadHandle,
                                    const Tainted<uint32_t>& aLightColorIndex,
                                    const uint8_t& aRed, const uint8_t& aGreen,
                                    const uint8_t& aBlue) {
+#if defined(GECKO_W10M)
+  if (UsesXboxGamepadHost()) {
+    return;
+  }
+#endif
   MOZ_ASSERT(gService);
   if (!gService) {
     return;

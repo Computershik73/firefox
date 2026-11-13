@@ -1998,6 +1998,9 @@ void nsJSContext::EnsureStatics() {
 
   nsIObserver* observer = new nsJSEnvironmentObserver();
   obs->AddObserver(observer, "memory-pressure", false);
+#if defined(GECKO_W10M)
+  obs->AddObserver(observer, "memory-pressure-stop", false);
+#endif
   obs->AddObserver(observer, "user-interaction-inactive", false);
   obs->AddObserver(observer, "user-interaction-active", false);
   obs->AddObserver(observer, "quit-application", false);

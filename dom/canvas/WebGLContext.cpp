@@ -3,6 +3,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "WebGLContext.h"
+#if defined(GECKO_W10M)
+#  include "nsPrintfCString.h"
+extern "C" void GeckoW10mNote(const char* text);
+#endif
 
 #include <algorithm>
 #include <array>
@@ -394,7 +398,15 @@ bool WebGLContext::CreateAndInitGL(
   const auto fnCreate = [&](fnCreateT* const pfnCreate,
                             const char* const info) {
     nsCString failureId;
+#if defined(GECKO_W10M)
+    GeckoW10mNote(nsPrintfCString("gfx: WebGL context create begin backend=%s", info).get());
+#endif
     const RefPtr<gl::GLContext> gl = pfnCreate({flags}, &failureId);
+#if defined(GECKO_W10M)
+    GeckoW10mNote(nsPrintfCString(
+        "gfx: WebGL context create end backend=%s context=%p failure=%s",
+        info, static_cast<void*>(gl.get()), failureId.get()).get());
+#endif
     if (!gl) {
       out_failReasons->push_back(WebGLContext::FailureReason(failureId, info));
     }

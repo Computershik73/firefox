@@ -66,6 +66,18 @@ class HeadlessWidget final : public nsIWidget {
   // it is destroyed, read by the input entry points in
   // HeadlessCompositorWidget.cpp.
   static HeadlessWidget* ShownWidget();
+  // Stable across compositor recreation; lookups are Gecko-main-thread only.
+  uint64_t GeckoW10mWindowId() const { return mGeckoW10mWindowId; }
+  bool GeckoW10mIsManagedWindow() const { return mGeckoW10mManagedWindow; }
+  static uint64_t AllocateWindowId();
+  static already_AddRefed<HeadlessWidget> WindowById(uint64_t aId);
+
+  // The browser's top-level widget even while a separate dialog is active.
+  // Shell viewport changes always belong to this widget.
+  static HeadlessWidget* MainWidget();
+  static HeadlessWidget* ExternalWidget();
+  static void ActivateExternalWidget(bool aExternal);
+  bool GeckoW10mIsExternalWindow() const { return mGeckoW10mExternalWindow; }
   // True while focus is on something that takes text. It is the only
   // signal a phone has that it should raise its keyboard.
   static bool TextInputWanted();
@@ -75,6 +87,15 @@ class HeadlessWidget final : public nsIWidget {
   // Goes up each time an editable field takes the focus, so the shell can
   // tell a new field -- or the same one tapped again -- from no change.
   static uint32_t TextInputSerial();
+  // Forward Gecko's resolved CSS cursor to the UWP host. Headless normally
+  // has no OS cursor, but the W10M host owns the visible pointer.
+  void SetCursor(const Cursor& aCursor) override;
+  // Firefox chrome marks its native title-bar gaps with
+  // -moz-window-dragging. Preserve that region even though this backend has
+  // no HWND, so the UWP host can move its virtual DesktopMode window.
+  void UpdateWindowDraggingRegion(
+      const LayoutDeviceIntRegion& aRegion) override;
+  bool GeckoW10mPointIsDraggable(const LayoutDeviceIntPoint& aPoint) const;
 #endif
 
   nsresult Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
@@ -131,6 +152,15 @@ class HeadlessWidget final : public nsIWidget {
         nsIWidget::NativeModifiers::NO_MODIFIERS, aCallback);
   };
 
+#if defined(GECKO_W10M)
+  void LockNativePointer(NativePointerLockMode aMode) override;
+  void UnlockNativePointer() override;
+  void SetNativePointerLockMode(NativePointerLockMode aMode) override {}
+  bool SupportsUnadjustedMovement() override { return true; }
+  bool GeckoW10mNativePointerLocked() const { return mNativePointerLocked; }
+  void GeckoW10mSynthesizeRelativeMouseMove(LayoutDeviceIntPoint aMovement);
+#endif
+
   nsresult SynthesizeNativeMouseScrollEvent(
       LayoutDeviceIntPoint aPoint, uint32_t aNativeMessage, double aDeltaX,
       double aDeltaY, double aDeltaZ, nsIWidget::NativeModifiers aModifierFlags,
@@ -172,6 +202,18 @@ class HeadlessWidget final : public nsIWidget {
   // across size mode changes, so we must track it to emulate.
   LayoutDeviceIntRect mRestoreBounds;
   LayoutDeviceIntRect mBounds;
+#if defined(GECKO_W10M)
+  LayoutDeviceIntRegion mDraggableRegion;
+  bool mNativePointerLocked = false;
+  // DesktopMode owns the frame for dialogs, secondary browser windows and
+  // large chrome panels.  Small menus/tooltips remain overlays of their
+  // owning browser surface.
+  uint64_t mGeckoW10mWindowId = 0;
+  bool mGeckoW10mManagedWindow = false;
+  bool mGeckoW10mExternalWindow = false;
+  void GeckoW10mSetExternalWindow(bool aExternal);
+  void GeckoW10mUpdateWindowRole();
+#endif
   void ApplySizeModeSideEffects();
   // Move while maintaining size mode.
   void MoveInternal(int32_t aX, int32_t aY);

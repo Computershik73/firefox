@@ -5157,6 +5157,11 @@ struct CompileBufferTask : PromiseHelperTask {
     if (!compileArgs) {
       return false;
     }
+#if defined(GECKO_W10M)
+    const auto& source = bytecode.source();
+    bufferedWasmCompilationBytes =
+        source.hasCodeSection() ? source.codeRange().size() : 0;
+#endif
     return PromiseHelperTask::init(cx);
   }
 
@@ -5343,13 +5348,16 @@ static bool WebAssembly_instantiate(JSContext* cx, unsigned argc, Value* vp) {
     }
 
     auto task = cx->make_unique<CompileBufferTask>(cx, promise, importObj);
-    if (!task || !task->init(cx, options, "WebAssembly.instantiate")) {
+    if (!task) {
       return false;
     }
 
     if (!GetBytecodeBuffer(cx, firstArg, JSMSG_WASM_BAD_BUF_MOD_ARG,
                            &task->bytecode)) {
       return RejectWithPendingException(cx, promise, callArgs);
+    }
+    if (!task->init(cx, options, "WebAssembly.instantiate")) {
+      return false;
     }
 
     if (!StartOffThreadPromiseHelperTask(cx, std::move(task))) {

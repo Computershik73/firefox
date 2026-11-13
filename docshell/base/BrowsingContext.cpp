@@ -1649,6 +1649,16 @@ RefPtr<SessionStorageManager> BrowsingContext::GetSessionStorageManager() {
 bool BrowsingContext::CrossOriginIsolated() {
   MOZ_ASSERT(NS_IsMainThread());
 
+#if defined(GECKO_W10M)
+  // GeckoW10m hosts browser and web content in one process and therefore
+  // cannot satisfy the remote-type process check below. Keep the value
+  // exposed to pages consistent with this port's locked SAB bypass.
+  if (StaticPrefs::
+          dom_postMessage_sharedArrayBuffer_bypassCOOP_COEP_insecure_enabled()) {
+    return true;
+  }
+#endif
+
   return StaticPrefs::
              dom_postMessage_sharedArrayBuffer_withCOOP_COEP_AtStartup() &&
          Top()->GetOpenerPolicy() ==
